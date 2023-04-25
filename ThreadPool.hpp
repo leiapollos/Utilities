@@ -1,4 +1,6 @@
 #pragma once
+
+#include <array>
 #include <vector>
 #include <thread>
 #include <future>
@@ -10,7 +12,9 @@
 
 class ThreadPool {
 public:
-    ThreadPool(size_t thread_count = std::thread::hardware_concurrency());
+    enum class ThreadPriority { LOW, NORMAL, HIGH };
+
+    ThreadPool(const std::vector<ThreadPriority>& priorities = {ThreadPriority::HIGH, ThreadPriority::LOW});
     ~ThreadPool();
 
     ThreadPool(const ThreadPool&) = delete;
@@ -22,9 +26,11 @@ public:
         std::enable_if_t<std::is_invocable_v<F&&, Args&&...>, bool> = true,
         typename ReturnType = std::invoke_result_t<F, Args...>
     >
-    [[nodiscard]] std::future<ReturnType> enqueue(F&&, Args&&...);
+    [[nodiscard]] std::future<ReturnType> enqueue(ThreadPriority priority, F&&, Args&&...);
 
 private:
+    void setThreadPriority(std::thread& thread, ThreadPriority priority);
+    
     class _TaskContainerBase {
     public:
         virtual ~_TaskContainerBase() {};
@@ -54,8 +60,8 @@ private:
     using _taskUPtr = std::unique_ptr<_TaskContainerBase>;
     template <typename F> _TaskContainer(F) -> _TaskContainer<std::decay_t<F>>;
 
-    std::vector<std::thread> _threads;
-    std::deque<_taskUPtr> _tasks;
+    std::array<std::vector<std::thread>, 3> _threads;
+    std::array<std::deque<_taskUPtr>, 3> _tasks;
     std::mutex _queueMutex;
     std::condition_variable _queueCV;
     bool _stopping = false;
@@ -67,7 +73,7 @@ template <
     std::enable_if_t<std::is_invocable_v<F&&, Args&&...>, bool>,
     typename ReturnType
 >
-std::future<ReturnType> ThreadPool::enqueue(F&& function, Args&&...args) {
+std::future<ReturnType> ThreadPool::enqueue(ThreadPriority priority, F&& function, Args&&...args) {
     std::unique_lock<std::mutex> queueLock(_queueMutex, std::defer_lock);
 
     std::packaged_task<ReturnType()> wrapper([f = std::move(function), largs = std::make_tuple(std::forward<Args>(args)...)]() mutable {
@@ -77,7 +83,7 @@ std::future<ReturnType> ThreadPool::enqueue(F&& function, Args&&...args) {
 
     {
         queueLock.lock();
-        _tasks.emplace_back(new _TaskContainer(std::move(wrapper)));
+        _tasks[static_cast<int>(priority)].emplace_back(new _TaskContainer(std::move(wrapper)));
         queueLock.unlock();
     }
 
