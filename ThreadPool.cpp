@@ -1,5 +1,9 @@
 #include "ThreadPool.hpp"
 
+#ifdef _WIN32
+#include "Windows.h"
+#endif
+
 ThreadPool::ThreadPool(const std::vector<ThreadPriority>& priorities) {
     for (const auto& priority : priorities) {
             int priorityIndex = static_cast<int>(priority);
