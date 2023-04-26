@@ -38,6 +38,8 @@ public:
 
     Type getType() const { return _type; }
 
+    std::string cenas;
+    int i;
 private:
     Type _type;
 };
