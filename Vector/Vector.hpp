@@ -23,6 +23,7 @@ public:
     void insert(size_t index, const T& value);
     void insert(size_t index, T&& value);
     void erase(size_t index);
+    void fastErase(size_t index); // Does not keep element order
     T& operator[](size_t index);
     const T& operator[](size_t index) const;
     size_t getSize() const;
@@ -234,6 +235,12 @@ void Vector<T>::erase(size_t index) {
     for (int i = index; i < _size - 1; i++) {
         _data[i] = _data[i + 1];
     }
+    _size--;
+}
+
+template <typename T>
+void Vector<T>::fastErase(size_t index) {
+    _data[index] = _data[_size - 1];
     _size--;
 }
 
