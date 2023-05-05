@@ -5,19 +5,14 @@ static const size_t k_numWorkerThreads = 2;
 EventManager::EventManager() {
     _workerThreads.reserve(k_numWorkerThreads);
     for (size_t i = 0; i < k_numWorkerThreads; ++i) {
-        _workerThreads.emplace_back(&EventManager::workerThreadFunction, this);
+        _workerThreads.emplace_back(&EventManager::workerThreadFunction, this,  _stopSource.get_token());
     }
 }
 
 EventManager::~EventManager() {
-    {
-        std::unique_lock<std::mutex> lock(_eventQueueMutex);
-        _stopWorkers = true;
-    }
+    _stopSource.request_stop();
     _eventQueueCV.notify_all();
-    for (auto& thread : _workerThreads) {
-        thread.join();
-    }
+    _workerThreads.clear();
 }
 
 void EventManager::fireEvent(const Event& event) {
@@ -28,12 +23,12 @@ void EventManager::fireEvent(const Event& event) {
     _eventQueueCV.notify_one();
 }
 
-void EventManager::workerThreadFunction() {
+void EventManager::workerThreadFunction(std::stop_token stopToken) {
     std::unique_lock<std::mutex> lock(_eventQueueMutex, std::defer_lock);
     while (true) {
         lock.lock();
-        _eventQueueCV.wait(lock, [this]() { return !_eventQueue.empty() || _stopWorkers; });
-        if (_stopWorkers && _eventQueue.empty()) {
+        _eventQueueCV.wait(lock, stopToken, [this, &stopToken]() { return stopToken.stop_requested() || !_eventQueue.empty(); });
+        if (stopToken.stop_requested() && _eventQueue.empty()) {
             break;
         }
         auto eventToProcess = std::move(_eventQueue.front());

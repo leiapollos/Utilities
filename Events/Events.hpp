@@ -58,7 +58,7 @@ public:
     void fireEvent(const Event& event);
 
 private:
-    void workerThreadFunction();
+    void workerThreadFunction(std::stop_token stopToken);
 
     std::unordered_map<Event::Type, std::vector<EventCallback>> _listeners;
     std::unordered_map<Event::Type, std::shared_mutex> _listenerLocks;
@@ -67,7 +67,7 @@ private:
 
     std::queue<Event> _eventQueue;
     std::mutex _eventQueueMutex;
-    std::condition_variable _eventQueueCV;
-    std::vector<std::thread> _workerThreads;
-    bool _stopWorkers = false;
+    std::condition_variable_any _eventQueueCV;
+    std::vector<std::jthread> _workerThreads;
+    std::stop_source _stopSource;
 };
