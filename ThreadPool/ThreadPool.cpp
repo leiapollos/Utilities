@@ -7,18 +7,20 @@
 ThreadPool::ThreadPool(const std::vector<ThreadPriority>& priorities) {
     for (const auto& priority : priorities) {
             int priorityIndex = static_cast<int>(priority);
-            _threads[priorityIndex].emplace_back(std::jthread([&, priorityIndex]() {
+            _threads[priorityIndex].emplace_back([this, priorityIndex](std::stop_token stopToken) {
                 std::unique_lock<std::mutex> queueLock(_queueMutex, std::defer_lock);
                 
                 while (true) {
                     queueLock.lock();
-                    _queueCV.wait(queueLock,
+                    _queueCV.wait(queueLock, stopToken,
                         [&]() -> bool {
-                        return !_tasks[priorityIndex].empty() || _stopping;
-                        
+                        return stopToken.stop_requested() || !_tasks[priorityIndex].empty();
                     });
 
-                    if (_stopping && _tasks[priorityIndex].empty()) return;
+                    if (stopToken.stop_requested() && _tasks[priorityIndex].empty()) {
+                        queueLock.unlock();
+                        return;
+                    }
 
                     auto tempTask = std::move(_tasks[priorityIndex].front());
                     _tasks[priorityIndex].pop_front();
@@ -27,15 +29,18 @@ ThreadPool::ThreadPool(const std::vector<ThreadPriority>& priorities) {
 
                     (*tempTask)();
                 }
-            }));
+            },  _stopSource.get_token());
         
             setThreadPriority(_threads[priorityIndex].back(), priority);
         }
 }
 
 ThreadPool::~ThreadPool() {
-    _stopping = true;
+    _stopSource.request_stop();
     _queueCV.notify_all();
+    for (auto& threads : _threads) {
+        threads.clear();
+    }
 }
 
 void ThreadPool::setThreadPriority(std::jthread& thread, ThreadPriority priority) {

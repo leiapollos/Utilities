@@ -63,8 +63,8 @@ private:
     std::array<std::vector<std::jthread>, 3> _threads;
     std::array<std::deque<_taskUPtr>, 3> _tasks;
     std::mutex _queueMutex;
-    std::condition_variable _queueCV;
-    bool _stopping = false;
+    std::condition_variable_any _queueCV;
+    std::stop_source _stopSource;
 };
 
 template <
