@@ -7,7 +7,7 @@
 ThreadPool::ThreadPool(const std::vector<ThreadPriority>& priorities) {
     for (const auto& priority : priorities) {
             int priorityIndex = static_cast<int>(priority);
-            _threads[priorityIndex].emplace_back(std::thread([&, priorityIndex]() {
+            _threads[priorityIndex].emplace_back(std::jthread([&, priorityIndex]() {
                 std::unique_lock<std::mutex> queueLock(_queueMutex, std::defer_lock);
                 
                 while (true) {
@@ -36,15 +36,9 @@ ThreadPool::ThreadPool(const std::vector<ThreadPriority>& priorities) {
 ThreadPool::~ThreadPool() {
     _stopping = true;
     _queueCV.notify_all();
-
-    for (auto& priorityThreads : _threads) {
-        for (std::thread& thread : priorityThreads) {
-            thread.join();
-        }
-    }
 }
 
-void ThreadPool::setThreadPriority(std::thread& thread, ThreadPriority priority) {
+void ThreadPool::setThreadPriority(std::jthread& thread, ThreadPriority priority) {
     #ifdef _WIN32
     // Set priority for Windows
     HANDLE currentThread = thread.native_handle();

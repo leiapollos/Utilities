@@ -29,7 +29,7 @@ public:
     [[nodiscard]] std::future<ReturnType> enqueue(ThreadPriority priority, F&&, Args&&...);
 
 private:
-    void setThreadPriority(std::thread& thread, ThreadPriority priority);
+    void setThreadPriority(std::jthread& thread, ThreadPriority priority);
     
     class _TaskContainerBase {
     public:
@@ -60,7 +60,7 @@ private:
     using _taskUPtr = std::unique_ptr<_TaskContainerBase>;
     template <typename F> _TaskContainer(F) -> _TaskContainer<std::decay_t<F>>;
 
-    std::array<std::vector<std::thread>, 3> _threads;
+    std::array<std::vector<std::jthread>, 3> _threads;
     std::array<std::deque<_taskUPtr>, 3> _tasks;
     std::mutex _queueMutex;
     std::condition_variable _queueCV;
