@@ -24,6 +24,8 @@
 #define LOG(level, format, ...)
 #endif
 
+static constexpr bool k_shouldExceptOnCritical = true;
+
 enum class LogLevel {
 	Debug = 0,
 	Info,
@@ -82,6 +84,12 @@ public:
                 output("\n");
             }
         }
+
+		if (k_shouldExceptOnCritical) {
+			if (msgLevel == LogLevel::Critical) {
+				throw std::runtime_error("Critical log error!");
+			}
+		}
     }
  
     virtual void flush() {
