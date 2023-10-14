@@ -61,6 +61,10 @@ public:
     }
  
     virtual ~Logger() = default;
+	Logger(const Logger&) = delete;
+	Logger(const Logger&&) = delete;
+	Logger& operator=(const Logger& other) = delete;
+	Logger& operator=(const Logger&& other) = delete;
  
     template<typename... Args>
     void log(const LogLevel msgLevel, const std::string& format, Args... args) {
@@ -72,14 +76,14 @@ public:
         formatMessage(format, argStrings, message);
         (_isTerminalSmart)? message << LoggerColor::RESET : message; // Reset color
  
-        std::lock_guard<std::mutex> lock(_logMutex);
+        std::unique_lock<std::mutex> lock(_logMutex);
         if (_buffering) {
             _logBuffer << message.str().c_str();
             if (_printNewline) {
                 _logBuffer << '\n';
             }
         } else {
-            output(message.str().c_str());
+            output(message.str());
             if (_printNewline) {
                 output("\n");
             }
@@ -87,6 +91,7 @@ public:
 
 		if (k_shouldExceptOnCritical) {
 			if (msgLevel == LogLevel::Critical) {
+				lock.release();
 				throw std::runtime_error("Critical log error!");
 			}
 		}
@@ -95,7 +100,7 @@ public:
     virtual void flush() {
         std::lock_guard<std::mutex> lock(_logMutex);
         if (_buffering) {
-            output(_logBuffer.str().c_str());
+            output(_logBuffer.str());
             _logBuffer.str(""); // Clear the buffer
             _logBuffer.clear();
         }
@@ -133,9 +138,8 @@ private:
 	            break;
 	    }
 	}
-
  
-	void formatMessage(const std::string& format, const std::vector<std::string>& argStrings, std::ostringstream& message) const {
+	static void formatMessage(const std::string& format, const std::vector<std::string>& argStrings, std::ostringstream& message) {
 	    bool braceOpen = false;
 	    std::string innerBuffer;
 	    size_t argIndex = 0;
@@ -223,7 +227,7 @@ public:
         }
     }
  
-    ~FileLogger() {
+    ~FileLogger() override {
         if (_logFile.is_open()) {
             _logFile.close();
         }
