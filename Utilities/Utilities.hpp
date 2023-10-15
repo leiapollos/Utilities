@@ -48,4 +48,33 @@ namespace Utilities
     std::ostream& operator<<(std::ostream& os, UUID uuid) {
         return os << uuid.generate();
     }
+
+    class CRC32 {
+    public:
+        static uint32_t calculate(const std::string& data) {
+            uint32_t crc = ~0;
+            for (char c : data) {
+                crc = (crc >> 8) ^ _table[(crc ^ c) & 0xFF];
+            }
+            return ~crc;
+        }
+
+    private:
+        static constexpr uint32_t _polynomial = 0xEDB88320;
+        inline static thread_local uint32_t _table[256];
+
+        struct TableInitializer {
+            TableInitializer() {
+                for (uint32_t i = 0; i < 256; i++) {
+                    uint32_t crc = i;
+                    for (uint8_t j = 0; j < 8; j++) {
+                        crc = (crc >> 1) ^ (-int(crc & 1) & _polynomial);
+                    }
+                    _table[i] = crc;
+                }
+            }
+        };
+
+        static TableInitializer _initializer;
+    };
 }
