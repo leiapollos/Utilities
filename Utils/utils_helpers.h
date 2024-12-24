@@ -126,6 +126,17 @@ namespace utils {
 
     template<>
     UTILS_ALWAYS_INLINE long long max_value<long long>() { return 9223372036854775807LL; }
+
+
+    template<typename T>
+    UTILS_ALWAYS_INLINE T min(T a, T b) {
+        return (a < b) ? a : b;
+    }
+
+    template<typename T>
+    UTILS_ALWAYS_INLINE T max(T a, T b) {
+        return (a > b) ? a : b;
+    }
 }
 
 #pragma endregion
