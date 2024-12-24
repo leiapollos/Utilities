@@ -98,3 +98,34 @@ namespace utils {
     } while (0)
 
 #pragma endregion
+
+
+#pragma region Math
+
+namespace utils {
+    template<typename T>
+    T min_value();
+
+    template<>
+    UTILS_ALWAYS_INLINE int min_value<int>() { return -2147483647 - 1; }
+
+    template<>
+    UTILS_ALWAYS_INLINE long min_value<long>() { return -2147483647L - 1; }
+
+    template<>
+    UTILS_ALWAYS_INLINE long long min_value<long long>() { return -9223372036854775807LL - 1; }
+
+    template<typename T>
+    T max_value();
+
+    template<>
+    UTILS_ALWAYS_INLINE int max_value<int>() { return 2147483647; }
+
+    template<>
+    UTILS_ALWAYS_INLINE long max_value<long>() { return 2147483647L; }
+
+    template<>
+    UTILS_ALWAYS_INLINE long long max_value<long long>() { return 9223372036854775807LL; }
+}
+
+#pragma endregion
