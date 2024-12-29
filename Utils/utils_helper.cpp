@@ -1,8 +1,6 @@
 #include "utils_helpers.h"
 
-#if defined(_MSC_VER)
-#include "Windows.h"
-#endif
+#include "windowsdefs.h"
 
 namespace utils {
 	size_t get_page_size_helper() {

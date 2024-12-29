@@ -2,15 +2,7 @@
 
 #include "utils_helpers.h"
 #include "../String/string.hpp"
-
-#ifdef _WIN32
-typedef void* HANDLE;
-extern "C" HANDLE GetStdHandle(int);
-extern "C" int WriteConsoleA(HANDLE, const char*, int, int*, void*);
-const int STD_OUTPUT_HANDLE = -11;
-#else
-extern "C" long write(int, const char*, long);
-#endif
+#include "windowsdefs.h"
 
 namespace utils {
 

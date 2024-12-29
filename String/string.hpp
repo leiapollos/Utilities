@@ -210,6 +210,29 @@ namespace utils {
             return *this;
         }
 
+        string operator+=(const char& other) {
+            const size_t newSize = _size + 1;
+            if (newSize > (_isSSO ? k_SSOThreshold : _capacity)) {
+                StringError err = ensure_capacity(newSize);
+                if (err != StringError::None) {
+                    UTILS_DEBUG_ASSERT(false);
+                    set_empty_string();
+                    return *this;
+                }
+            }
+
+            if (_isSSO) {
+                _ssoBuffer[_size] = other;
+                _size = newSize;
+                _ssoBuffer[_size] = '\0';
+            } else {
+                _heapBuffer[_size] = other;
+                _size = newSize;
+                _heapBuffer[_size] = '\0';
+            }
+            return *this;
+        }
+
         string operator+(const string& other) const {
             string result;
             const size_t newSize = _size + other._size;

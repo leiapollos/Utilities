@@ -142,4 +142,39 @@ namespace utils {
         }
         return result;
     }
+
+    inline string to_string(const char* val) {
+        if (!val) {
+            return {};
+        }
+        return {val};
+    }
+
+
+    inline bool is_digit(const char c) {
+        return c >= '0' && c <= '9';
+    }
+
+    inline int stoi(const char* str) {
+        int result = 0;
+        int i = 0;
+        int sign = 1;
+
+        if (str[0] == '-') {
+            sign = -1;
+            i++;
+        } else if (str[0] == '+') {
+            i++;
+        }
+
+        while (str[i] != '\0') {
+            if (!is_digit(str[i])) {
+                break;
+            }
+            result = (result * 10) + (str[i] - '0');
+            i++;
+        }
+
+        return sign * result;
+    }
 }
