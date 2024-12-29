@@ -2,6 +2,11 @@
 
 #include "utils_macros.h"
 #include "atomic.h"
+#if defined(_MSC_VER)
+#if defined(_M_X64)
+extern "C" void _mm_pause();
+#endif
+#endif
 
 namespace utils {
 	UTILS_ALWAYS_INLINE void cpu_relax() {

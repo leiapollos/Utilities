@@ -1,11 +1,11 @@
 #pragma once
 
-inline void* operator new(size_t size, void* ptr) noexcept {
+inline void* operator new(size_t /*size*/, void* ptr) noexcept {
     return ptr;
 }
 
 #include "utils_macros.h"
-#include "vadefs.hpp"
+#include "typedefs.hpp"
 
 #pragma region Move Semantics
 namespace utils {
@@ -40,7 +40,7 @@ namespace utils {
 
 namespace utils {
     struct allocator {
-        UTILS_ALWAYS_INLINE static void* allocate(unsigned long long s) {
+        UTILS_ALWAYS_INLINE static void* allocate(uint64_t s) {
             return ::operator new(s);
         }
         UTILS_ALWAYS_INLINE static void deallocate(void* p) {
@@ -55,14 +55,14 @@ namespace utils {
         return pageSize;
     }
 
-    UTILS_ALWAYS_INLINE unsigned long long align_to_page(const unsigned long long n) {
+    UTILS_ALWAYS_INLINE uint64_t align_to_page(const uint64_t n) {
         static const size_t p = get_page_size();
         return (n + p - 1ULL) & ~(p - 1ULL);
     }
 
-    UTILS_ALWAYS_INLINE void page_touch(void* p, const unsigned long long bytes) {
+    UTILS_ALWAYS_INLINE void page_touch(void* p, const uint64_t bytes) {
         static const size_t step = get_page_size();
-        for (unsigned long long offset = 0; offset < bytes; offset += step) {
+        for (uint64_t offset = 0; offset < bytes; offset += step) {
             static_cast<volatile char*>(p)[offset] = 0;
         }
     }
@@ -76,15 +76,15 @@ namespace utils {
     }
 
     template <typename T>
-    static void destruct_range(T* ptr, unsigned long long count) {
-        for (unsigned long long i = 0; i < count; ++i) {
+    static void destruct_range(T* ptr, uint64_t count) {
+        for (uint64_t i = 0; i < count; ++i) {
             ptr[i].~T();
         }
     }
 
     template <typename T>
-    static void default_construct_range(T* ptr, unsigned long long count) {
-        for (unsigned long long i = 0; i < count; ++i) {
+    static void default_construct_range(T* ptr, uint64_t count) {
+        for (uint64_t i = 0; i < count; ++i) {
             new (reinterpret_cast<void*>(ptr + i)) T();
         }
     }
@@ -100,25 +100,25 @@ namespace utils {
     T min_value();
 
     template<>
-    UTILS_ALWAYS_INLINE int min_value<int>() { return -2147483647 - 1; }
+    UTILS_ALWAYS_INLINE int32_t min_value<int32_t>() { return -2147483647 - 1; }
 
     template<>
     UTILS_ALWAYS_INLINE long min_value<long>() { return -2147483647L - 1; }
 
     template<>
-    UTILS_ALWAYS_INLINE long long min_value<long long>() { return -9223372036854775807LL - 1; }
+    UTILS_ALWAYS_INLINE int64_t min_value<int64_t>() { return -9223372036854775807LL - 1; }
 
     template<typename T>
     T max_value();
 
     template<>
-    UTILS_ALWAYS_INLINE int max_value<int>() { return 2147483647; }
+    UTILS_ALWAYS_INLINE int32_t max_value<int32_t>() { return 2147483647; }
 
     template<>
     UTILS_ALWAYS_INLINE long max_value<long>() { return 2147483647L; }
 
     template<>
-    UTILS_ALWAYS_INLINE long long max_value<long long>() { return 9223372036854775807LL; }
+    UTILS_ALWAYS_INLINE int64_t max_value<int64_t>() { return 9223372036854775807LL; }
 
 
     template<typename T>

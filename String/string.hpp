@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../Utils/utils_macros.h"
-#include "../Utils/utils_memory.h"
+#include "../Utils/typedefs.hpp"
 #include "../Utils/utils_memory_functions.h"
 
 namespace utils {
@@ -295,7 +295,7 @@ namespace utils {
             explicit iterator(char* p) : _ptr(p) {}
             char& operator*() const { return *_ptr; }
             iterator& operator++() { ++_ptr; return *this; }
-            iterator operator++(int) {
+            iterator operator++(int32_t) {
                 const iterator tmp = *this;
                 ++_ptr;
                 return tmp;
@@ -311,7 +311,7 @@ namespace utils {
             explicit const_iterator(const char* p) : _ptr(p) {}
             const char& operator*() const { return *_ptr; }
             const_iterator& operator++() { ++_ptr; return *this; }
-            const_iterator operator++(int) {
+            const_iterator operator++(int32_t) {
                 const const_iterator tmp = *this;
                 ++_ptr;
                 return tmp;

@@ -56,8 +56,8 @@ namespace utils {
             return print_signed<long long>(num);
         }
 
-        output& operator<<(unsigned int num) {
-            return print_unsigned<unsigned int>(num);
+        output& operator<<(uint32_t num) {
+            return print_unsigned<uint32_t>(num);
         }
 
         output& operator<<(unsigned long num) {

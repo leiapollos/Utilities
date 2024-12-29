@@ -8,10 +8,10 @@ namespace utils {
     class vector {
     private:
         T* _data;
-        unsigned long long _size;
-        unsigned long long _capacity;
+        uint64_t _size;
+        uint64_t _capacity;
 
-        UTILS_ALWAYS_INLINE void reallocate(unsigned long long c) {
+        UTILS_ALWAYS_INLINE void reallocate(uint64_t c) {
             c = utils::align_to_page(c * sizeof(T)) / sizeof(T);
             T* n = static_cast<T*>(utils::allocator::allocate(c * sizeof(T)));
             utils::page_touch(n, c * sizeof(T));
@@ -78,10 +78,10 @@ namespace utils {
             return *this;
         }
 
-        UTILS_ALWAYS_INLINE unsigned long long size() const { return _size; }
-        UTILS_ALWAYS_INLINE unsigned long long capacity() const { return _capacity; }
+        UTILS_ALWAYS_INLINE uint64_t size() const { return _size; }
+        UTILS_ALWAYS_INLINE uint64_t capacity() const { return _capacity; }
 
-        UTILS_ALWAYS_INLINE void reserve(unsigned long long c) {
+        UTILS_ALWAYS_INLINE void reserve(uint64_t c) {
             UTILS_DEBUG_ASSERT((_data == nullptr && _size == 0) || (_data != nullptr));
             if (c <= _capacity) return;
             reallocate(c);
@@ -112,10 +112,10 @@ namespace utils {
             ++_size;
         }
 
-        UTILS_ALWAYS_INLINE void push_back_multiple(const T* arr, unsigned long long count) {
+        UTILS_ALWAYS_INLINE void push_back_multiple(const T* arr, uint64_t count) {
             UTILS_DEBUG_ASSERT(arr || (count == 0ULL));
             if (_size == _capacity) [[unlikely]] {
-                unsigned long long n = (_capacity == 0ULL) ? count : _capacity;
+                uint64_t n = (_capacity == 0ULL) ? count : _capacity;
                 while (n < _size + count) {
 	                n *= 2ULL;
                 }
@@ -127,7 +127,7 @@ namespace utils {
 
         UTILS_ALWAYS_INLINE void push_back_multiple(vector<T>& other) {
             if (_size + other._size > _capacity) [[unlikely]] {
-                unsigned long long n = (_capacity == 0ULL) ? other._size : _capacity;
+                uint64_t n = (_capacity == 0ULL) ? other._size : _capacity;
                 while (n < _size + other._size) {
 	                n *= 2ULL;
                 }
@@ -138,12 +138,12 @@ namespace utils {
             other._size = 0;
         }
 
-        UTILS_ALWAYS_INLINE T& operator[](unsigned long long i) {
+        UTILS_ALWAYS_INLINE T& operator[](uint64_t i) {
             UTILS_DEBUG_ASSERT(i < _size);
             return _data[i];
         }
 
-        UTILS_ALWAYS_INLINE const T& operator[](unsigned long long i) const {
+        UTILS_ALWAYS_INLINE const T& operator[](uint64_t i) const {
             UTILS_DEBUG_ASSERT(i < _size);
             return _data[i];
         }
@@ -161,7 +161,7 @@ namespace utils {
             _capacity = 0;
         }
 
-        UTILS_ALWAYS_INLINE void resize(unsigned long long newSize) {
+        UTILS_ALWAYS_INLINE void resize(uint64_t newSize) {
             if (newSize > _capacity) {
                 reallocate(newSize);
             }
