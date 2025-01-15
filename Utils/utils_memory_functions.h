@@ -1,40 +1,98 @@
 ﻿#pragma once
 
+#if !defined(_MSC_VER)
+static_assert(false, "Only MSVC is supported");
+#endif
+
+#include <intrin.h>
+#include <immintrin.h>
+
 namespace utils {
+    static bool is_AVX512() {
+        int regs[4] = {};
+        __cpuid(regs, 0);
+        if (regs[0] < 7) return false;
+        __cpuidex(regs, 7, 0);
+        return (regs[1] & (1 << 16)) != 0; // AVX512F
+    }
+
+    static bool is_AVX2() {
+        int regs[4] = {};
+        __cpuid(regs, 0);
+        if (regs[0] < 7) return false;
+        __cpuidex(regs, 7, 0);
+        return (regs[1] & (1 << 5)) != 0; // AVX2
+    }
+
     void* memcpy(void* dest, const void* src, unsigned long long size) {
-    #if defined(_MSC_VER)
-        unsigned long long* d64 = (unsigned long long*)dest;
-        const unsigned long long* s64 = (const unsigned long long*)src;
-        while (size >= 8) {
-            *d64++ = *s64++;
-            size -= 8;
+        static bool isInited = false;
+        static bool useAvx512 = false;
+        static bool useAvx2 = false;
+
+        if (!isInited) {
+            useAvx512 = is_AVX512();
+            useAvx2 = is_AVX2();
+            isInited = true;
         }
-        char* d8 = (char*)d64;
-        const char* s8 = (const char*)s64;
-        while (size--) {
-            *d8++ = *s8++;
-        }
-    #else
+        
         char* d = (char*)dest;
         const char* s = (const char*)src;
-        while (size >= 32) {
-            __asm__ __volatile__ (
-                "movdqu  (%0), %%xmm0\n\t"
-                "movdqu 16(%0), %%xmm1\n\t"
-                "movdqu  %%xmm0, (%1)\n\t"
-                "movdqu  %%xmm1, 16(%1)\n\t"
-                :
-                : "r"(s), "r"(d)
-                : "memory", "xmm0", "xmm1"
-            );
-            s += 32;
-            d += 32;
-            size -= 32;
+        
+        if (useAvx512) {
+            while (size >= 64) {
+                __m512i chunk = _mm512_loadu_si512((const __m512i*)s);
+                _mm512_storeu_si512((__m512i*)d, chunk);
+                s += 64; d += 64; size -= 64;
+            }
+            while (size >= 32) {
+                __m256i chunk = _mm256_loadu_si256((const __m256i*)s);
+                _mm256_storeu_si256((__m256i*)d, chunk);
+                s += 32; d += 32; size -= 32;
+            }
+            while (size >= 16) {
+                __m128i chunk = _mm_loadu_si128((const __m128i*)s);
+                _mm_storeu_si128((__m128i*)d, chunk);
+                s += 16; d += 16; size -= 16;
+            }
+            while (size >= 8) {
+                *(unsigned long long*)d = *(const unsigned long long*)s;
+                d += 8; s += 8; size -= 8;
+            }
+            while (size--) {
+                *d++ = *s++;
+            }
+        } else if (useAvx2) {
+            while (size >= 32) {
+                __m256i chunk = _mm256_loadu_si256((const __m256i*)s);
+                _mm256_storeu_si256((__m256i*)d, chunk);
+                s += 32; d += 32; size -= 32;
+            }
+            while (size >= 16) {
+                __m128i chunk = _mm_loadu_si128((const __m128i*)s);
+                _mm_storeu_si128((__m128i*)d, chunk);
+                s += 16; d += 16; size -= 16;
+            }
+            while (size >= 8) {
+                *(unsigned long long*)d = *(const unsigned long long*)s;
+                d += 8; s += 8; size -= 8;
+            }
+            while (size--) {
+                *d++ = *s++;
+            }
+        } else {
+            unsigned long long* d64 = (unsigned long long*)dest;
+            const unsigned long long* s64 = (const unsigned long long*)src;
+            while (size >= 8) {
+                *d64++ = *s64++;
+                size -= 8;
+            }
+            char* d8 = (char*)d64;
+            const char* s8 = (const char*)s64;
+            while (size--) {
+                *d8++ = *s8++;
+            }
         }
-        while (size--) {
-            *d++ = *s++;
-        }
-    #endif
+
         return dest;
     }
 
@@ -64,5 +122,4 @@ namespace utils {
         }
         return 0;
     }
-
 }
