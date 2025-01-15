@@ -3,16 +3,6 @@
 #include "utils_helpers.h"
 
 #ifdef _WIN32
-extern "C" {
-    __declspec(dllimport) void* __stdcall VirtualAlloc(void* addr, unsigned long size,
-        unsigned long type, unsigned long protect);
-    __declspec(dllimport) int __stdcall VirtualFree(void* addr, unsigned long size,
-        unsigned long freeType);
-}
-static constexpr unsigned long MEM_COMMIT = 0x1000;
-static constexpr unsigned long MEM_RESERVE = 0x2000;
-static constexpr unsigned long MEM_RELEASE = 0x8000;
-static constexpr unsigned long PAGE_READWRITE = 0x04;
 #else
 extern "C" {
     void* mmap(void* addr, unsigned long length, int prot, int flags, int fd, long offset);

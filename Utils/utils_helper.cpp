@@ -1,6 +1,9 @@
 #include "utils_helpers.h"
 
-#include "windowsdefs.h"
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include "Windows.h"
+#endif
 
 namespace utils {
 	size_t get_page_size_helper() {
