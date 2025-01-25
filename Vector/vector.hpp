@@ -8,16 +8,25 @@ namespace utils {
     class vector {
     private:
         T* _data;
-        unsigned long long _size;
-        unsigned long long _capacity;
+        uint64_t _size;
+        uint64_t _capacity;
 
-        UTILS_ALWAYS_INLINE void reallocate(unsigned long long c) {
+        UTILS_ALWAYS_INLINE void reallocate(uint64_t c) {
             c = utils::align_to_page(c * sizeof(T)) / sizeof(T);
-            T* n = static_cast<T*>(utils::allocator::allocate(c * sizeof(T)));
-            utils::page_touch(n, c * sizeof(T));
-            utils::memcpy(n, _data, _size * sizeof(T));
+            T* new_data = static_cast<T*>(utils::allocator::allocate(c * sizeof(T)));
+            utils::page_touch(new_data, c * sizeof(T));
+
+            if constexpr (UTILS_IS_TRIVIALLY_COPYABLE(T)) {
+                utils::memcpy(new_data, _data, _size * sizeof(T));
+            } else {
+                for (uint64_t i = 0; i < _size; ++i) {
+                    new (new_data + i) T(utils::move(_data[i]));
+                    _data[i].~T();
+                }
+            }
+
             utils::allocator::deallocate(_data);
-            _data = n;
+            _data = new_data;
             _capacity = c;
         }
 
@@ -78,10 +87,10 @@ namespace utils {
             return *this;
         }
 
-        UTILS_ALWAYS_INLINE unsigned long long size() const { return _size; }
-        UTILS_ALWAYS_INLINE unsigned long long capacity() const { return _capacity; }
+        UTILS_ALWAYS_INLINE uint64_t size() const { return _size; }
+        UTILS_ALWAYS_INLINE uint64_t capacity() const { return _capacity; }
 
-        UTILS_ALWAYS_INLINE void reserve(unsigned long long c) {
+        UTILS_ALWAYS_INLINE void reserve(uint64_t c) {
             UTILS_DEBUG_ASSERT((_data == nullptr && _size == 0) || (_data != nullptr));
             if (c <= _capacity) return;
             reallocate(c);
@@ -112,38 +121,49 @@ namespace utils {
             ++_size;
         }
 
-        UTILS_ALWAYS_INLINE void push_back_multiple(const T* arr, unsigned long long count) {
-            UTILS_DEBUG_ASSERT(arr || (count == 0ULL));
-            if (_size == _capacity) [[unlikely]] {
-                unsigned long long n = (_capacity == 0ULL) ? count : _capacity;
-                while (n < _size + count) {
-	                n *= 2ULL;
-                }
-                reserve(n);
+        UTILS_ALWAYS_INLINE void push_back_multiple(const T* arr, uint64_t count) {
+            if (!arr || count == 0) return;
+            
+            if (_size + count > _capacity) {
+                uint64_t new_cap = (_capacity == 0) ? count : _capacity;
+                while (new_cap < _size + count) new_cap *= 2;
+                reserve(new_cap);
             }
-            utils::memcpy(_data + _size, arr, count);
+
+            if constexpr (UTILS_IS_TRIVIALLY_COPYABLE(T)) {
+                utils::memcpy(_data + _size, arr, count * sizeof(T));
+            } else {
+                for (uint64_t i = 0; i < count; ++i) {
+                    new (_data + _size + i) T(arr[i]);
+                }
+            }
             _size += count;
         }
-
-        UTILS_ALWAYS_INLINE void push_back_multiple(vector<T>& other) {
-            if (_size + other._size > _capacity) [[unlikely]] {
-                unsigned long long n = (_capacity == 0ULL) ? other._size : _capacity;
-                while (n < _size + other._size) {
-	                n *= 2ULL;
+		
+        UTILS_ALWAYS_INLINE void append_move(vector<T>&& other) {
+            if (this == &other) return;
+            
+            reserve(_size + other._size);
+            
+            if constexpr (UTILS_IS_TRIVIALLY_COPYABLE(T)) {
+                utils::memcpy(_data + _size, other._data, other._size * sizeof(T));
+            } else {
+                for (uint64_t i = 0; i < other._size; ++i) {
+                    new (_data + _size + i) T(utils::move(other._data[i]));
+                    other._data[i].~T();
                 }
-                reserve(n);
             }
-            utils::memcpy(_data + _size, other._data, other._size);
+            
             _size += other._size;
             other._size = 0;
         }
 
-        UTILS_ALWAYS_INLINE T& operator[](unsigned long long i) {
+        UTILS_ALWAYS_INLINE T& operator[](uint64_t i) {
             UTILS_DEBUG_ASSERT(i < _size);
             return _data[i];
         }
 
-        UTILS_ALWAYS_INLINE const T& operator[](unsigned long long i) const {
+        UTILS_ALWAYS_INLINE const T& operator[](uint64_t i) const {
             UTILS_DEBUG_ASSERT(i < _size);
             return _data[i];
         }
@@ -161,7 +181,7 @@ namespace utils {
             _capacity = 0;
         }
 
-        UTILS_ALWAYS_INLINE void resize(unsigned long long newSize) {
+        UTILS_ALWAYS_INLINE void resize(uint64_t newSize) {
             if (newSize > _capacity) {
                 reallocate(newSize);
             }
@@ -171,6 +191,39 @@ namespace utils {
                 utils::destruct_range(_data + newSize, _size - newSize);
             }
             _size = newSize;
+        }
+
+		UTILS_ALWAYS_INLINE T* data() noexcept { return _data; }
+        UTILS_ALWAYS_INLINE const T* data() const noexcept { return _data; }
+
+        UTILS_ALWAYS_INLINE T& front() {
+            UTILS_DEBUG_ASSERT(_size > 0);
+            return _data[0];
+        }
+
+        UTILS_ALWAYS_INLINE const T& front() const {
+            UTILS_DEBUG_ASSERT(_size > 0);
+            return _data[0];
+        }
+
+        UTILS_ALWAYS_INLINE T& back() {
+            UTILS_DEBUG_ASSERT(_size > 0);
+            return _data[_size - 1];
+        }
+
+        UTILS_ALWAYS_INLINE const T& back() const {
+            UTILS_DEBUG_ASSERT(_size > 0);
+            return _data[_size - 1];
+        }
+
+        UTILS_ALWAYS_INLINE T& at(uint64_t i) {
+            UTILS_DEBUG_ASSERT(i < _size);
+            return _data[i];
+        }
+
+        UTILS_ALWAYS_INLINE const T& at(uint64_t i) const {
+            UTILS_DEBUG_ASSERT(i < _size);
+            return _data[i];
         }
 
         class iterator {

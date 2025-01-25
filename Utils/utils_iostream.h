@@ -4,12 +4,8 @@
 #include "../String/string.hpp"
 
 #ifdef _WIN32
-typedef void* HANDLE;
-extern "C" HANDLE GetStdHandle(int);
-extern "C" int WriteConsoleA(HANDLE, const char*, int, int*, void*);
-const int STD_OUTPUT_HANDLE = -11;
-#else
-extern "C" long write(int, const char*, long);
+#define WIN32_LEAN_AND_MEAN
+#include "Windows.h"
 #endif
 
 namespace utils {
@@ -56,8 +52,8 @@ namespace utils {
             return print_signed<long long>(num);
         }
 
-        output& operator<<(unsigned int num) {
-            return print_unsigned<unsigned int>(num);
+        output& operator<<(uint32_t num) {
+            return print_unsigned<uint32_t>(num);
         }
 
         output& operator<<(unsigned long num) {

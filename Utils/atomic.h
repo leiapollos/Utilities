@@ -3,7 +3,9 @@
 #include "utils_macros.h"
 
 #if defined(_MSC_VER)
-#include <intrin.h>
+	extern "C" long InterlockedOr64(volatile long* ptr, long value);
+	extern "C" long InterlockedExchange64(volatile long* ptr, long value);
+	extern "C" long InterlockedCompareExchange64(volatile long* ptr, long exchange, long comparand);
 #elif defined(__GNUC__)
 // GCC
 #elif defined(__clang__)
@@ -24,7 +26,7 @@ namespace utils {
 #if defined(_MSC_VER)
 #if defined(_M_X64)
 			tmp = static_cast<int>(
-				_InterlockedOr(
+				InterlockedOr64(
 					reinterpret_cast<volatile long*>(&_val),
 					0
 				)
@@ -50,7 +52,7 @@ namespace utils {
 		UTILS_ALWAYS_INLINE void store(int x) {
 #if defined(_MSC_VER)
 #if defined(_M_X64)
-			_InterlockedExchange(
+			InterlockedExchange64(
 				reinterpret_cast<volatile long*>(&_val),
 				static_cast<long>(x)
 			);
@@ -76,7 +78,7 @@ namespace utils {
 			int old = expected;
 #if defined(_MSC_VER)
 #if defined(_M_X64)
-			long prev = _InterlockedCompareExchange(
+			long prev = InterlockedCompareExchange64(
 				reinterpret_cast<volatile long*>(&_val),
 				static_cast<long>(desired),
 				static_cast<long>(old)
