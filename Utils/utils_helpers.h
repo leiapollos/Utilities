@@ -1,8 +1,13 @@
 #pragma once
 
-inline void* operator new(size_t /*size*/, void* ptr) noexcept {
-    return ptr;
-}
+#if defined(_MSC_VER)
+  // MSVC: Check if <new> was included
+  #ifndef _NEW_
+    inline void* operator new(size_t /*size*/, void* ptr) noexcept {
+        return ptr;
+    }
+#endif
+#endif
 
 #include "utils_macros.h"
 #include "typedefs.hpp"
