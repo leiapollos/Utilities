@@ -32,6 +32,7 @@ add_executable(utils_app main.cpp ${JOBSYSTEM_SOURCES}
         nstl/memory.h
         nstl/atomic.h
         nstl/cache.h
-        nstl/typetraits.h)
+        nstl/typetraits.h
+        nstl/thread.h)
 
 install(TARGETS utils_app DESTINATION bin)
