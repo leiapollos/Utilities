@@ -110,6 +110,7 @@ namespace nstl {
         void submit(Job* job);
         void wait(JobCounter* counter);
         bool is_running();
+        ui64 xor_shift_rand();
 
         const std::thread::id& get_thread_id() const;
 
@@ -119,6 +120,7 @@ namespace nstl {
         JobSystem* _system;
         std::thread* _thread;
         std::thread::id _threadId;
+        ui64 _randomSeed;
 
         Job* get_job();
         void loop();
