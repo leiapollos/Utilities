@@ -5,7 +5,6 @@
 #include "JobSystem.h"
 
 #include <cassert>
-#include <random>
 
 namespace nstl {
     thread_local Worker* g_thisThreadWorker = nullptr;
@@ -169,11 +168,11 @@ namespace nstl {
     }
 
     JobQueue* JobSystem::get_random_job_queue() {
-        static std::random_device rd;
-        static std::mt19937 gen(rd());
-        static std::uniform_int_distribution<> distribution(0, _workersCount);
-
-        size_t index = static_cast<size_t>(std::round(distribution(gen)));
+        assert(g_thisThreadWorker != nullptr &&
+                       "get_random_job_queue must be called from a worker thread");
+        uint32_t randomValue = g_thisThreadWorker->xor_shift_rand();
+        const size_t range = _workersCount + 1;
+        const size_t index = (static_cast<uint64_t>(randomValue) * range) >> 32;
         return _queues[index];
     }
 
@@ -185,6 +184,11 @@ namespace nstl {
 
     Worker::Worker(JobSystem* system, JobQueue* queue)
         : _system(system), _queue(queue), _thread(nullptr), _threadId(std::this_thread::get_id()) {
+        _randomSeed = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(this)); // Get different starting seeds for all threads.
+        if (_randomSeed == 0) {
+            // xorshift must not be seeded with 0.
+            _randomSeed = 0xBAD5EEDBAD5EEDULL;;
+        }
     }
 
     Worker::~Worker() {
@@ -261,5 +265,14 @@ namespace nstl {
 
     const std::thread::id& Worker::get_thread_id() const {
         return _threadId;
+    }
+
+    ui64 Worker::xor_shift_rand() {
+        ui64 x = _randomSeed;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        _randomSeed = x;
+        return x;
     }
 }
