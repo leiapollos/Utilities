@@ -7,20 +7,20 @@
 #include "platform.h"
 
 #ifdef PLATFORM_OS_WINDOWS
-    #ifndef WIN32_LEAN_AND_MEAN
+#ifndef WIN32_LEAN_AND_MEAN
         #define WIN32_LEAN_AND_MEAN
-    #endif
+#endif
     #include <windows.h>
-    #if defined(PLATFORM_ARCH_X64) && defined(COMPILER_MSVC)
+#if defined(PLATFORM_ARCH_X64) && defined(COMPILER_MSVC)
         #include <immintrin.h>
-    #endif
+#endif
 #else
-    #include <pthread.h>
-    #include <unistd.h>
-    #include <sched.h>
-    #if defined(PLATFORM_ARCH_X64) && (defined(COMPILER_GCC) || defined(COMPILER_CLANG))
+#include <pthread.h>
+#include <unistd.h>
+#include <sched.h>
+#if defined(PLATFORM_ARCH_X64) && (defined(COMPILER_GCC) || defined(COMPILER_CLANG))
         #include <immintrin.h>
-    #endif
+#endif
 #endif
 
 namespace nstl {
@@ -56,9 +56,9 @@ namespace nstl {
         ThreadData _threadData{};
 
 #ifdef PLATFORM_OS_WINDOWS
-        static DWORD WINAPI threadEntryPoint(LPVOID param);
+        static DWORD WINAPI thread_entry_point(LPVOID param);
 #else
-        static void* threadEntryPoint(void* param);
+        static void* thread_entry_point(void* param);
 #endif
 
     public:
@@ -71,22 +71,21 @@ namespace nstl {
         bool start(ThreadFunction function, void* userData = nullptr);
         bool join();
         bool detach();
-        [[nodiscard]] bool isJoinable() const;
-        [[nodiscard]] State getState() const;
+        [[nodiscard]] bool is_joinable() const;
+        [[nodiscard]] State get_state() const;
 
-        static unsigned int getCurrentThreadId();
+        static unsigned int get_current_thread_id();
         static void sleep(unsigned int milliseconds);
         static void yield();
         static void pause();
-        static unsigned int getHardwareConcurrency();
+        static unsigned int get_hardware_concurrency();
     };
 
     inline Thread::Thread()
         : _function(nullptr)
-        , _userData(nullptr)
-        , _state(NOT_STARTED)
-        , _joinable(false)
-    {
+          , _userData(nullptr)
+          , _state(NOT_STARTED)
+          , _joinable(false) {
 #ifdef PLATFORM_OS_WINDOWS
         _handle = nullptr;
         _threadId = 0;
@@ -124,7 +123,7 @@ namespace nstl {
         _handle = CreateThread(
             nullptr,
             0,
-            threadEntryPoint,
+            thread_entry_point,
             &_threadData,
             0,
             &_threadId
@@ -134,7 +133,7 @@ namespace nstl {
             return false;
         }
 #else
-        int result = pthread_create(&_handle, nullptr, threadEntryPoint, &_threadData);
+        int result = pthread_create(&_handle, nullptr, thread_entry_point, &_threadData);
         if (result != 0) {
             return false;
         }
@@ -190,16 +189,16 @@ namespace nstl {
         return false;
     }
 
-    inline bool Thread::isJoinable() const {
+    inline bool Thread::is_joinable() const {
         return _joinable;
     }
 
-    inline Thread::State Thread::getState() const {
+    inline Thread::State Thread::get_state() const {
         return _state;
     }
 
 #ifdef PLATFORM_OS_WINDOWS
-    inline DWORD WINAPI Thread::threadEntryPoint(LPVOID param) {
+    inline DWORD WINAPI Thread::thread_entry_point(LPVOID param) {
         ThreadData* data = static_cast<ThreadData*>(param);
         if (data && data->function) {
             data->function(data->userData);
@@ -208,7 +207,7 @@ namespace nstl {
         return 0;
     }
 #else
-    inline void* Thread::threadEntryPoint(void* param) {
+    inline void* Thread::thread_entry_point(void* param) {
         ThreadData* data = static_cast<ThreadData*>(param);
         if (data && data->function) {
             data->function(data->userData);
@@ -218,7 +217,7 @@ namespace nstl {
     }
 #endif
 
-    inline unsigned int Thread::getCurrentThreadId() {
+    inline unsigned int Thread::get_current_thread_id() {
 #ifdef PLATFORM_OS_WINDOWS
         return static_cast<unsigned int>(::GetCurrentThreadId());
 #else
@@ -262,7 +261,7 @@ namespace nstl {
 #endif
     }
 
-    inline unsigned int Thread::getHardwareConcurrency() {
+    inline unsigned int Thread::get_hardware_concurrency() {
 #ifdef PLATFORM_OS_WINDOWS
         SYSTEM_INFO sysInfo;
         GetSystemInfo(&sysInfo);
