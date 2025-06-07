@@ -2,7 +2,7 @@
 
 #include <thread>
 #include <vector>
-#include <atomic>
+#include "atomic.h"
 
 namespace nstl {
     class Job;
@@ -36,22 +36,22 @@ namespace nstl {
         JobCounter& operator=(const JobCounter&) = delete;
 
         void add(size_t count) {
-            _counter.fetch_add(count, std::memory_order_relaxed);
+            _counter.fetch_add(count, memory_order::relaxed);
         }
 
         void finish_one() {
-            _counter.fetch_sub(1, std::memory_order_release);
+            _counter.fetch_sub(1, memory_order::release);
         }
 
         bool is_done() const {
-            return _counter.load(std::memory_order_acquire) == 0;
+            return _counter.load(memory_order::acquire) == 0;
         }
 
     private:
         friend class JobSystem;
         friend class Worker;
 
-        alignas(std::hardware_destructive_interference_size) std::atomic_size_t _counter;
+        alignas(hardware_destructive_interference_size) Atomic<ui64> _counter;
     };
 
     class JobQueue {
@@ -65,8 +65,8 @@ namespace nstl {
         void clear();
 
     private:
-        alignas(std::hardware_destructive_interference_size) std::atomic_int _bottomIndex;
-        alignas(std::hardware_destructive_interference_size) std::atomic_int _topIndex;
+        alignas(hardware_destructive_interference_size) Atomic<i64> _bottomIndex;
+        alignas(hardware_destructive_interference_size) Atomic<i64> _topIndex;
         std::vector<Job*> _queue;
     };
 
