@@ -36,51 +36,50 @@ namespace nstl {
     }
 
     JobQueue::JobQueue() {
-        _bottomIndex = 0;
-        _topIndex = 0;
+        _bottomIndex.store(0);
+        _topIndex.store(0);
         _queue.resize(JobSystem::MAX_JOBS_PER_THREAD);
     }
 
     void JobQueue::push(Job* job) {
-        int bottom = _bottomIndex.load(std::memory_order_acquire);
+        int bottom = _bottomIndex.load(memory_order::acquire);
         _queue[bottom & (JobSystem::MAX_JOBS_PER_THREAD - 1)] = job;
-        _bottomIndex.store(bottom + 1, std::memory_order_release);
+        _bottomIndex.store(bottom + 1, memory_order::release);
     }
 
     Job* JobQueue::pop() {
-        int bottom = _bottomIndex.load(std::memory_order_relaxed) - 1;
-        _bottomIndex.store(bottom, std::memory_order_relaxed);
-        int top = _topIndex.load(std::memory_order_acquire);
+        i64 bottom = _bottomIndex.load(memory_order::relaxed) - 1;
+        _bottomIndex.store(bottom, memory_order::relaxed);
+        i64 top = _topIndex.load(memory_order::acquire);
 
         if (top <= bottom) {
             Job* job = _queue[bottom & (JobSystem::MAX_JOBS_PER_THREAD - 1)];
             if (top == bottom) {
                 if (_topIndex.compare_exchange_strong(top, top + 1,
-                                                      std::memory_order_seq_cst, std::memory_order_relaxed)) {
-                    _bottomIndex.store(bottom + 1, std::memory_order_relaxed);
+                                                      memory_order::seq_cst, memory_order::relaxed)) {
+                    _bottomIndex.store(bottom + 1, memory_order::relaxed);
                     return job;
                                                       } else {
-                                                          _bottomIndex.store(bottom + 1, std::memory_order_relaxed);
+                                                          _bottomIndex.store(bottom + 1, memory_order::relaxed);
                                                           return nullptr;
                                                       }
             }
 
             return job;
         } else {
-            _bottomIndex.store(bottom + 1, std::memory_order_relaxed);
+            _bottomIndex.store(bottom + 1, memory_order::relaxed);
             return nullptr;
         }
     }
 
     Job* JobQueue::steal() {
-        int top = _topIndex.load(std::memory_order_acquire);
-        int bottom = _bottomIndex.load(std::memory_order_acquire);
+        i64 top = _topIndex.load(memory_order::acquire);
+        i64 bottom = _bottomIndex.load(memory_order::acquire);
         if (top < bottom) {
             Job* job = _queue[top & (JobSystem::MAX_JOBS_PER_THREAD - 1)];
 
-            int expectedTop = top;
-            if (_topIndex.compare_exchange_strong(expectedTop, top + 1,
-                                                  std::memory_order_seq_cst, std::memory_order_relaxed)) {
+            if (_topIndex.compare_exchange_strong(top, top + 1,
+                                                  memory_order::seq_cst, memory_order::relaxed)) {
                 return job;
                                                   }
             return nullptr;
@@ -90,13 +89,13 @@ namespace nstl {
     }
 
     size_t JobQueue::size() const {
-        return _bottomIndex.load(std::memory_order_relaxed) -
-               _topIndex.load(std::memory_order_relaxed);
+        return _bottomIndex.load(memory_order::relaxed) -
+               _topIndex.load(memory_order::relaxed);
     }
 
     void JobQueue::clear() {
-        _bottomIndex.store(0, std::memory_order_relaxed);
-        _topIndex.store(0, std::memory_order_relaxed);
+        _bottomIndex.store(0, memory_order::relaxed);
+        _topIndex.store(0, memory_order::relaxed);
     }
 
 
