@@ -26,13 +26,6 @@ file(GLOB JOBSYSTEM_SOURCES
         "${CMAKE_CURRENT_SOURCE_DIR}/nstl/*.h"
         "${CMAKE_CURRENT_SOURCE_DIR}/nstl/*.hpp")
 
-add_executable(utils_app main.cpp ${JOBSYSTEM_SOURCES}
-        nstl/typedefs.h
-        nstl/platform.h
-        nstl/memory.h
-        nstl/atomic.h
-        nstl/cache.h
-        nstl/typetraits.h
-        nstl/thread.h)
+add_executable(utils_app main.cpp ${JOBSYSTEM_SOURCES})
 
 install(TARGETS utils_app DESTINATION bin)
