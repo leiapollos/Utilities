@@ -5,10 +5,11 @@
 #pragma once
 
 #if NSTL_DEBUG
+void debugPrint(const char* format, ...);
 #define NSTL_ASSERT(expression) \
 do { \
 if (!(expression)) { \
-fprintf(stderr, "Assertion failed: %s, file %s, line %d, function %s\n", \
+debugPrint("Assertion failed: %s, file %s, line %d, function %s\n", \
 #expression, __FILE__, __LINE__, __func__); \
 \
 volatile int *invalid_ptr = NULL; \
