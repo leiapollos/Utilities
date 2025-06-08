@@ -4,7 +4,9 @@
 
 #include "JobSystem.h"
 
-#include "assert.h"
+#include "core/assert.h"
+
+#include <new> // Cries :'( Still haven't found a good solution for avoiding this
 
 namespace nstl {
     thread_local Worker* g_thisThreadWorker = nullptr;
@@ -37,11 +39,11 @@ namespace nstl {
     JobQueue::JobQueue() {
         _bottomIndex.store(0);
         _topIndex.store(0);
-        _queue.resize(JobSystem::MAX_JOBS_PER_THREAD);
+        _queue.reserve(JobSystem::MAX_JOBS_PER_THREAD);
     }
 
     void JobQueue::push(Job* job) {
-        int bottom = _bottomIndex.load(memory_order::acquire);
+        i64 bottom = _bottomIndex.load(memory_order::acquire);
         _queue[bottom & (JobSystem::MAX_JOBS_PER_THREAD - 1)] = job;
         _bottomIndex.store(bottom + 1, memory_order::release);
     }
@@ -98,24 +100,24 @@ namespace nstl {
     }
 
 
-    JobSystem::JobSystem(size_t workersCount) : _workersCount(workersCount) {
+    JobSystem::JobSystem(ui64 workersCount) : _workersCount(workersCount) {
         _queues.reserve(workersCount);
         _workers.reserve(workersCount);
 
-        JobQueue* queue = new JobQueue();
-        _queues.push_back(queue);
-        Worker* mainThreadWorker = new Worker(this, queue);
+        JobQueue* mainThreadQueue = new JobQueue();
+        _queues.push_back(mainThreadQueue);
+        Worker* mainThreadWorker = new Worker(this, mainThreadQueue);
         _workers.push_back(mainThreadWorker);
         g_thisThreadWorker = mainThreadWorker;
 
-        for (size_t i = 0; i < workersCount; ++i) {
+        for (ui64 i = 0; i < workersCount; ++i) {
             JobQueue* queue = new JobQueue();
             _queues.push_back(queue);
             Worker* worker = new Worker(this, queue);
             _workers.push_back(worker);
         }
 
-        for (size_t i = 1; i <= workersCount; ++i) {
+        for (ui64 i = 1; i <= workersCount; ++i) {
             _workers[i]->start_background_thread();
         }
     }
@@ -132,23 +134,23 @@ namespace nstl {
         _queues.clear();
     }
 
-    Job* JobSystem::create_empty_job() const {
+    Job* JobSystem::create_empty_job() {
         return create_job(nullptr, nullptr);
     }
 
-    Job* JobSystem::create_job(const JobFunction function, JobCounter* counter) const {
+    Job* JobSystem::create_job(const JobFunction function, JobCounter* counter) {
         return create_job(function, counter, nullptr);
     }
 
-    Job* JobSystem::create_job(const JobFunction function, JobCounter* counter, void* data) const {
+    Job* JobSystem::create_job(const JobFunction function, JobCounter* counter, void* data) {
         struct AlignedJobStorage {
-            alignas(alignof(Job)) std::byte storage[sizeof(Job)];
+            alignas(alignof(Job)) ui8 storage[sizeof(Job)];
         };
         static thread_local AlignedJobStorage jobPoolMemory[MAX_JOBS_PER_THREAD];
         Job* jobPool = reinterpret_cast<Job*>(jobPoolMemory);
 
-        static thread_local size_t allocatedJobs = 0;
-        const size_t jobIndex = allocatedJobs++;
+        static thread_local ui64 allocatedJobs = 0;
+        const ui64 jobIndex = allocatedJobs++;
 
         Job* job = &jobPool[jobIndex & (MAX_JOBS_PER_THREAD - 1)];
         NSTL_ASSERT(job->is_done() && "Job memory is being overwritten while still in use!");
@@ -170,9 +172,9 @@ namespace nstl {
     JobQueue* JobSystem::get_random_job_queue() {
         NSTL_ASSERT(g_thisThreadWorker != nullptr &&
             "JobSystem::get_random_job_queue must be called from a worker thread");
-        uint32_t randomValue = g_thisThreadWorker->xor_shift_rand();
-        const size_t range = _workersCount + 1;
-        const size_t index = (static_cast<uint64_t>(randomValue) * range) >> 32;
+        ui32 randomValue = g_thisThreadWorker->xor_shift_rand();
+        const ui64 range = _workersCount + 1;
+        const ui64 index = (static_cast<ui64>(randomValue) * range) >> 32;
         return _queues[index];
     }
 
@@ -184,10 +186,8 @@ namespace nstl {
 
     Worker::Worker(JobSystem* system, JobQueue* queue)
         : _system(system), _queue(queue), _thread(nullptr), _threadId(Thread::get_current_thread_id()) {
-        _randomSeed = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(this));
-        // Get different starting seeds for all threads.
-        if (_randomSeed == 0) {
-            // xorshift must not be seeded with 0.
+        _randomSeed = static_cast<ui32>(reinterpret_cast<uintptr>(this));
+        if (_randomSeed == 0) { // Should never happen, but doesn't hurt
             _randomSeed = 0xBAD5EEDBAD5EEDULL;;
         }
     }
@@ -269,8 +269,8 @@ namespace nstl {
         return _threadId;
     }
 
-    ui64 Worker::xor_shift_rand() {
-        ui64 x = _randomSeed;
+    ui32 Worker::xor_shift_rand() {
+        ui32 x = _randomSeed;
         x ^= x << 13;
         x ^= x >> 17;
         x ^= x << 5;

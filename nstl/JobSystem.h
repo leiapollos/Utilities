@@ -1,8 +1,8 @@
 #pragma once
 
-#include <vector>
 #include "atomic.h"
 #include "thread.h"
+#include "vector.h"
 
 namespace nstl {
     class Job;
@@ -35,7 +35,7 @@ namespace nstl {
         JobCounter(const JobCounter&) = delete;
         JobCounter& operator=(const JobCounter&) = delete;
 
-        void add(size_t count) {
+        void add(ui64 count) {
             _counter.fetch_add(count, memory_order::relaxed);
         }
 
@@ -67,21 +67,21 @@ namespace nstl {
     private:
         alignas(hardware_destructive_interference_size) Atomic<i64> _bottomIndex;
         alignas(hardware_destructive_interference_size) Atomic<i64> _topIndex;
-        std::vector<Job*> _queue;
+        Vector<Job*> _queue;
     };
 
 
     class JobSystem {
     public:
-        static constexpr size_t MAX_JOBS_PER_THREAD = 65536;
+        static constexpr ui64 MAX_JOBS_PER_THREAD = 65536;
         static_assert(MAX_JOBS_PER_THREAD && (!(MAX_JOBS_PER_THREAD & (MAX_JOBS_PER_THREAD - 1))) && "MAX_JOBS_PER_THREAD must be a power of 2!");
 
-        JobSystem(std::size_t workersCount);
+        JobSystem(ui64 workersCount);
         ~JobSystem();
 
-        [[nodiscard]] Job* create_empty_job() const;
-        [[nodiscard]] Job* create_job(const JobFunction function, JobCounter* counter) const;
-        [[nodiscard]] Job* create_job(const JobFunction function, JobCounter* counter, void* data) const;
+        [[nodiscard]] static Job* create_empty_job();
+        [[nodiscard]] static Job* create_job(const JobFunction function, JobCounter* counter);
+        [[nodiscard]] static Job* create_job(const JobFunction function, JobCounter* counter, void* data) ;
 
         void run(Job* job);
         void wait(JobCounter* counter);
@@ -89,9 +89,9 @@ namespace nstl {
         JobQueue* get_random_job_queue();
 
     private:
-        size_t _workersCount;
-        std::vector<Worker*> _workers;
-        std::vector<JobQueue*> _queues;
+        ui64 _workersCount;
+        Vector<Worker*> _workers;
+        Vector<JobQueue*> _queues;
     };
 
     class Worker {
@@ -110,7 +110,7 @@ namespace nstl {
         void submit(Job* job);
         void wait(JobCounter* counter);
         bool is_running();
-        ui64 xor_shift_rand();
+        ui32 xor_shift_rand();
 
         const Thread::thread_id& get_thread_id() const;
 
@@ -120,7 +120,7 @@ namespace nstl {
         JobSystem* _system;
         Thread* _thread;
         Thread::thread_id _threadId;
-        ui64 _randomSeed;
+        ui32 _randomSeed;
 
         Job* get_job();
         void loop();
