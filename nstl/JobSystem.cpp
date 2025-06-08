@@ -87,7 +87,7 @@ namespace nstl {
         return nullptr;
     }
 
-    size_t JobQueue::size() const {
+    ui32 JobQueue::size() const {
         return _bottomIndex.load(memory_order::relaxed) -
                _topIndex.load(memory_order::relaxed);
     }
@@ -183,7 +183,7 @@ namespace nstl {
     }
 
     Worker::Worker(JobSystem* system, JobQueue* queue)
-        : _system(system), _queue(queue), _thread(nullptr), _threadId(std::this_thread::get_id()) {
+        : _system(system), _queue(queue), _thread(nullptr), _threadId(Thread::get_current_thread_id()) {
         _randomSeed = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(this)); // Get different starting seeds for all threads.
         if (_randomSeed == 0) {
             // xorshift must not be seeded with 0.
@@ -201,7 +201,8 @@ namespace nstl {
 
     void Worker::start_background_thread() {
         _state = State::RUNNING;
-        _thread = new std::thread(&Worker::loop, this);
+        _thread = new Thread();
+        _thread->start<Worker>(this, &Worker::loop);
         _threadId = _thread->get_id();
     }
 
@@ -241,18 +242,18 @@ namespace nstl {
         if (job == nullptr) {
             JobQueue* randomQueue = _system->get_random_job_queue();
             if (randomQueue == nullptr) {
-                std::this_thread::yield();
+                Thread::yield();
                 return nullptr;
             }
 
             if (_queue == randomQueue) {
-                std::this_thread::yield();
+                Thread::yield();
                 return nullptr;
             }
 
             job = randomQueue->steal();
             if (job == nullptr) {
-                std::this_thread::yield();
+                Thread::yield();
                 return nullptr;
             }
         }
@@ -263,7 +264,7 @@ namespace nstl {
         return (_state == State::RUNNING);
     }
 
-    const std::thread::id& Worker::get_thread_id() const {
+    const Thread::thread_id& Worker::get_thread_id() const {
         return _threadId;
     }
 
