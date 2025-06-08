@@ -5,21 +5,24 @@
 #pragma once
 
 #include "platform.h"
+#include "typedefs.h"
 
 #ifdef PLATFORM_OS_WINDOWS
 #ifndef WIN32_LEAN_AND_MEAN
-        #define WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
 #endif
-    #include <windows.h>
+#include <windows.h>
 #if defined(PLATFORM_ARCH_X64) && defined(COMPILER_MSVC)
-        #include <immintrin.h>
+#include <immintrin.h>
 #endif
-#else
+#elif defined(PLATFORM_OS_MACOS) || defined(PLATFORM_OS_LINUX)
 #include <pthread.h>
 #include <unistd.h>
 #include <sched.h>
 #if defined(PLATFORM_ARCH_X64) && (defined(COMPILER_GCC) || defined(COMPILER_CLANG))
-        #include <immintrin.h>
+#include <immintrin.h>
+#elif defined(PLATFORM_ARCH_ARM64) && (defined(COMPILER_GCC) || defined(COMPILER_CLANG))
+#include <arm_acle.h>
 #endif
 #endif
 
@@ -27,6 +30,7 @@ namespace nstl {
     class Thread {
     public:
         typedef void (*ThreadFunction)(void* userData);
+        typedef ui32 thread_id;
 
         enum State {
             NOT_STARTED,
@@ -74,11 +78,11 @@ namespace nstl {
         [[nodiscard]] bool is_joinable() const;
         [[nodiscard]] State get_state() const;
 
-        static unsigned int get_current_thread_id();
-        static void sleep(unsigned int milliseconds);
+        static thread_id get_current_thread_id();
+        static void sleep(ui32 milliseconds);
         static void yield();
         static void pause();
-        static unsigned int get_hardware_concurrency();
+        static ui32 get_hardware_concurrency();
     };
 
     inline Thread::Thread()
@@ -133,7 +137,7 @@ namespace nstl {
             return false;
         }
 #else
-        int result = pthread_create(&_handle, nullptr, thread_entry_point, &_threadData);
+        const i32 result = pthread_create(&_handle, nullptr, thread_entry_point, &_threadData);
         if (result != 0) {
             return false;
         }
@@ -158,11 +162,10 @@ namespace nstl {
             return (result == WAIT_OBJECT_0);
         }
 #else
-        int result = pthread_join(_handle, nullptr);
+        i32 result = pthread_join(_handle, nullptr);
         _joinable = false;
         return (result == 0);
 #endif
-
         return false;
     }
 
@@ -179,7 +182,7 @@ namespace nstl {
             return true;
         }
 #else
-        int result = pthread_detach(_handle);
+        const i32 result = pthread_detach(_handle);
         if (result == 0) {
             _joinable = false;
             return true;
@@ -217,15 +220,15 @@ namespace nstl {
     }
 #endif
 
-    inline unsigned int Thread::get_current_thread_id() {
+    inline Thread::thread_id Thread::get_current_thread_id() {
 #ifdef PLATFORM_OS_WINDOWS
-        return static_cast<unsigned int>(::GetCurrentThreadId());
+        return static_cast<ui32>(::GetCurrentThreadId());
 #else
-        return static_cast<unsigned int>(reinterpret_cast<uintptr_t>(pthread_self()));
+        return static_cast<thread_id>(reinterpret_cast<uintptr>(pthread_self()));
 #endif
     }
 
-    inline void Thread::sleep(unsigned int milliseconds) {
+    inline void Thread::sleep(ui32 milliseconds) {
 #ifdef PLATFORM_OS_WINDOWS
         ::Sleep(milliseconds);
 #else
@@ -252,7 +255,7 @@ namespace nstl {
 #endif
 #elif defined(PLATFORM_ARCH_ARM64)
 #if defined(COMPILER_GCC) || defined(COMPILER_CLANG)
-        __asm__ __volatile__("yield" ::: "memory");
+        __yield();
 #else
         yield();
 #endif
@@ -261,14 +264,14 @@ namespace nstl {
 #endif
     }
 
-    inline unsigned int Thread::get_hardware_concurrency() {
+    inline ui32 Thread::get_hardware_concurrency() {
 #ifdef PLATFORM_OS_WINDOWS
         SYSTEM_INFO sysInfo;
         GetSystemInfo(&sysInfo);
-        return static_cast<unsigned int>(sysInfo.dwNumberOfProcessors);
+        return static_cast<ui32>(sysInfo.dwNumberOfProcessors);
 #else
-        long numCores = sysconf(_SC_NPROCESSORS_ONLN);
-        return (numCores > 0) ? static_cast<unsigned int>(numCores) : 1;
+        const i64 numCores = sysconf(_SC_NPROCESSORS_ONLN);
+        return (numCores > 0) ? static_cast<ui32>(numCores) : 1;
 #endif
     }
 }
