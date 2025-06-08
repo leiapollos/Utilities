@@ -6,6 +6,8 @@
 #include "../thread.h"
 #include "../platform.h"
 
+#if defined(PLATFORM_OS_MACOS) || defined(PLATFORM_OS_LINUX)
+
 #include <pthread.h>
 #include <sched.h>
 #include <unistd.h>
@@ -99,3 +101,5 @@ namespace nstl {
         return (numCores > 0) ? static_cast<ui32>(numCores) : 1;
     }
 }
+
+#endif
