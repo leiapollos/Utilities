@@ -15,3 +15,5 @@ typedef unsigned int ui32;
 
 typedef long long i64;
 typedef unsigned long long ui64;
+
+typedef unsigned long uintptr;
