@@ -4,7 +4,7 @@
 
 #include "JobSystem.h"
 
-#include <cassert>
+#include "assert.h"
 
 namespace nstl {
     thread_local Worker* g_thisThreadWorker = nullptr;
@@ -58,10 +58,10 @@ namespace nstl {
                                                       memory_order::seq_cst, memory_order::relaxed)) {
                     _bottomIndex.store(bottom + 1, memory_order::relaxed);
                     return job;
-                                                      } else {
-                                                          _bottomIndex.store(bottom + 1, memory_order::relaxed);
-                                                          return nullptr;
-                                                      }
+                } else {
+                    _bottomIndex.store(bottom + 1, memory_order::relaxed);
+                    return nullptr;
+                }
             }
 
             return job;
@@ -80,7 +80,7 @@ namespace nstl {
             if (_topIndex.compare_exchange_strong(top, top + 1,
                                                   memory_order::seq_cst, memory_order::relaxed)) {
                 return job;
-                                                  }
+            }
             return nullptr;
         }
 
@@ -151,25 +151,25 @@ namespace nstl {
         const size_t jobIndex = allocatedJobs++;
 
         Job* job = &jobPool[jobIndex & (MAX_JOBS_PER_THREAD - 1)];
-        assert(job->is_done() && "Job memory is being overwritten while still in use!");
+        NSTL_ASSERT(job->is_done() && "Job memory is being overwritten while still in use!");
         new(job) Job(function, counter, data);
 
         return job;
     }
 
     void JobSystem::run(Job* job) {
-        assert(g_thisThreadWorker != nullptr && "JobSystem::Run called from a non-worker thread");
+        NSTL_ASSERT(g_thisThreadWorker != nullptr && "JobSystem::run called from a non-worker thread");
         g_thisThreadWorker->submit(job);
     }
 
     void JobSystem::wait(JobCounter* counter) {
-        assert(g_thisThreadWorker != nullptr && "JobSystem::Wait called from a non-worker thread");
+        NSTL_ASSERT(g_thisThreadWorker != nullptr && "JobSystem::wait called from a non-worker thread");
         g_thisThreadWorker->wait(counter);
     }
 
     JobQueue* JobSystem::get_random_job_queue() {
-        assert(g_thisThreadWorker != nullptr &&
-                       "get_random_job_queue must be called from a worker thread");
+        NSTL_ASSERT(g_thisThreadWorker != nullptr &&
+            "JobSystem::get_random_job_queue must be called from a worker thread");
         uint32_t randomValue = g_thisThreadWorker->xor_shift_rand();
         const size_t range = _workersCount + 1;
         const size_t index = (static_cast<uint64_t>(randomValue) * range) >> 32;
@@ -184,7 +184,8 @@ namespace nstl {
 
     Worker::Worker(JobSystem* system, JobQueue* queue)
         : _system(system), _queue(queue), _thread(nullptr), _threadId(Thread::get_current_thread_id()) {
-        _randomSeed = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(this)); // Get different starting seeds for all threads.
+        _randomSeed = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(this));
+        // Get different starting seeds for all threads.
         if (_randomSeed == 0) {
             // xorshift must not be seeded with 0.
             _randomSeed = 0xBAD5EEDBAD5EEDULL;;
