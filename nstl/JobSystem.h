@@ -1,8 +1,8 @@
 #pragma once
 
-#include <thread>
 #include <vector>
 #include "atomic.h"
+#include "thread.h"
 
 namespace nstl {
     class Job;
@@ -61,7 +61,7 @@ namespace nstl {
         void push(Job* job);
         Job* pop();
         Job* steal();
-        size_t size() const;
+        ui32 size() const;
         void clear();
 
     private:
@@ -112,14 +112,14 @@ namespace nstl {
         bool is_running();
         ui64 xor_shift_rand();
 
-        const std::thread::id& get_thread_id() const;
+        const Thread::thread_id& get_thread_id() const;
 
     private:
         State _state;
         JobQueue* _queue;
         JobSystem* _system;
-        std::thread* _thread;
-        std::thread::id _threadId;
+        Thread* _thread;
+        Thread::thread_id _threadId;
         ui64 _randomSeed;
 
         Job* get_job();
