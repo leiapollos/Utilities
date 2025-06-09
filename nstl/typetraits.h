@@ -41,7 +41,7 @@ namespace nstl {
     };
 
     template<>
-    struct is_integral_helper<ui8> : true_type {
+    struct is_integral_helper<u8> : true_type {
     };
 
     template<>
@@ -49,7 +49,7 @@ namespace nstl {
     };
 
     template<>
-    struct is_integral_helper<ui16> : true_type {
+    struct is_integral_helper<u16> : true_type {
     };
 
     template<>
@@ -57,7 +57,7 @@ namespace nstl {
     };
 
     template<>
-    struct is_integral_helper<ui32> : true_type {
+    struct is_integral_helper<u32> : true_type {
     };
 
     template<>
@@ -65,7 +65,7 @@ namespace nstl {
     };
 
     template<>
-    struct is_integral_helper<ui64> : true_type {
+    struct is_integral_helper<u64> : true_type {
     };
 
     template<typename T>

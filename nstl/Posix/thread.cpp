@@ -80,7 +80,7 @@ namespace nstl {
             reinterpret_cast<uintptr>(pthread_self()));
     }
 
-    void Thread::sleep(const ui32 milliseconds) { usleep(milliseconds * 1000); }
+    void Thread::sleep(const u32 milliseconds) { usleep(milliseconds * 1000); }
 
     void Thread::yield() { sched_yield(); }
 
@@ -96,9 +96,9 @@ namespace nstl {
 #endif
     }
 
-    ui32 Thread::get_hardware_concurrency() {
+    u32 Thread::get_hardware_concurrency() {
         const i64 numCores = sysconf(_SC_NPROCESSORS_ONLN);
-        return (numCores > 0) ? static_cast<ui32>(numCores) : 1;
+        return (numCores > 0) ? static_cast<u32>(numCores) : 1;
     }
 }
 

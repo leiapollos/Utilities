@@ -6,7 +6,7 @@
 
 #include "typedefs.h"
 #include "typetraits.h"
-#include "core/memcpy.h"
+#include "os/core/memcpy.h"
 
 namespace nstl {
     template<typename T>
@@ -43,32 +43,32 @@ namespace nstl {
             _size++;
         }
 
-        void reserve(ui64 newCapacity) {
+        void reserve(u64 newCapacity) {
             reallocate(newCapacity);
         }
 
         void clear() {
             if constexpr (!nstl::is_trivially_destructible_v<T>) {
-                for (ui64 i = 0; i < _size; ++i) {
+                for (u64 i = 0; i < _size; ++i) {
                     _data[i].~T();
                 }
             }
             _size = 0;
         }
 
-        ui64 size() const {
+        u64 size() const {
             return _size;
         }
 
-        ui64 capacity() const {
+        u64 capacity() const {
             return _capacity;
         }
 
-        T& operator[](ui64 index) {
+        T& operator[](u64 index) {
             return _data[index];
         }
 
-        const T& operator[](ui64 index) const {
+        const T& operator[](u64 index) const {
             return _data[index];
         }
 
@@ -82,26 +82,26 @@ namespace nstl {
 
     private:
         T* _data;
-        ui64 _size;
-        ui64 _capacity;
+        u64 _size;
+        u64 _capacity;
 
-        void maybe_grow(ui64 numberOfNewElements = 1) {
+        void maybe_grow(u64 numberOfNewElements = 1) {
             if (_capacity - _size < numberOfNewElements) [[unlikely]] {
-                ui64 newCapacity = (_capacity >= 1) ? _capacity << 1 : 2;
+                u64 newCapacity = (_capacity >= 1) ? _capacity << 1 : 2;
                 reallocate(newCapacity);
             }
         }
 
-        void reallocate(ui64 newCapacity) {
+        void reallocate(u64 newCapacity) {
             if (newCapacity <= _capacity) [[unlikely]] {
                 return;
             }
             T* oldData = _data;
             T* newData = static_cast<T*>(::operator new(newCapacity * sizeof(T)));
             if constexpr (nstl::is_trivially_destructible_v<T>) {
-                nstl::memcpy2(newData, oldData, _size * sizeof(T));
+                nstl::memcpy(newData, oldData, _size * sizeof(T));
             } else {
-                for (ui64 i = 0; i < _size; ++i) {
+                for (u64 i = 0; i < _size; ++i) {
                     new(&newData[i]) T(nstl::move(_data[i]));
                 }
             }
@@ -110,12 +110,12 @@ namespace nstl {
             delete_data(oldData, _size);
         }
 
-        void delete_data(T* data, ui64 size) {
+        void delete_data(T* data, u64 size) {
             if (data == nullptr) [[unlikely]] {
                 return;
             }
             if constexpr (!nstl::is_trivially_destructible_v<T>) {
-                for (ui64 i = 0; i < size; ++i) {
+                for (u64 i = 0; i < size; ++i) {
                     data[i].~T();
                 }
             }

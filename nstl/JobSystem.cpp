@@ -4,7 +4,7 @@
 
 #include "JobSystem.h"
 
-#include "core/assert.h"
+#include "os/core/assert.h"
 
 #include <new> // Cries :'( Still haven't found a good solution for avoiding this
 
@@ -89,7 +89,7 @@ namespace nstl {
         return nullptr;
     }
 
-    ui32 JobQueue::size() const {
+    u32 JobQueue::size() const {
         return _bottomIndex.load(memory_order::relaxed) -
                _topIndex.load(memory_order::relaxed);
     }
@@ -100,7 +100,7 @@ namespace nstl {
     }
 
 
-    JobSystem::JobSystem(ui64 workersCount) : _workersCount(workersCount) {
+    JobSystem::JobSystem(u64 workersCount) : _workersCount(workersCount) {
         _queues.reserve(workersCount);
         _workers.reserve(workersCount);
 
@@ -110,14 +110,14 @@ namespace nstl {
         _workers.push_back(mainThreadWorker);
         g_thisThreadWorker = mainThreadWorker;
 
-        for (ui64 i = 0; i < workersCount; ++i) {
+        for (u64 i = 0; i < workersCount; ++i) {
             JobQueue* queue = new JobQueue();
             _queues.push_back(queue);
             Worker* worker = new Worker(this, queue);
             _workers.push_back(worker);
         }
 
-        for (ui64 i = 1; i <= workersCount; ++i) {
+        for (u64 i = 1; i <= workersCount; ++i) {
             _workers[i]->start_background_thread();
         }
     }
@@ -144,13 +144,13 @@ namespace nstl {
 
     Job* JobSystem::create_job(const JobFunction function, JobCounter* counter, void* data) {
         struct AlignedJobStorage {
-            alignas(alignof(Job)) ui8 storage[sizeof(Job)];
+            alignas(alignof(Job)) u8 storage[sizeof(Job)];
         };
         static thread_local AlignedJobStorage jobPoolMemory[MAX_JOBS_PER_THREAD];
         Job* jobPool = reinterpret_cast<Job*>(jobPoolMemory);
 
-        static thread_local ui64 allocatedJobs = 0;
-        const ui64 jobIndex = allocatedJobs++;
+        static thread_local u64 allocatedJobs = 0;
+        const u64 jobIndex = allocatedJobs++;
 
         Job* job = &jobPool[jobIndex & (MAX_JOBS_PER_THREAD - 1)];
         NSTL_ASSERT(job->is_done() && "Job memory is being overwritten while still in use!");
@@ -172,9 +172,9 @@ namespace nstl {
     JobQueue* JobSystem::get_random_job_queue() {
         NSTL_ASSERT(g_thisThreadWorker != nullptr &&
             "JobSystem::get_random_job_queue must be called from a worker thread");
-        ui32 randomValue = g_thisThreadWorker->xor_shift_rand();
-        const ui64 range = _workersCount + 1;
-        const ui64 index = (static_cast<ui64>(randomValue) * range) >> 32;
+        u32 randomValue = g_thisThreadWorker->xor_shift_rand();
+        const u64 range = _workersCount + 1;
+        const u64 index = (static_cast<u64>(randomValue) * range) >> 32;
         return _queues[index];
     }
 
@@ -186,7 +186,7 @@ namespace nstl {
 
     Worker::Worker(JobSystem* system, JobQueue* queue)
         : _system(system), _queue(queue), _thread(nullptr), _threadId(Thread::get_current_thread_id()) {
-        _randomSeed = static_cast<ui32>(reinterpret_cast<uintptr>(this));
+        _randomSeed = static_cast<u32>(reinterpret_cast<uintptr>(this));
         if (_randomSeed == 0) { // Should never happen, but doesn't hurt
             _randomSeed = 0xBAD5EEDBAD5EEDULL;;
         }
@@ -269,8 +269,8 @@ namespace nstl {
         return _threadId;
     }
 
-    ui32 Worker::xor_shift_rand() {
-        ui32 x = _randomSeed;
+    u32 Worker::xor_shift_rand() {
+        u32 x = _randomSeed;
         x ^= x << 13;
         x ^= x >> 17;
         x ^= x << 5;

@@ -26,7 +26,7 @@ namespace nstl {
 
     template<typename T> struct is_atomic_supported_helper : false_type {};
     template<> struct is_atomic_supported_helper<i64> : true_type {};
-    template<> struct is_atomic_supported_helper<ui64> : true_type {};
+    template<> struct is_atomic_supported_helper<u64> : true_type {};
     template<typename T> struct is_atomic_supported : is_atomic_supported_helper<T> {};
 
     template <typename T>
