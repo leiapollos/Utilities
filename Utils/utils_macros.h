@@ -42,4 +42,14 @@ namespace utils {
         }                       \
     } while (0)
 
+#ifdef _MSC_VER
+#ifdef _DEBUG
+#define UTILS_UNREACHABLE() do { __debugbreak(); __assume(0); } while (0)
+#else
+#define UTILS_UNREACHABLE() __assume(0)
+#endif
+#else
+#error "unsupported compiler"
+#endif
+
 #pragma endregion
