@@ -7,44 +7,70 @@
 #include "typedefs.h"
 #include "typetraits.h"
 #include "os/core/memcpy.h"
+#include "os/core/arenaAllocator.h"
 
 namespace nstl {
-    template<typename T>
+    template<typename T, u64 ArenaSize = 4 * 1024>
     class Vector {
     public:
-        Vector() : _data(nullptr), _size(0), _capacity(0) {
+        static constexpr u64 capacity_v = (ArenaSize > 0 && ArenaSize >= sizeof(T)) ? ArenaSize / sizeof(T) : 0;
+
+        Vector() : _arena(ArenaSize), _data(nullptr), _size(0) {
+            if constexpr (capacity_v > 0) {
+                _data = static_cast<T *>(_arena.alloc(capacity_v * sizeof(T)));
+                NSTL_ASSERT(
+                    _data != nullptr &&
+                    "Failed to initialize Vector's Arena."
+                );
+            }
         }
 
         ~Vector() {
-            delete_data(_data, _size);
+            clear();
+            // _arena clears itself
         }
 
-        void push_back(const T& value) {
-            maybe_grow();
-            _data[_size++] = value;
+        void push_back(const T &value) {
+            NSTL_ASSERT(_size < capacity_v && "Vector capacity exceeded.");
+            new (&_data[_size]) T(value);
+            _size++;
         }
 
-        void push_back(T&& value) {
-            maybe_grow();
-            _data[_size++] = nstl::move(value);
+        void push_back(T &&value) {
+            NSTL_ASSERT(_size < capacity_v && "Vector capacity exceeded.");
+            new (&_data[_size]) T(nstl::move(value));
+            _size++;
         }
 
         void pop_back() {
+            NSTL_ASSERT(_size > 0 && "pop_back() called on empty Vector.");
             _size--;
             if constexpr (!is_trivially_destructible_v<T>) {
                 _data[_size].~T();
             }
         }
 
-        template<typename... Args>
-        void emplace_back(Args&&... args) {
-            maybe_grow();
-            new(&_data[_size]) T(nstl::forward<Args>(args)...);
+        template <typename... Args>
+        void emplace_back(Args &&...args) {
+            NSTL_ASSERT(_size < capacity_v && "Vector capacity exceeded.");
+            new (&_data[_size]) T(nstl::forward<Args>(args)...);
             _size++;
         }
 
-        void reserve(u64 newCapacity) {
-            reallocate(newCapacity);
+        void resize(u64 newSize) {
+            NSTL_ASSERT(newSize <= capacity_v && "Resize exceeds capacity.");
+            if (newSize > _size) {
+                for (u64 i = _size; i < newSize; ++i) {
+                    new (&_data[i]) T();
+                }
+            } else if (newSize < _size) {
+                if constexpr (!nstl::is_trivially_destructible_v<T>) {
+                    for (u64 i = newSize; i < _size; ++i) {
+                        _data[i].~T();
+                    }
+                }
+            }
+            _size = newSize;
         }
 
         void clear() {
@@ -61,14 +87,16 @@ namespace nstl {
         }
 
         u64 capacity() const {
-            return _capacity;
+            return capacity_v;
         }
 
-        T& operator[](u64 index) {
+        T &operator[](u64 index) {
+            NSTL_ASSERT(index < _size && "Vector index out of bounds.");
             return _data[index];
         }
 
-        const T& operator[](u64 index) const {
+        const T &operator[](u64 index) const {
+            NSTL_ASSERT(index < _size && "Vector index out of bounds.");
             return _data[index];
         }
 
@@ -81,46 +109,9 @@ namespace nstl {
         }
 
     private:
+        Arena _arena;
         T* _data;
         u64 _size;
-        u64 _capacity;
-
-        void maybe_grow(u64 numberOfNewElements = 1) {
-            if (_capacity - _size < numberOfNewElements) [[unlikely]] {
-                u64 newCapacity = (_capacity >= 1) ? _capacity << 1 : 2;
-                reallocate(newCapacity);
-            }
-        }
-
-        void reallocate(u64 newCapacity) {
-            if (newCapacity <= _capacity) [[unlikely]] {
-                return;
-            }
-            T* oldData = _data;
-            T* newData = static_cast<T*>(::operator new(newCapacity * sizeof(T)));
-            if constexpr (nstl::is_trivially_destructible_v<T>) {
-                nstl::memcpy(newData, oldData, _size * sizeof(T));
-            } else {
-                for (u64 i = 0; i < _size; ++i) {
-                    new(&newData[i]) T(nstl::move(_data[i]));
-                }
-            }
-            _data = newData;
-            _capacity = newCapacity;
-            delete_data(oldData, _size);
-        }
-
-        void delete_data(T* data, u64 size) {
-            if (data == nullptr) [[unlikely]] {
-                return;
-            }
-            if constexpr (!nstl::is_trivially_destructible_v<T>) {
-                for (u64 i = 0; i < size; ++i) {
-                    data[i].~T();
-                }
-            }
-            ::operator delete(data);
-        }
 
     public:
         using iterator = T*;

@@ -41,6 +41,7 @@ namespace nstl {
             u64 newPos = _pos + size;
 
             if (newPos > _reserved) {
+                NSTL_ASSERT("Arena is out of bounds");
                 return nullptr;
             }
 
@@ -55,6 +56,7 @@ namespace nstl {
                     commitStartAddr, sizeToCommit,
                     vmem::Protection::Read | vmem::Protection::Write
                 )) {
+                    NSTL_ASSERT("vmem::commit() failed");
                     return nullptr;
                 }
                 _committed = newCommitTarget;
