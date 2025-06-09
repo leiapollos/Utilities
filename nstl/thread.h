@@ -11,7 +11,7 @@ namespace nstl {
     class Thread {
     public:
         typedef void (*ThreadFunction)(void* userData);
-        typedef ui32 thread_id;
+        typedef u32 thread_id;
 
         enum State {
             NOT_STARTED,
@@ -21,7 +21,7 @@ namespace nstl {
 
     private:
         uintptr _handle;
-        ui32 _threadId;
+        u32 _threadId;
         State _state;
         bool _joinable;
 
@@ -68,10 +68,10 @@ namespace nstl {
         [[nodiscard]] thread_id get_id() const { return _threadId; }
 
         static thread_id get_current_thread_id();
-        static void sleep(const ui32 milliseconds);
+        static void sleep(const u32 milliseconds);
         static void yield();
         static void pause();
-        static ui32 get_hardware_concurrency();
+        static u32 get_hardware_concurrency();
 
         friend struct ThreadImpl;
     };

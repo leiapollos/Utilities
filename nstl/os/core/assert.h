@@ -12,7 +12,7 @@ if (!(expression)) { \
 debugPrint("Assertion failed: %s, file %s, line %d, function %s\n", \
 #expression, __FILE__, __LINE__, __func__); \
 \
-volatile int *invalid_ptr = NULL; \
+volatile int *invalid_ptr = nullptr; \
 *invalid_ptr = 42; \
 while(1) {} \
 } \
