@@ -54,23 +54,6 @@ namespace nstl {
         alignas(hardware_destructive_interference_size) Atomic<u64> _counter;
     };
 
-    class JobQueue {
-    public:
-        JobQueue();
-
-        void push(Job* job);
-        Job* pop();
-        Job* steal();
-        u32 size() const;
-        void clear();
-
-    private:
-        alignas(hardware_destructive_interference_size) Atomic<i64> _bottomIndex;
-        alignas(hardware_destructive_interference_size) Atomic<i64> _topIndex;
-        Vector<Job*> _queue;
-    };
-
-
     class JobSystem {
     public:
         static constexpr u64 MAX_JOBS_PER_THREAD = 65536;
@@ -124,5 +107,21 @@ namespace nstl {
 
         Job* get_job();
         void loop();
+    };
+
+    class JobQueue {
+    public:
+        JobQueue();
+
+        void push(Job* job);
+        Job* pop();
+        Job* steal();
+        u32 size() const;
+        void clear();
+
+    private:
+        alignas(hardware_destructive_interference_size) Atomic<i64> _bottomIndex;
+        alignas(hardware_destructive_interference_size) Atomic<i64> _topIndex;
+        Vector<Job*, JobSystem::MAX_JOBS_PER_THREAD * sizeof(Job)> _queue;
     };
 }

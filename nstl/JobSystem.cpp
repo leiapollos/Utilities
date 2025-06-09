@@ -39,7 +39,7 @@ namespace nstl {
     JobQueue::JobQueue() {
         _bottomIndex.store(0);
         _topIndex.store(0);
-        _queue.reserve(JobSystem::MAX_JOBS_PER_THREAD);
+        _queue.resize(JobSystem::MAX_JOBS_PER_THREAD);
     }
 
     void JobQueue::push(Job* job) {
@@ -101,9 +101,6 @@ namespace nstl {
 
 
     JobSystem::JobSystem(u64 workersCount) : _workersCount(workersCount) {
-        _queues.reserve(workersCount);
-        _workers.reserve(workersCount);
-
         JobQueue* mainThreadQueue = new JobQueue();
         _queues.push_back(mainThreadQueue);
         Worker* mainThreadWorker = new Worker(this, mainThreadQueue);
