@@ -401,3 +401,5 @@ Utilities
 # JetBrains CLion
 .idea
 
+# MacOS
+.DS_Store

@@ -19,13 +19,6 @@ else()
     message(STATUS "IPO / LTO not supported by the compiler.")
 endif()
 
-file(GLOB JOBSYSTEM_SOURCES
-        "${CMAKE_CURRENT_SOURCE_DIR}/JobSystem/*.cpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/JobSystem/*.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/nstl/*.cpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/nstl/*.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/nstl/*.hpp")
-
-add_executable(utils_app main.cpp ${JOBSYSTEM_SOURCES})
+add_executable(utils_app main.cpp)
 
 install(TARGETS utils_app DESTINATION bin)
