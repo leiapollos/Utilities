@@ -11,6 +11,17 @@ static OS_SystemInfo* OS_get_system_info() {
 
 
 // ////////////////////////
+// Time
+
+static U64 OS_get_time_microseconds() {
+    timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    U64 result = (t.tv_nsec / THOUSAND(1LL)) + (t.tv_sec * MILLION(1LL));
+    return result;
+}
+
+
+// ////////////////////////
 // Aborting
 
 static void OS_abort(S32 exit_code) {

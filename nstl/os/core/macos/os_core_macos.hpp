@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <cstdlib>
 #include <math.h>
+#include <time.h>
 
 // ////////////////////////
 // State
