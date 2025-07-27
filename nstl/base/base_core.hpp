@@ -78,12 +78,12 @@ struct bitmask_enum_traits {
     using underlying_type = void;
 };
 
-#define ENABLE_BITMASK_OPERATORS(E, T)			\
-	template <>									\
-	struct bitmask_enum_traits<E> {				\
-		static constexpr bool enabled = true;	\
-		using underlying_type = T;				\
-	};
+#define ENABLE_BITMASK_OPERATORS(E)                     \
+    template <>                                         \
+        struct bitmask_enum_traits<E> {                 \
+        static constexpr bool enabled = true;           \
+        using underlying_type = __underlying_type(E);   \
+    };
 
 template<typename E>
 struct Flags;
