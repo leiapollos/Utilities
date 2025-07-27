@@ -16,6 +16,11 @@ static OS_SystemInfo* OS_get_system_info();
 
 
 // ////////////////////////
+// Time
+
+static U64 OS_get_time_microseconds();
+
+// ////////////////////////
 // Aborting
 
 static void OS_abort(S32 exit_code);

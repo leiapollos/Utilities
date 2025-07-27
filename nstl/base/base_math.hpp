@@ -110,3 +110,8 @@ static constexpr U64 GB(U64 n) { return n << 30; }
 static constexpr U64 TB(U64 n) { return n << 40; }
 
 
+// ////////////////////////
+// General Units
+
+#define THOUSAND(n) (n * 1000)
+#define MILLION(n)  (n * 1000000)
