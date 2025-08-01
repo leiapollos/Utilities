@@ -5,12 +5,12 @@
 // ////////////////////////
 // Arena
 
-Arena* arena_alloc(U64 arenaSize) {
+Arena* arena_alloc(ArenaParameters* parameters) {
     auto sysInfo = OS_get_system_info();
     U64 pageSize = sysInfo->pageSize;
 
-    U64 reserveSize = align_pow2(arenaSize + ARENA_HEADER_SIZE, pageSize);
-    U64 initialCommitSize = align_pow2(ARENA_HEADER_SIZE, pageSize);
+    U64 reserveSize = align_pow2(parameters->arenaSize + ARENA_HEADER_SIZE, pageSize);
+    U64 initialCommitSize = align_pow2(ARENA_HEADER_SIZE + parameters->committedSize, pageSize);
 
     void* raw = OS_reserve(reserveSize);
     if (UNLIKELY(raw == nullptr)) {
@@ -24,45 +24,60 @@ Arena* arena_alloc(U64 arenaSize) {
         return nullptr;
     }
 
-    Arena* arena = (Arena*)raw;
+    Arena* arena = (Arena*) raw;
     arena->reserved = reserveSize;
     arena->committed = initialCommitSize;
     arena->pos = ARENA_HEADER_SIZE;
+    arena->flags = parameters->flags;
+    arena->current = arena;
 
     return arena;
 }
 
 void arena_release(Arena* arena) {
-    U8* raw = (U8*)arena;
-    U64 totalReserved = arena->reserved;
-    OS_release(raw, totalReserved);
+    for (Arena* n = arena->current,* prev = 0; n != 0; n = prev) {
+        prev = n->prev;
+        OS_release(n, n->reserved);
+    }
 }
 
 void* arena_push(Arena* arena, U64 size, U64 alignment) {
-    ASSERT_DEBUG(!(arena == nullptr || size == 0) && "Arena was not initialized?");
+    Arena* current = arena;
     ASSERT_DEBUG(is_power_of_two(alignment) && "Alignment must be a power of two");
 
-    U64 alignedPos = align_pow2(arena->pos, alignment);
+    U64 alignedPos = align_pow2(current->pos, alignment);
     U64 newPos = alignedPos + size;
 
-    ASSERT_DEBUG((newPos <= arena->reserved) && "Arena is out of bounds");
+    if (current->flags.has(DoChain)) {
+        ArenaParameters params {
+            .arenaSize = MAX(current->reserved, size),
+            .committedSize = size,
+            .flags = current->flags,
+        };
+        Arena* nextArena = arena_alloc(&params);
+        current->current = nextArena;
+        nextArena->prev = current;
+        current = nextArena;
+    } else {
+        ASSERT_DEBUG((newPos <= current->reserved) && "Arena is out of bounds");
+    }
 
-    if (newPos > arena->committed) {
+    if (newPos > current->committed) {
         auto sysInfo = OS_get_system_info();
         U64 pageSize = sysInfo->pageSize;
 
         U64 newCommitTarget = align_pow2(newPos, pageSize);
-        newCommitTarget = MIN(newCommitTarget, arena->reserved);
+        newCommitTarget = MIN(newCommitTarget, current->reserved);
 
-        U64 sizeToCommit = newCommitTarget - arena->committed;
-        void* commitStartAddr = (U8*)arena + arena->committed;
+        U64 sizeToCommit = newCommitTarget - current->committed;
+        void* commitStartAddr = (U8*) current + current->committed;
 
         OS_commit(commitStartAddr, sizeToCommit);
-        arena->committed = newCommitTarget;
+        current->committed = newCommitTarget;
     }
 
-    void* result = (U8*)arena + alignedPos;
-    arena->pos = newPos;
+    void* result = (U8*) current + alignedPos;
+    current->pos = newPos;
 
     if (UNLIKELY(result == nullptr)) {
         ASSERT_DEBUG(false && "Allocation Failure");
@@ -73,22 +88,23 @@ void* arena_push(Arena* arena, U64 size, U64 alignment) {
 }
 
 void arena_set_pos(Arena* arena, U64 newUsablePos) {
+    Arena* current = arena->current;
     U64 newRawPos = newUsablePos + ARENA_HEADER_SIZE;
-    if (newRawPos > arena->reserved) {
-        newRawPos = arena->reserved;
+    if (newRawPos > current->reserved) {
+        newRawPos = current->reserved;
     }
     newRawPos = MAX(ARENA_HEADER_SIZE, newRawPos);
-    arena->pos = newRawPos;
+    current->pos = newRawPos;
 }
 
 U64 arena_get_pos(Arena* arena) {
-    return arena->pos - ARENA_HEADER_SIZE;
+    return arena->current->pos - ARENA_HEADER_SIZE;
 }
 
 U64 arena_get_committed(Arena* arena) {
-    return arena->committed - ARENA_HEADER_SIZE;
+    return arena->current->committed - ARENA_HEADER_SIZE;
 }
 
 U64 arena_get_reserved(Arena* arena) {
-    return arena->reserved - ARENA_HEADER_SIZE;
+    return arena->current->reserved - ARENA_HEADER_SIZE;
 }
