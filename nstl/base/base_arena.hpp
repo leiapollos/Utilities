@@ -37,5 +37,3 @@ static void arena_release(Arena* arena);
 static void* arena_push(Arena* arena, U64 size, U64 alignment = sizeof(void*));
 static void arena_pop_to(Arena* arena, U64 pos);
 static U64 arena_get_pos(Arena* arena);
-static U64 arena_get_committed(Arena* arena);
-static U64 arena_get_reserved(Arena* arena);

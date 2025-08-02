@@ -111,11 +111,3 @@ void arena_pop_to(Arena* arena, U64 pos) {
 U64 arena_get_pos(Arena* arena) {
     return (arena->current->startPos + arena->current->pos) - ARENA_HEADER_SIZE;
 }
-
-U64 arena_get_committed(Arena* arena) {
-    return arena->current->committed - ARENA_HEADER_SIZE;
-}
-
-U64 arena_get_reserved(Arena* arena) {
-    return arena->current->reserved - ARENA_HEADER_SIZE;
-}
