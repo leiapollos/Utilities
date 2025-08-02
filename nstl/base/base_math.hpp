@@ -102,6 +102,13 @@ struct Mat4x4f32 {
 
 
 // ////////////////////////
+// Clamp
+
+#define CLAMP_BOT(x, bottom) MAX(x, bottom)
+#define CLAMP_TOP(x, top)    MIN(x, top)
+
+
+// ////////////////////////
 // Memory Units
 
 static constexpr U64 KB(U64 n) { return n << 10; }
