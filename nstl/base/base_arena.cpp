@@ -33,6 +33,7 @@ Arena* arena_alloc(const ArenaParameters& parameters) {
     arena->flags = parameters.flags;
     arena->current = arena;
     arena->startPos = 0;
+    arena->prev = nullptr;
 
     return arena;
 }
