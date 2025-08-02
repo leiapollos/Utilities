@@ -56,6 +56,12 @@ debug_break(); \
 
 
 // ////////////////////////
+// Keywords
+
+#define nstl_function static
+
+
+// ////////////////////////
 // Bit masking
 
 namespace nstl {
