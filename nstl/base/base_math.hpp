@@ -20,36 +20,36 @@ constexpr B32 is_power_of_two(U64 x) {
 // Vector
 
 // Vec2
-union Vec2f32 {
+union Vec2F32 {
     struct { F32 x, y; };
     F32 v[2];
 };
 
-union Vec2i32 {
+union Vec2S32 {
     struct { S32 x, y; };
     S32 v[2];
 };
 
-union Vec2i64 {
+union Vec2S64 {
     struct { S64 x, y; };
     S64 v[2];
 };
 
 // Vec3
 
-union Vec3f32 {
+union Vec3F32 {
     struct { F32 x, y, z; };
     struct { F32 r, g, b; };
     F32 v[3];
 };
 
-union Vec3i32 {
+union Vec3S32 {
     struct { S32 x, y, z; };
     struct { S32 r, g, b; };
     S32 v[3];
 };
 
-union Vec3i64 {
+union Vec3S64 {
     struct { S64 x, y, z; };
     struct { S64 r, g, b; };
     S64 v[3];
@@ -57,19 +57,19 @@ union Vec3i64 {
 
 // Vec4
 
-union Vec4f32 {
+union Vec4F32 {
     struct { F32 x, y, z, w; };
     struct { F32 r, g, b, a; };
     F32 v[4];
 };
 
-union Vec4i32 {
+union Vec4S32 {
     struct { S32 x, y, z, w; };
     struct { S32 r, g, b, a; };
     S32 v[4];
 };
 
-union Vec4i64 {
+union Vec4S64 {
     struct { S64 x, y, z, w; };
     struct { S64 r, g, b, a; };
     S64 v[4];
@@ -79,11 +79,11 @@ union Vec4i64 {
 // ////////////////////////
 // Matrix
 
-struct Mat3x3f32 {
+struct Mat3x3F32 {
     F32 v[3][3];
 };
 
-struct Mat4x4f32 {
+struct Mat4x4F32 {
     F32 v[4][4];
 };
 
@@ -91,7 +91,7 @@ struct Mat4x4f32 {
 // ////////////////////////
 // Operations
 
-#define sqrt_f32(v)   sqrtf(v)
+#define SQRT_F32(v)   sqrtf(v)
 
 
 // ////////////////////////
