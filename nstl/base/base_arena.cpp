@@ -5,12 +5,14 @@
 // ////////////////////////
 // Arena
 
-Arena* arena_alloc(ArenaParameters* parameters) {
+Arena* arena_alloc(const ArenaParameters& parameters) {
+    ASSERT_DEBUG(parameters.arenaSize >= parameters.committedSize && "Arena size should be bigger than commit size");
+
     auto sysInfo = OS_get_system_info();
     U64 pageSize = sysInfo->pageSize;
 
-    U64 reserveSize = align_pow2(parameters->arenaSize + ARENA_HEADER_SIZE, pageSize);
-    U64 initialCommitSize = align_pow2(ARENA_HEADER_SIZE + parameters->committedSize, pageSize);
+    U64 reserveSize = align_pow2(parameters.arenaSize + ARENA_HEADER_SIZE, pageSize);
+    U64 initialCommitSize = align_pow2(ARENA_HEADER_SIZE + parameters.committedSize, pageSize);
 
     void* raw = OS_reserve(reserveSize);
     if (UNLIKELY(raw == nullptr)) {
@@ -28,8 +30,9 @@ Arena* arena_alloc(ArenaParameters* parameters) {
     arena->reserved = reserveSize;
     arena->committed = initialCommitSize;
     arena->pos = ARENA_HEADER_SIZE;
-    arena->flags = parameters->flags;
+    arena->flags = parameters.flags;
     arena->current = arena;
+    arena->startPos = 0;
 
     return arena;
 }
@@ -48,18 +51,21 @@ void* arena_push(Arena* arena, U64 size, U64 alignment) {
     U64 alignedPos = align_pow2(current->pos, alignment);
     U64 newPos = alignedPos + size;
 
-    if (current->flags.has(DoChain)) {
-        ArenaParameters params {
-            .arenaSize = MAX(current->reserved, size),
-            .committedSize = size,
-            .flags = current->flags,
-        };
-        Arena* nextArena = arena_alloc(&params);
-        current->current = nextArena;
-        nextArena->prev = current;
-        current = nextArena;
-    } else {
-        ASSERT_DEBUG((newPos <= current->reserved) && "Arena is out of bounds");
+    if (newPos > current->reserved) {
+        if (current->flags.has(DoChain)) {
+            Arena* nextArena = arena_alloc({
+                .arenaSize = MAX(current->reserved, size),
+                .committedSize = size,
+                .flags = current->flags,
+            });
+            nextArena->startPos = current->startPos + current->reserved;
+            nextArena->prev = current;
+            current->current = nextArena;
+            current = nextArena;
+        } else {
+            ASSERT_DEBUG((newPos <= current->reserved) && "Arena is out of bounds");
+            OS_abort(1);
+        }
     }
 
     if (newPos > current->committed) {
@@ -87,18 +93,23 @@ void* arena_push(Arena* arena, U64 size, U64 alignment) {
     return result;
 }
 
-void arena_set_pos(Arena* arena, U64 newUsablePos) {
+void arena_pop_to(Arena* arena, U64 pos) {
+    U64 absolutePos = pos + ARENA_HEADER_SIZE;
     Arena* current = arena->current;
-    U64 newRawPos = newUsablePos + ARENA_HEADER_SIZE;
-    if (newRawPos > current->reserved) {
-        newRawPos = current->reserved;
+
+    while (current->prev != nullptr && absolutePos < current->startPos) {
+        Arena* prev = current->prev;
+        OS_release(current, current->reserved);
+        current = prev;
+        arena->current = current;
     }
-    newRawPos = MAX(ARENA_HEADER_SIZE, newRawPos);
-    current->pos = newRawPos;
+
+    U64 relative_pos = absolutePos - current->startPos;
+    current->pos = CLAMP_BOT(ARENA_HEADER_SIZE, relative_pos);
 }
 
 U64 arena_get_pos(Arena* arena) {
-    return arena->current->pos - ARENA_HEADER_SIZE;
+    return (arena->current->startPos + arena->current->pos) - ARENA_HEADER_SIZE;
 }
 
 U64 arena_get_committed(Arena* arena) {
