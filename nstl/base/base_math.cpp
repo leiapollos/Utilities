@@ -4,48 +4,48 @@
 
 // --- Vec2F32 Operators ---
 
-nstl_function 
+FUNCTION
 Vec2F32& operator+=(Vec2F32& a, const Vec2F32& b) noexcept {
     a.x += b.x;
     a.y += b.y;
     return a;
 }
 
-nstl_function 
+FUNCTION
 Vec2F32 operator+(Vec2F32 a, const Vec2F32& b) noexcept {
     return a += b;
 }
 
-nstl_function 
+FUNCTION
 Vec2F32& operator-=(Vec2F32& a, const Vec2F32& b) noexcept {
     a.x -= b.x;
     a.y -= b.y;
     return a;
 }
 
-nstl_function 
+FUNCTION
 Vec2F32 operator-(Vec2F32 a, const Vec2F32& b) noexcept {
     return a -= b;
 }
 
-nstl_function 
+FUNCTION
 Vec2F32& operator*=(Vec2F32& v, F32 s) noexcept {
     v.x *= s;
     v.y *= s;
     return v;
 }
 
-nstl_function 
+FUNCTION
 Vec2F32 operator*(Vec2F32 v, F32 s) noexcept {
     return v *= s;
 }
 
-nstl_function 
+FUNCTION
 Vec2F32 operator*(F32 s, Vec2F32 v) noexcept {
     return v * s;
 }
 
-nstl_function 
+FUNCTION
 Vec2F32& operator/=(Vec2F32& v, F32 s) noexcept {
     F32 inv = 1.0f / s;
     v.x *= inv;
@@ -53,7 +53,7 @@ Vec2F32& operator/=(Vec2F32& v, F32 s) noexcept {
     return v;
 }
 
-nstl_function 
+FUNCTION
 Vec2F32 operator/(Vec2F32 v, F32 s) noexcept {
     return v /= s;
 }
@@ -61,7 +61,7 @@ Vec2F32 operator/(Vec2F32 v, F32 s) noexcept {
 
 // --- Vec3F32 Operators ---
 
-nstl_function 
+FUNCTION
 Vec3F32& operator+=(Vec3F32& a, const Vec3F32& b) noexcept {
     a.x += b.x;
     a.y += b.y;
@@ -69,12 +69,12 @@ Vec3F32& operator+=(Vec3F32& a, const Vec3F32& b) noexcept {
     return a;
 }
 
-nstl_function 
+FUNCTION
 Vec3F32 operator+(Vec3F32 a, const Vec3F32& b) noexcept {
     return a += b;
 }
 
-nstl_function 
+FUNCTION
 Vec3F32& operator-=(Vec3F32& a, const Vec3F32& b) noexcept {
     a.x -= b.x;
     a.y -= b.y;
@@ -82,12 +82,12 @@ Vec3F32& operator-=(Vec3F32& a, const Vec3F32& b) noexcept {
     return a;
 }
 
-nstl_function 
+FUNCTION
 Vec3F32 operator-(Vec3F32 a, const Vec3F32& b) noexcept {
     return a -= b;
 }
 
-nstl_function 
+FUNCTION
 Vec3F32& operator*=(Vec3F32& v, F32 s) noexcept {
     v.x *= s;
     v.y *= s;
@@ -95,17 +95,17 @@ Vec3F32& operator*=(Vec3F32& v, F32 s) noexcept {
     return v;
 }
 
-nstl_function 
+FUNCTION
 Vec3F32 operator*(Vec3F32 v, F32 s) noexcept {
     return v *= s;
 }
 
-nstl_function 
+FUNCTION
 Vec3F32 operator*(F32 s, Vec3F32 v) noexcept {
     return v * s;
 }
 
-nstl_function 
+FUNCTION
 Vec3F32& operator/=(Vec3F32& v, F32 s) noexcept {
     F32 inv = 1.0f / s;
     v.x *= inv;
@@ -114,7 +114,7 @@ Vec3F32& operator/=(Vec3F32& v, F32 s) noexcept {
     return v;
 }
 
-nstl_function 
+FUNCTION
 Vec3F32 operator/(Vec3F32 v, F32 s) noexcept {
     return v /= s;
 }
@@ -122,7 +122,7 @@ Vec3F32 operator/(Vec3F32 v, F32 s) noexcept {
 
 // --- Vec4F32 Operators ---
 
-nstl_function 
+FUNCTION
 Vec4F32& operator+=(Vec4F32& a, const Vec4F32& b) noexcept {
     a.x += b.x;
     a.y += b.y;
@@ -131,12 +131,12 @@ Vec4F32& operator+=(Vec4F32& a, const Vec4F32& b) noexcept {
     return a;
 }
 
-nstl_function 
+FUNCTION
 Vec4F32 operator+(Vec4F32 a, const Vec4F32& b) noexcept {
     return a += b;
 }
 
-nstl_function 
+FUNCTION
 Vec4F32& operator-=(Vec4F32& a, const Vec4F32& b) noexcept {
     a.x -= b.x;
     a.y -= b.y;
@@ -145,12 +145,12 @@ Vec4F32& operator-=(Vec4F32& a, const Vec4F32& b) noexcept {
     return a;
 }
 
-nstl_function 
+FUNCTION
 Vec4F32 operator-(Vec4F32 a, const Vec4F32& b) noexcept {
     return a -= b;
 }
 
-nstl_function 
+FUNCTION
 Vec4F32& operator*=(Vec4F32& v, F32 s) noexcept {
     v.x *= s;
     v.y *= s;
@@ -159,17 +159,17 @@ Vec4F32& operator*=(Vec4F32& v, F32 s) noexcept {
     return v;
 }
 
-nstl_function 
+FUNCTION
 Vec4F32 operator*(Vec4F32 v, F32 s) noexcept {
     return v *= s;
 }
 
-nstl_function 
+FUNCTION
 Vec4F32 operator*(F32 s, Vec4F32 v) noexcept {
     return v * s;
 }
 
-nstl_function 
+FUNCTION
 Vec4F32& operator/=(Vec4F32& v, F32 s) noexcept {
     F32 inv = 1.0f / s;
     v.x *= inv;
@@ -179,7 +179,7 @@ Vec4F32& operator/=(Vec4F32& v, F32 s) noexcept {
     return v;
 }
 
-nstl_function 
+FUNCTION
 Vec4F32 operator/(Vec4F32 v, F32 s) noexcept {
     return v /= s;
 }
@@ -187,7 +187,7 @@ Vec4F32 operator/(Vec4F32 v, F32 s) noexcept {
 
 // --- Mat3x3F32 Operators ---
 
-nstl_function 
+FUNCTION
 Mat3x3F32& operator+=(Mat3x3F32& a, const Mat3x3F32& b) noexcept {
     a.v[0][0] += b.v[0][0]; a.v[0][1] += b.v[0][1]; a.v[0][2] += b.v[0][2];
     a.v[1][0] += b.v[1][0]; a.v[1][1] += b.v[1][1]; a.v[1][2] += b.v[1][2];
@@ -195,12 +195,12 @@ Mat3x3F32& operator+=(Mat3x3F32& a, const Mat3x3F32& b) noexcept {
     return a;
 }
 
-nstl_function 
+FUNCTION
 Mat3x3F32 operator+(Mat3x3F32 a, const Mat3x3F32& b) noexcept {
     return a += b;
 }
 
-nstl_function 
+FUNCTION
 Mat3x3F32& operator-=(Mat3x3F32& a, const Mat3x3F32& b) noexcept {
     a.v[0][0] -= b.v[0][0]; a.v[0][1] -= b.v[0][1]; a.v[0][2] -= b.v[0][2];
     a.v[1][0] -= b.v[1][0]; a.v[1][1] -= b.v[1][1]; a.v[1][2] -= b.v[1][2];
@@ -208,12 +208,12 @@ Mat3x3F32& operator-=(Mat3x3F32& a, const Mat3x3F32& b) noexcept {
     return a;
 }
 
-nstl_function 
+FUNCTION
 Mat3x3F32 operator-(Mat3x3F32 a, const Mat3x3F32& b) noexcept {
     return a -= b;
 }
 
-nstl_function 
+FUNCTION
 Mat3x3F32& operator*=(Mat3x3F32& a, const Mat3x3F32& b) noexcept {
     Mat3x3F32 res{};
     res.v[0][0] = a.v[0][0] * b.v[0][0] + a.v[0][1] * b.v[1][0] + a.v[0][2] * b.v[2][0];
@@ -229,12 +229,12 @@ Mat3x3F32& operator*=(Mat3x3F32& a, const Mat3x3F32& b) noexcept {
     return a;
 }
 
-nstl_function 
+FUNCTION
 Mat3x3F32 operator*(Mat3x3F32 a, const Mat3x3F32& b) noexcept {
     return a *= b;
 }
 
-nstl_function 
+FUNCTION
 Mat3x3F32& operator*=(Mat3x3F32& m, F32 s) noexcept {
     m.v[0][0] *= s; m.v[0][1] *= s; m.v[0][2] *= s;
     m.v[1][0] *= s; m.v[1][1] *= s; m.v[1][2] *= s;
@@ -242,17 +242,17 @@ Mat3x3F32& operator*=(Mat3x3F32& m, F32 s) noexcept {
     return m;
 }
 
-nstl_function 
+FUNCTION
 Mat3x3F32 operator*(Mat3x3F32 m, F32 s) noexcept {
     return m *= s;
 }
 
-nstl_function 
+FUNCTION
 Mat3x3F32 operator*(F32 s, Mat3x3F32 m) noexcept {
     return m * s;
 }
 
-nstl_function 
+FUNCTION
 Mat3x3F32& operator/=(Mat3x3F32& m, F32 s) noexcept {
     F32 inv = 1.0f / s;
     m.v[0][0] *= inv; m.v[0][1] *= inv; m.v[0][2] *= inv;
@@ -261,7 +261,7 @@ Mat3x3F32& operator/=(Mat3x3F32& m, F32 s) noexcept {
     return m;
 }
 
-nstl_function 
+FUNCTION
 Mat3x3F32 operator/(Mat3x3F32 m, F32 s) noexcept {
     return m /= s;
 }
@@ -269,7 +269,7 @@ Mat3x3F32 operator/(Mat3x3F32 m, F32 s) noexcept {
 
 // --- Matrix-Vector Multiplication ---
 
-nstl_function 
+FUNCTION
 Vec3F32 operator*(const Mat3x3F32& m, const Vec3F32& v) noexcept {
     Vec3F32 res;
     res.x = m.v[0][0] * v.x + m.v[0][1] * v.y + m.v[0][2] * v.z;
@@ -278,7 +278,7 @@ Vec3F32 operator*(const Mat3x3F32& m, const Vec3F32& v) noexcept {
     return res;
 }
 
-nstl_function 
+FUNCTION
 Vec3F32 operator*(const Vec3F32& v, const Mat3x3F32& m) noexcept {
     Vec3F32 res;
     res.x = v.x * m.v[0][0] + v.y * m.v[1][0] + v.z * m.v[2][0];
@@ -290,7 +290,7 @@ Vec3F32 operator*(const Vec3F32& v, const Mat3x3F32& m) noexcept {
 
 // --- Mat4x4F32 Operators ---
 
-nstl_function
+FUNCTION
 Mat4x4F32& operator+=(Mat4x4F32& a, const Mat4x4F32& b) noexcept {
     a.v[0][0] += b.v[0][0]; a.v[0][1] += b.v[0][1]; a.v[0][2] += b.v[0][2]; a.v[0][3] += b.v[0][3];
     a.v[1][0] += b.v[1][0]; a.v[1][1] += b.v[1][1]; a.v[1][2] += b.v[1][2]; a.v[1][3] += b.v[1][3];
@@ -299,12 +299,12 @@ Mat4x4F32& operator+=(Mat4x4F32& a, const Mat4x4F32& b) noexcept {
     return a;
 }
 
-nstl_function
+FUNCTION
 Mat4x4F32 operator+(Mat4x4F32 a, const Mat4x4F32& b) noexcept {
     return a += b;
 }
 
-nstl_function
+FUNCTION
 Mat4x4F32& operator-=(Mat4x4F32& a, const Mat4x4F32& b) noexcept {
     a.v[0][0] -= b.v[0][0]; a.v[0][1] -= b.v[0][1]; a.v[0][2] -= b.v[0][2]; a.v[0][3] -= b.v[0][3];
     a.v[1][0] -= b.v[1][0]; a.v[1][1] -= b.v[1][1]; a.v[1][2] -= b.v[1][2]; a.v[1][3] -= b.v[1][3];
@@ -313,12 +313,12 @@ Mat4x4F32& operator-=(Mat4x4F32& a, const Mat4x4F32& b) noexcept {
     return a;
 }
 
-nstl_function
+FUNCTION
 Mat4x4F32 operator-(Mat4x4F32 a, const Mat4x4F32& b) noexcept {
     return a -= b;
 }
 
-nstl_function
+FUNCTION
 Mat4x4F32& operator*=(Mat4x4F32& a, const Mat4x4F32& b) noexcept {
     Mat4x4F32 res{};
     res.v[0][0] = a.v[0][0] * b.v[0][0] + a.v[0][1] * b.v[1][0] + a.v[0][2] * b.v[2][0] + a.v[0][3] * b.v[3][0];
@@ -341,12 +341,12 @@ Mat4x4F32& operator*=(Mat4x4F32& a, const Mat4x4F32& b) noexcept {
     return a;
 }
 
-nstl_function
+FUNCTION
 Mat4x4F32 operator*(Mat4x4F32 a, const Mat4x4F32& b) noexcept {
     return a *= b;
 }
 
-nstl_function
+FUNCTION
 Mat4x4F32& operator*=(Mat4x4F32& m, F32 s) noexcept {
     m.v[0][0] *= s; m.v[0][1] *= s; m.v[0][2] *= s; m.v[0][3] *= s;
     m.v[1][0] *= s; m.v[1][1] *= s; m.v[1][2] *= s; m.v[1][3] *= s;
@@ -355,17 +355,17 @@ Mat4x4F32& operator*=(Mat4x4F32& m, F32 s) noexcept {
     return m;
 }
 
-nstl_function
+FUNCTION
 Mat4x4F32 operator*(Mat4x4F32 m, F32 s) noexcept {
     return m *= s;
 }
 
-nstl_function
+FUNCTION
 Mat4x4F32 operator*(F32 s, Mat4x4F32 m) noexcept {
     return m * s;
 }
 
-nstl_function
+FUNCTION
 Mat4x4F32& operator/=(Mat4x4F32& m, F32 s) noexcept {
     F32 inv = 1.0f / s;
     m.v[0][0] *= inv; m.v[0][1] *= inv; m.v[0][2] *= inv; m.v[0][3] *= inv;
@@ -375,12 +375,12 @@ Mat4x4F32& operator/=(Mat4x4F32& m, F32 s) noexcept {
     return m;
 }
 
-nstl_function
+FUNCTION
 Mat4x4F32 operator/(Mat4x4F32 m, F32 s) noexcept {
     return m /= s;
 }
 
-nstl_function
+FUNCTION
 Vec4F32 operator*(const Mat4x4F32& m, const Vec4F32& v) noexcept {
     Vec4F32 res;
     res.x = m.v[0][0] * v.x + m.v[0][1] * v.y + m.v[0][2] * v.z + m.v[0][3] * v.w;
@@ -390,7 +390,7 @@ Vec4F32 operator*(const Mat4x4F32& m, const Vec4F32& v) noexcept {
     return res;
 }
 
-nstl_function
+FUNCTION
 Vec4F32 operator*(const Vec4F32& v, const Mat4x4F32& m) noexcept {
     Vec4F32 res;
     res.x = v.x * m.v[0][0] + v.y * m.v[1][0] + v.z * m.v[2][0] + v.w * m.v[3][0];
