@@ -58,7 +58,7 @@ debug_break(); \
 // ////////////////////////
 // Keywords
 
-#define nstl_function static
+#define FUNCTION static
 #define EXTERN_C extern "C"
 
 
