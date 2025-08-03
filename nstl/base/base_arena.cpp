@@ -35,6 +35,9 @@ Arena* arena_alloc(const ArenaParameters& parameters) {
     arena->startPos = 0;
     arena->prev = nullptr;
 
+    ASAN_POISON_MEMORY_REGION(raw, initialCommitSize);
+    ASAN_UNPOISON_MEMORY_REGION(raw, ARENA_HEADER_SIZE);
+
     return arena;
 }
 
@@ -81,10 +84,12 @@ void* arena_push(Arena* arena, U64 size, U64 alignment) {
 
         OS_commit(commitStartAddr, sizeToCommit);
         current->committed = newCommitTarget;
+        ASAN_POISON_MEMORY_REGION(commitStartAddr, sizeToCommit);
     }
 
     void* result = (U8*) current + alignedPos;
     current->pos = newPos;
+    ASAN_UNPOISON_MEMORY_REGION(result, size);
 
     if (UNLIKELY(result == nullptr)) {
         ASSERT_DEBUG(false && "Allocation Failure");
@@ -105,8 +110,9 @@ void arena_pop_to(Arena* arena, U64 pos) {
         arena->current = current;
     }
 
-    U64 relative_pos = absolutePos - current->startPos;
-    current->pos = CLAMP_BOT(ARENA_HEADER_SIZE, relative_pos);
+    U64 relativePos = absolutePos - current->startPos;
+    current->pos = CLAMP_BOT(ARENA_HEADER_SIZE, relativePos);
+    ASAN_POISON_MEMORY_REGION((U8*)current + current->pos, current->pos - relativePos);
 }
 
 U64 arena_get_pos(Arena* arena) {

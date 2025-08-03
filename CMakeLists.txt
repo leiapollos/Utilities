@@ -21,4 +21,13 @@ endif()
 
 add_executable(utils_app main.cpp)
 
+target_compile_options(utils_app PRIVATE
+        -fsanitize=address
+        -fno-omit-frame-pointer
+)
+# link-time flag (requires CMake ≥3.13)
+target_link_options(utils_app PRIVATE
+        -fsanitize=address
+)
+
 install(TARGETS utils_app DESTINATION bin)
