@@ -60,7 +60,10 @@ debug_break(); \
 
 #define FUNCTION static
 #define EXTERN_C extern "C"
-
+#define MACRO_STR_2(s)      #s
+#define MACRO_STR(s)       MACRO_STR_2(s)
+#define NAME_CONCAT_2(A, B) A##B
+#define NAME_CONCAT(A, B) NAME_CONCAT_2(A, B)
 
 // ////////////////////////
 // Address Sanitizer
