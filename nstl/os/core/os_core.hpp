@@ -17,8 +17,17 @@ static OS_SystemInfo* OS_get_system_info();
 
 // ////////////////////////
 // Time
-
 static U64 OS_get_time_microseconds();
+static U64 OS_get_time_nanoseconds();
+static U32 OS_get_thread_id_u32();
+static void OS_mutex_init(void **m);
+static void OS_mutex_destroy(void *m);
+static void OS_mutex_lock(void *m);
+static void OS_mutex_unlock(void *m);
+static U64 OS_get_counter_frequency_hz();
+
+static U64 OS_rdtsc_relaxed();
+static U64 OS_rdtscp_serialized();
 
 // ////////////////////////
 // Aborting

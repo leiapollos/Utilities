@@ -21,57 +21,102 @@ constexpr B32 is_power_of_two(U64 x) {
 
 // Vec2
 union Vec2F32 {
-    struct { F32 x, y; };
+    struct {
+        F32 x, y;
+    };
+
     F32 v[2];
 };
 
 union Vec2S32 {
-    struct { S32 x, y; };
+    struct {
+        S32 x, y;
+    };
+
     S32 v[2];
 };
 
 union Vec2S64 {
-    struct { S64 x, y; };
+    struct {
+        S64 x, y;
+    };
+
     S64 v[2];
 };
 
 // Vec3
 
 union Vec3F32 {
-    struct { F32 x, y, z; };
-    struct { F32 r, g, b; };
+    struct {
+        F32 x, y, z;
+    };
+
+    struct {
+        F32 r, g, b;
+    };
+
     F32 v[3];
 };
 
 union Vec3S32 {
-    struct { S32 x, y, z; };
-    struct { S32 r, g, b; };
+    struct {
+        S32 x, y, z;
+    };
+
+    struct {
+        S32 r, g, b;
+    };
+
     S32 v[3];
 };
 
 union Vec3S64 {
-    struct { S64 x, y, z; };
-    struct { S64 r, g, b; };
+    struct {
+        S64 x, y, z;
+    };
+
+    struct {
+        S64 r, g, b;
+    };
+
     S64 v[3];
 };
 
 // Vec4
 
 union Vec4F32 {
-    struct { F32 x, y, z, w; };
-    struct { F32 r, g, b, a; };
+    struct {
+        F32 x, y, z, w;
+    };
+
+    struct {
+        F32 r, g, b, a;
+    };
+
     F32 v[4];
 };
 
 union Vec4S32 {
-    struct { S32 x, y, z, w; };
-    struct { S32 r, g, b, a; };
+    struct {
+        S32 x, y, z, w;
+    };
+
+    struct {
+        S32 r, g, b, a;
+    };
+
     S32 v[4];
 };
 
 union Vec4S64 {
-    struct { S64 x, y, z, w; };
-    struct { S64 r, g, b, a; };
+    struct {
+        S64 x, y, z, w;
+    };
+
+    struct {
+        S64 r, g, b, a;
+    };
+
     S64 v[4];
 };
 
@@ -111,10 +156,21 @@ struct Mat4x4F32 {
 // ////////////////////////
 // Memory Units
 
-static constexpr U64 KB(U64 n) { return n << 10; }
-static constexpr U64 MB(U64 n) { return n << 20; }
-static constexpr U64 GB(U64 n) { return n << 30; }
-static constexpr U64 TB(U64 n) { return n << 40; }
+static constexpr U64 KB(U64 n) {
+    return n << 10;
+}
+
+static constexpr U64 MB(U64 n) {
+    return n << 20;
+}
+
+static constexpr U64 GB(U64 n) {
+    return n << 30;
+}
+
+static constexpr U64 TB(U64 n) {
+    return n << 40;
+}
 
 
 // ////////////////////////
@@ -122,3 +178,4 @@ static constexpr U64 TB(U64 n) { return n << 40; }
 
 #define THOUSAND(n) (n * 1000)
 #define MILLION(n)  (n * 1000000)
+#define BILLION(n)  (n * 1000000000)

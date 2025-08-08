@@ -56,14 +56,22 @@ debug_break(); \
 
 
 // ////////////////////////
+// Force Inline
+
+#if defined(COMPILER_CLANG) || defined(COMPILER_GCC)
+#define FORCE_INLINE inline __attribute__((always_inline))
+#elif defined(COMPILER_MSVC)
+#define FORCE_INLINE __forceinline
+#else
+#define FORCE_INLINE inline
+#endif
+
+
+// ////////////////////////
 // Keywords
 
 #define FUNCTION static
 #define EXTERN_C extern "C"
-#define MACRO_STR_2(s)      #s
-#define MACRO_STR(s)       MACRO_STR_2(s)
-#define NAME_CONCAT_2(A, B) A##B
-#define NAME_CONCAT(A, B) NAME_CONCAT_2(A, B)
 
 // ////////////////////////
 // Address Sanitizer
@@ -81,6 +89,17 @@ EXTERN_C void __asan_unpoison_memory_region(void const volatile* addr, U32 size)
 # define ASAN_UNPOISON_MEMORY_REGION(addr, size)
 
 #endif
+
+// //////////////////////////////
+// Misc
+
+#define MACRO_STR_2(s)      #s
+#define MACRO_STR(s)       MACRO_STR_2(s)
+#define NAME_CONCAT_2(A, B) A##B
+#define NAME_CONCAT(A, B) NAME_CONCAT_2(A, B)
+
+#define ARRAY_COUNT(arr) (sizeof(arr) / sizeof(arr[0]))
+
 
 // ////////////////////////
 // Bit masking
