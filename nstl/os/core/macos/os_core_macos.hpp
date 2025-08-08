@@ -9,14 +9,18 @@
 #include <cstdlib>
 #include <math.h>
 #include <time.h>
+#include <pthread.h>
+
 
 // ////////////////////////
 // State
 
-struct OS_MACOS_State
-{
-    // Arena *arena;
+struct OS_MACOS_State {
     OS_SystemInfo system_info;
+};
+
+struct OS_Mutex {
+    pthread_mutex_t m;
 };
 
 
