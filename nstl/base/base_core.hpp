@@ -68,11 +68,19 @@ debug_break(); \
 // ////////////////////////
 // Address Sanitizer
 
-EXTERN_C void __asan_poison_memory_region(void const volatile *addr, size_t size);
-EXTERN_C void __asan_unpoison_memory_region(void const volatile *addr, size_t size);
+#if ADDRESS_SANITIZER
+
+EXTERN_C void __asan_poison_memory_region(void const volatile* addr, U32 size);
+EXTERN_C void __asan_unpoison_memory_region(void const volatile* addr, U32 size);
 # define ASAN_POISON_MEMORY_REGION(addr, size)   __asan_poison_memory_region((addr), (size))
 # define ASAN_UNPOISON_MEMORY_REGION(addr, size) __asan_unpoison_memory_region((addr), (size))
 
+#else
+
+# define ASAN_POISON_MEMORY_REGION(addr, size)
+# define ASAN_UNPOISON_MEMORY_REGION(addr, size)
+
+#endif
 
 // ////////////////////////
 // Bit masking
