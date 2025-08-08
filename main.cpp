@@ -13,12 +13,12 @@
 void entry_point() {
     std::chrono::time_point startChrono = std::chrono::high_resolution_clock::now();
     U64 start = OS_get_time_microseconds();
-    U64 size = sqrt_f32(1024 * 1024 * 1024);
+    U64 size = 1024 * 1024 * 1024;
     void* ptr = OS_reserve(size);
 
 
     OS_SystemInfo* sysInfo = OS_get_system_info();
-    Arena* arena = arena_alloc();
+    Arena* arena = arena_alloc({});
     void* currentPos = arena_push(arena, MB(4));
     currentPos = (U8*)currentPos + sysInfo->pageSize - ARENA_HEADER_SIZE;
     U8* res = (U8*)currentPos + MB(4) - ARENA_HEADER_SIZE;
