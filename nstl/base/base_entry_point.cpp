@@ -4,5 +4,7 @@
 
 
 static void base_entry_point(int argc, char **argv) {
+    scratch_thread_init();
+
     entry_point();
 }
