@@ -37,3 +37,33 @@ static void arena_release(Arena* arena);
 static void* arena_push(Arena* arena, U64 size, U64 alignment = sizeof(void*));
 static void arena_pop_to(Arena* arena, U64 pos);
 static U64 arena_get_pos(Arena* arena);
+
+
+// ////////////////////////
+// Temp
+
+struct Temp {
+    Arena* arena;
+    U64 pos;          // absolute position from arena_get_pos
+    B32 is_temporary; // if true, release arena on temp_end
+};
+
+static Temp temp_begin(Arena* arena);
+static void temp_end(Temp* t);
+
+
+// ////////////////////////
+// Scratch
+
+#define SCRATCH_TLS_ARENA_COUNT 2
+
+struct Scratch_TLS {
+    Arena* slots[SCRATCH_TLS_ARENA_COUNT];
+    U32 next_index; // alternate 0 -> SCRATCH_TLS_ARENA_COUNT-1
+    B32 initialized;
+};
+
+static void scratch_thread_init_with_params(const ArenaParameters& params);
+static void scratch_thread_init();
+static void scratch_thread_shutdown();
+static Temp get_scratch(Arena* const* excludes, U32 count);
