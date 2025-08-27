@@ -18,8 +18,10 @@ void entry_point() {
 
 
     OS_SystemInfo* sysInfo = OS_get_system_info();
-    Arena* arena = arena_alloc({});
-    void* currentPos = arena_push(arena, MB(4));
+    Arena* arena = arena_alloc(
+        .arenaSize = TB(79) + GB(575) + MB(1023) + KB(600),
+    );
+    void* currentPos = arena_push(arena, GB(4) - sysInfo->pageSize/2);
     currentPos = (U8*)currentPos + sysInfo->pageSize - ARENA_HEADER_SIZE;
     U8* res = (U8*)currentPos + MB(4) - ARENA_HEADER_SIZE;
     memset(res, 0, ARENA_HEADER_SIZE);
