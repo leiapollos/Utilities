@@ -31,7 +31,8 @@ struct Arena {
 
 #define ARENA_HEADER_SIZE sizeof(Arena)
 
-static Arena* arena_alloc(const ArenaParameters& parameters);
+static Arena* arena_alloc_(const ArenaParameters& parameters);
+#define arena_alloc(...) arena_alloc_({__VA_ARGS__})
 static void arena_release(Arena* arena);
 
 static void* arena_push(Arena* arena, U64 size, U64 alignment = sizeof(void*));

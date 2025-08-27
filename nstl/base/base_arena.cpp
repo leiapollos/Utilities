@@ -5,7 +5,7 @@
 // ////////////////////////
 // Arena
 
-Arena* arena_alloc(const ArenaParameters& parameters) {
+Arena* arena_alloc_(const ArenaParameters& parameters) {
     ASSERT_DEBUG(parameters.arenaSize >= parameters.committedSize && "Arena size should be bigger than commit size");
 
     auto sysInfo = OS_get_system_info();
@@ -57,11 +57,11 @@ void* arena_push(Arena* arena, U64 size, U64 alignment) {
 
     if (newPos > current->reserved) {
         if (current->flags.has(DoChain)) {
-            Arena* nextArena = arena_alloc({
+            Arena* nextArena = arena_alloc(
                 .arenaSize = MAX(current->reserved, size),
                 .committedSize = size,
                 .flags = current->flags,
-            });
+            );
             nextArena->startPos = current->startPos + current->reserved;
             nextArena->prev = current;
             current->current = nextArena;
