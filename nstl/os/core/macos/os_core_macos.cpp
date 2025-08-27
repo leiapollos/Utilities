@@ -142,6 +142,8 @@ int main(int argc, char** argv) {
         info->pageSize = static_cast<U64>(sysconf(_SC_PAGESIZE));
         info->logicalCores = static_cast<U32>(sysconf(_SC_NPROCESSORS_ONLN));
     }
+    
+    scratch_thread_init();
 
     base_entry_point(argc, argv);
 }
