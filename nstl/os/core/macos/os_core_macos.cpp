@@ -6,7 +6,7 @@
 // System Info
 
 static OS_SystemInfo* OS_get_system_info() {
-    return &os_macos_state.system_info;
+    return &osMacosState.systemInfo;
 }
 
 
@@ -102,6 +102,44 @@ static void OS_release(void* ptr, U64 size) {
 // ////////////////////////
 // Threads and Synchronization
 
+static void* _OS_thread_entry_point(void* arg) {
+    OS_MACOS_Entity* entity = (OS_MACOS_Entity*)arg;
+    
+//    scratch_thread_init();
+    
+    thread_entry_point(entity->thread.func, entity->thread.args);
+    return 0;
+}
+
+static OS_Handle OS_thread_create(OS_ThreadFunc* func, void* arg) {
+    OS_MACOS_Entity* entity = alloc_OS_entity();
+    entity->type = OS_MACOS_EntityType::Thread;
+    entity->thread.func = func;
+    entity->thread.args = arg;
+    
+    int ret = pthread_create(&entity->thread.handle, NULL, _OS_thread_entry_point, (void*)entity);
+    if(ret == -1) {
+        free_OS_entity(entity);
+        entity = 0;
+    }
+    
+    OS_Handle handle= {(U64*)entity};
+    return handle;
+}
+
+static B32 OS_thread_join(OS_Handle thread) {
+    OS_MACOS_Entity* entity = (OS_MACOS_Entity*)(thread.handle);
+    int ret = pthread_join(entity->thread.handle, NULL);
+    free_OS_entity(entity);
+    return ret == 0;
+}
+
+static void OS_thread_detach(OS_Handle thread) {
+    OS_MACOS_Entity* entity = (OS_MACOS_Entity*)(thread.handle);
+    pthread_detach(entity->thread.handle);
+    free_OS_entity(entity);
+}
+
 static U32 OS_get_thread_id_u32() {
     U64 threadId64 = 0;
     pthread_threadid_np(0, &threadId64);
@@ -134,16 +172,47 @@ static void OS_mutex_unlock(void* m) {
 
 
 // ////////////////////////
+// State
+
+static OS_MACOS_Entity* alloc_OS_entity() {
+    if (osMacosState.freeEntities) {
+        OS_MACOS_Entity* entity = osMacosState.freeEntities;
+        osMacosState.freeEntities = entity->next;
+        return entity;
+    }
+    
+    Arena* arena = osMacosState.osEntityArena;
+    OS_MACOS_Entity* entity = (OS_MACOS_Entity*)arena_push(arena, sizeof(OS_MACOS_Entity), alignof(OS_MACOS_Entity));
+    memset(entity, 0, sizeof(OS_MACOS_Entity));
+    return entity;
+}
+
+static void free_OS_entity(OS_MACOS_Entity* entity) {
+    if (!entity) {
+        return;
+    }
+    entity->next = osMacosState.freeEntities;
+    osMacosState.freeEntities = entity;
+}
+
+
+// ////////////////////////
 // Entry Point
 
 int main(int argc, char** argv) {
     {
-        OS_SystemInfo* info = &os_macos_state.system_info;
+        OS_SystemInfo* info = &osMacosState.systemInfo;
         info->pageSize = static_cast<U64>(sysconf(_SC_PAGESIZE));
         info->logicalCores = static_cast<U32>(sysconf(_SC_NPROCESSORS_ONLN));
     }
     
     scratch_thread_init();
+    
+    Arena* arena = arena_alloc();
+    osMacosState.arena = arena;
+    
+    Arena* entityArena = arena_alloc();
+    osMacosState.osEntityArena = entityArena;
 
     base_entry_point(argc, argv);
 }

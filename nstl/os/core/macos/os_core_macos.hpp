@@ -15,16 +15,43 @@
 // ////////////////////////
 // State
 
-struct OS_MACOS_State {
-    OS_SystemInfo system_info;
-};
-
 struct OS_Mutex {
     pthread_mutex_t m;
+};
+
+enum class OS_MACOS_EntityType : U64 {
+    Thread = (1 << 0),
+    Mutex = (2 << 0),
+};
+ENABLE_BITMASK_OPERATORS(OS_MACOS_EntityType)
+
+struct OS_MACOS_Entity {
+    OS_MACOS_Entity* next;
+    Flags<OS_MACOS_EntityType> type;
+    union {
+        struct {
+            pthread_t handle;
+            OS_ThreadFunc* func;
+            void* args;
+        } thread;
+        pthread_mutex_t mutex;
+    };
+};
+
+static OS_MACOS_Entity* alloc_OS_entity();
+static void free_OS_entity(OS_MACOS_Entity* entity);
+
+struct OS_MACOS_State {
+    OS_SystemInfo systemInfo;
+    
+    Arena* arena;
+    
+    Arena* osEntityArena;
+    OS_MACOS_Entity* freeEntities;
 };
 
 
 // ////////////////////////
 // Globals
 
-static OS_MACOS_State os_macos_state = {0};
+static OS_MACOS_State osMacosState = {0};

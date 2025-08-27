@@ -6,3 +6,7 @@
 static void base_entry_point(int argc, char **argv) {
     entry_point();
 }
+
+static void thread_entry_point(void (*func)(void* params), void* args) {
+    func(args);
+}
