@@ -27,36 +27,6 @@ static U64 OS_get_time_nanoseconds() {
     return result;
 }
 
-static U32 OS_get_thread_id_u32() {
-    U64 threadId64 = 0;
-    pthread_threadid_np(0, &threadId64);
-    return (U32) threadId64;
-}
-
-static void OS_mutex_init(void** m) {
-    OS_Mutex* mm = (OS_Mutex*) malloc(sizeof(OS_Mutex));
-    pthread_mutex_init(&mm->m, 0);
-    *m = (void*) mm;
-}
-
-static void OS_mutex_destroy(void* m) {
-    if (!m)
-        return;
-    OS_Mutex* mm = (OS_Mutex*) m;
-    pthread_mutex_destroy(&mm->m);
-    free(mm);
-}
-
-static void OS_mutex_lock(void* m) {
-    OS_Mutex* mm = (OS_Mutex*) m;
-    pthread_mutex_lock(&mm->m);
-}
-
-static void OS_mutex_unlock(void* m) {
-    OS_Mutex* mm = (OS_Mutex*) m;
-    pthread_mutex_unlock(&mm->m);
-}
-
 #if defined(PLATFORM_ARCH_ARM64)
 static U64 OS_rdtsc_relaxed() {
     U64 value = 0;
@@ -127,6 +97,44 @@ static void OS_decommit(void* ptr, U64 size) {
 static void OS_release(void* ptr, U64 size) {
     munmap(ptr, size);
 }
+
+
+// ////////////////////////
+// Threads and Synchronization
+
+static U32 OS_get_thread_id_u32() {
+    U64 threadId64 = 0;
+    pthread_threadid_np(0, &threadId64);
+    return (U32) threadId64;
+}
+
+static void OS_mutex_init(void** m) {
+    OS_Mutex* mm = (OS_Mutex*) malloc(sizeof(OS_Mutex));
+    pthread_mutex_init(&mm->m, 0);
+    *m = (void*) mm;
+}
+
+static void OS_mutex_destroy(void* m) {
+    if (!m)
+        return;
+    OS_Mutex* mm = (OS_Mutex*) m;
+    pthread_mutex_destroy(&mm->m);
+    free(mm);
+}
+
+static void OS_mutex_lock(void* m) {
+    OS_Mutex* mm = (OS_Mutex*) m;
+    pthread_mutex_lock(&mm->m);
+}
+
+static void OS_mutex_unlock(void* m) {
+    OS_Mutex* mm = (OS_Mutex*) m;
+    pthread_mutex_unlock(&mm->m);
+}
+
+
+// ////////////////////////
+// Entry Point
 
 int main(int argc, char** argv) {
     {

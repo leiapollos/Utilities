@@ -19,11 +19,6 @@ static OS_SystemInfo* OS_get_system_info();
 // Time
 static U64 OS_get_time_microseconds();
 static U64 OS_get_time_nanoseconds();
-static U32 OS_get_thread_id_u32();
-static void OS_mutex_init(void **m);
-static void OS_mutex_destroy(void *m);
-static void OS_mutex_lock(void *m);
-static void OS_mutex_unlock(void *m);
 static U64 OS_get_counter_frequency_hz();
 
 static U64 OS_rdtsc_relaxed();
@@ -42,6 +37,16 @@ static void* OS_reserve(U64 size);
 static B32 OS_commit(void* addr, U64 size);
 static void OS_decommit(void* addr, U64 size);
 static void OS_release(void* addr, U64 size);
+
+
+// ////////////////////////
+// Threads and Synchronization
+
+static U32 OS_get_thread_id_u32();
+static void OS_mutex_init(void **m);
+static void OS_mutex_destroy(void *m);
+static void OS_mutex_lock(void *m);
+static void OS_mutex_unlock(void *m);
 
 
 // ////////////////////////
