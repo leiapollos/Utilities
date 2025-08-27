@@ -1,7 +1,10 @@
 //
 // Created by André Leite on 26/07/2025.
 //
-
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winitializer-overrides"
+#endif
 #include "nstl/base/base_include.hpp"
 #include "nstl/os/os_include.hpp"
 #include "nstl/base/base_include.cpp"
@@ -10,7 +13,50 @@
 #include <iostream>
 #include <chrono>
 
+struct opt {
+    bool skip;
+    int val;
+    bool b2;
+    char c;
+};
+
+void func_(bool shouldPrint, opt o) {
+    if (shouldPrint) {
+        std::cout << "Hello, World!" << std::endl;
+    }
+    std::cout << o.skip << " " << o.val << " " << o.b2 << " " << o.c << std::endl;
+}
+
+#define func(...) func_(true, (opt){.c = 'd', __VA_ARGS__})
+
+void work(void*arg) {
+    int val = *(int*)arg;
+    std::cout << "Thread working with value: " << val << std::endl;
+    {
+        Temp a = get_scratch(0, 0);
+        void* p = arena_push(a.arena, TB(60));
+        std::cout << "Pushed 1MB to scratch arena at " << (void*)a.arena << std::endl;
+        temp_end(&a);
+    }
+    {
+        Temp a = get_scratch(0, 0);
+        void* p = arena_push(a.arena, MB(4));
+        std::cout << "Pushed 1MB to scratch arena at " << (void*)a.arena << std::endl;
+        temp_end(&a);
+    }
+    
+    sleep(1);
+    std::cout << "Thread finished with value: " << val << std::endl;
+}
+
 void entry_point() {
+    func(.c = 'A', .val = 42, .skip = true, .b2 = false,);
+    int arg = 123;
+    OS_Handle handle = OS_thread_create(work, &arg);
+    std::cout << "Thread created." << std::endl;
+    OS_thread_join(handle);
+    std::cout << "Thread joined." << std::endl;
+    
     std::chrono::time_point startChrono = std::chrono::high_resolution_clock::now();
     U64 start = OS_get_time_microseconds();
     U64 size = 1024 * 1024 * 1024;

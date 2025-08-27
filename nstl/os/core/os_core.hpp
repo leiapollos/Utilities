@@ -42,6 +42,16 @@ static void OS_release(void* addr, U64 size);
 // ////////////////////////
 // Threads and Synchronization
 
+struct OS_Handle {
+    U64* handle;
+};
+
+typedef void OS_ThreadFunc(void *ptr);
+
+static OS_Handle OS_thread_create(OS_ThreadFunc* func, void* arg);
+static B32 OS_thread_join(OS_Handle thread);
+static void OS_thread_detach(OS_Handle thread);
+
 static U32 OS_get_thread_id_u32();
 static void OS_mutex_init(void **m);
 static void OS_mutex_destroy(void *m);
