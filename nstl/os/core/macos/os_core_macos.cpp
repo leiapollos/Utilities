@@ -105,8 +105,6 @@ static void OS_release(void* ptr, U64 size) {
 static void* _OS_thread_entry_point(void* arg) {
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*)arg;
     
-//    scratch_thread_init();
-    
     thread_entry_point(entity->thread.func, entity->thread.args);
     return 0;
 }
