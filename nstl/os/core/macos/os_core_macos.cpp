@@ -121,7 +121,7 @@ static OS_Handle OS_thread_create(OS_ThreadFunc* func, void* arg) {
         entity = 0;
     }
     
-    OS_Handle handle= {(U64*)entity};
+    OS_Handle handle = {(U64*)entity};
     return handle;
 }
 
@@ -145,7 +145,7 @@ static void OS_thread_detach(OS_Handle thread) {
 static U32 OS_get_thread_id_u32() {
     U64 threadId64 = 0;
     pthread_threadid_np(0, &threadId64);
-    return (U32) threadId64;
+    return (U32)threadId64;
 }
 
 static OS_Handle OS_mutex_create() {
