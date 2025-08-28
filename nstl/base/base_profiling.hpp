@@ -80,21 +80,6 @@ struct ProfilerThreadState {
 #endif
 };
 
-struct ProfilerGlobalState {
-    U64 globalStartMicros;
-    U32 threadCount;
-    ProfilerThreadState* threadStates[PROFILER_MAX_THREADS];
-
-#if PROFILER_USE_TSC
-    U64 tscFrequencyHz;
-    F64 tscTicksToMicros;
-#endif
-
-    void* registryMutex;
-};
-
-extern ProfilerGlobalState g_profiler;
-
 struct ProfClock {
     static U64 now();
     static U64 to_micros(U64 ticksOrMicros);

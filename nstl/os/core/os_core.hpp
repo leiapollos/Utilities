@@ -53,10 +53,10 @@ static B32 OS_thread_join(OS_Handle thread);
 static void OS_thread_detach(OS_Handle thread);
 
 static U32 OS_get_thread_id_u32();
-static void OS_mutex_init(void **m);
-static void OS_mutex_destroy(void *m);
-static void OS_mutex_lock(void *m);
-static void OS_mutex_unlock(void *m);
+static OS_Handle OS_mutex_create();
+static void OS_mutex_destroy(OS_Handle mutex);
+static void OS_mutex_lock(OS_Handle mutex);
+static void OS_mutex_unlock(OS_Handle mutex);
 
 
 // ////////////////////////

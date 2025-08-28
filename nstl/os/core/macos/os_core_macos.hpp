@@ -20,8 +20,9 @@ struct OS_Mutex {
 };
 
 enum class OS_MACOS_EntityType : U64 {
-    Thread = (1 << 0),
-    Mutex = (2 << 0),
+    Invalid = (0),
+    Thread  = (1 << 0),
+    Mutex   = (2 << 0),
 };
 ENABLE_BITMASK_OPERATORS(OS_MACOS_EntityType)
 
