@@ -199,9 +199,7 @@ static void temp_end(Temp* t) {
 }
 
 static Temp get_scratch(Arena* const* excludes, U32 count) {
-    if (!g_scratch_tls.initialized) {
-        scratch_thread_init();
-    }
+    ASSERT_DEBUG(g_scratch_tls.initialized && "Scratch TLS not initialized");
 
     static_assert(is_power_of_two(SCRATCH_TLS_ARENA_COUNT), "SCRATCH_TLS_ARENA_COUNT must be a power of two");
 
