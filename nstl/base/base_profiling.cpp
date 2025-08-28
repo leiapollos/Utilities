@@ -9,6 +9,19 @@
 #include <string.h>
 
 
+struct ProfilerGlobalState {
+    U64 globalStartMicros;
+    U32 threadCount;
+    ProfilerThreadState* threadStates[PROFILER_MAX_THREADS];
+
+#if PROFILER_USE_TSC
+    U64 tscFrequencyHz;
+    F64 tscTicksToMicros;
+#endif
+
+    OS_Handle registryMutex;
+};
+
 ProfilerGlobalState g_profiler = {};
 
 static thread_local ProfilerThreadState* g_tls = nullptr;
@@ -45,7 +58,7 @@ U64 ProfClock::to_micros(U64 ticksOrMicros) {
 
 void ProfilerInitialize() {
     memset(&g_profiler, 0, sizeof(g_profiler));
-    OS_mutex_init(&g_profiler.registryMutex);
+    g_profiler.registryMutex = OS_mutex_create();
 
 #if PROFILER_USE_TSC
     // Calibrate TSC-equivalent frequency using platform counters
@@ -91,7 +104,7 @@ void ProfilerInitialize() {
 
 void ProfilerShutdown() {
     OS_mutex_destroy(g_profiler.registryMutex);
-    g_profiler.registryMutex = nullptr;
+    g_profiler.registryMutex = {0};
 }
 
 ProfilerThreadState* ProfilerGetTLS() {
