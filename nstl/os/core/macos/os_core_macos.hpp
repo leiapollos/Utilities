@@ -24,11 +24,10 @@ enum class OS_MACOS_EntityType : U64 {
     Thread  = (1 << 0),
     Mutex   = (2 << 0),
 };
-ENABLE_BITMASK_OPERATORS(OS_MACOS_EntityType)
 
 struct OS_MACOS_Entity {
     OS_MACOS_Entity* next;
-    Flags<OS_MACOS_EntityType> type;
+    OS_MACOS_EntityType type;
     union {
         struct {
             pthread_t handle;

@@ -128,7 +128,7 @@ static OS_Handle OS_thread_create(OS_ThreadFunc* func, void* arg) {
 static B32 OS_thread_join(OS_Handle thread) {
     ASSERT_DEBUG(thread.handle != 0);
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*)(thread.handle);
-    ASSERT_DEBUG(entity->type.has(OS_MACOS_EntityType::Thread));
+    ASSERT_DEBUG(entity->type == OS_MACOS_EntityType::Thread);
     int ret = pthread_join(entity->thread.handle, NULL);
     free_OS_entity(entity);
     return ret == 0;
@@ -137,7 +137,7 @@ static B32 OS_thread_join(OS_Handle thread) {
 static void OS_thread_detach(OS_Handle thread) {
     ASSERT_DEBUG(thread.handle != 0);
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*)(thread.handle);
-    ASSERT_DEBUG(entity->type.has(OS_MACOS_EntityType::Thread));
+    ASSERT_DEBUG(entity->type == OS_MACOS_EntityType::Thread);
     pthread_detach(entity->thread.handle);
     free_OS_entity(entity);
 }
@@ -159,7 +159,7 @@ static OS_Handle OS_mutex_create() {
 static void OS_mutex_destroy(OS_Handle mutex) {
     ASSERT_DEBUG(mutex.handle != 0);
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*)(mutex.handle);
-    ASSERT_DEBUG(entity->type.has(OS_MACOS_EntityType::Mutex));
+    ASSERT_DEBUG(entity->type == OS_MACOS_EntityType::Mutex);
     pthread_mutex_destroy(&entity->mutex);
     free_OS_entity(entity);
 }
@@ -167,14 +167,14 @@ static void OS_mutex_destroy(OS_Handle mutex) {
 static void OS_mutex_lock(OS_Handle mutex) {
     ASSERT_DEBUG(mutex.handle != 0);
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*)(mutex.handle);
-    ASSERT_DEBUG(entity->type.has(OS_MACOS_EntityType::Mutex));
+    ASSERT_DEBUG(entity->type == OS_MACOS_EntityType::Mutex);
     pthread_mutex_lock(&entity->mutex);
 }
 
 static void OS_mutex_unlock(OS_Handle mutex) {
     ASSERT_DEBUG(mutex.handle != 0);
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*)(mutex.handle);
-    ASSERT_DEBUG(entity->type.has(OS_MACOS_EntityType::Mutex));
+    ASSERT_DEBUG(entity->type == OS_MACOS_EntityType::Mutex);
     pthread_mutex_unlock(&entity->mutex);
 }
 
