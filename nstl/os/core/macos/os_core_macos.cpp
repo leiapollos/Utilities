@@ -116,7 +116,7 @@ static OS_Handle OS_thread_create(OS_ThreadFunc* func, void* arg) {
     entity->thread.args = arg;
     
     int ret = pthread_create(&entity->thread.handle, NULL, _OS_thread_entry_point, (void*)entity);
-    if(ret == -1) {
+    if (ret == -1) {
         free_OS_entity(entity);
         entity = 0;
     }

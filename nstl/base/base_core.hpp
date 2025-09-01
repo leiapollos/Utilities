@@ -73,6 +73,7 @@ debug_break(); \
 #define FUNCTION static
 #define EXTERN_C extern "C"
 
+
 // ////////////////////////
 // Address Sanitizer
 
@@ -90,15 +91,47 @@ EXTERN_C void __asan_unpoison_memory_region(void const volatile* addr, U32 size)
 
 #endif
 
+
 // //////////////////////////////
 // Misc
 
 #define MACRO_STR_2(s)      #s
-#define MACRO_STR(s)       MACRO_STR_2(s)
+#define MACRO_STR(s)        MACRO_STR_2(s)
 #define NAME_CONCAT_2(A, B) A##B
-#define NAME_CONCAT(A, B) NAME_CONCAT_2(A, B)
+#define NAME_CONCAT(A, B)   NAME_CONCAT_2(A, B)
 
 #define ARRAY_COUNT(arr) (sizeof(arr) / sizeof(arr[0]))
+
+
+// //////////////////////////////
+// Atomics
+
+#if defined(COMPILER_CLANG) || defined(COMPILER_GCC)
+#define MEMORY_ORDER_RELAXED __ATOMIC_RELAXED
+#define MEMORY_ORDER_ACQUIRE __ATOMIC_ACQUIRE
+#define MEMORY_ORDER_RELEASE __ATOMIC_RELEASE
+#define MEMORY_ORDER_ACQ_REL __ATOMIC_ACQ_REL
+#define MEMORY_ORDER_SEQ_CST __ATOMIC_SEQ_CST
+
+#define ATOMIC_LOAD(p, mo)          __atomic_load_n((p), (mo))
+#define ATOMIC_STORE(p, v, mo)      __atomic_store_n((p), (v), (mo))
+#define ATOMIC_EXCHANGE(p, v, mo)   __atomic_exchange_n((p), (v), (mo))
+#define ATOMIC_COMPARE_EXCHANGE(p, expected_ptr, desired, weak, s, f)       \
+                                    __atomic_compare_exchange_n((p), (expected_ptr), (desired), (weak), (s), (f))
+
+// Fetch ops
+#define ATOMIC_FETCH_ADD(p, v, mo) __atomic_fetch_add((p), (v), (mo))
+#define ATOMIC_FETCH_SUB(p, v, mo) __atomic_fetch_sub((p), (v), (mo))
+#define ATOMIC_FETCH_AND(p, v, mo) __atomic_fetch_and((p), (v), (mo))
+#define ATOMIC_FETCH_OR(p, v, mo)  __atomic_fetch_or((p), (v), (mo))
+#define ATOMIC_FETCH_XOR(p, v, mo) __atomic_fetch_xor((p), (v), (mo))
+
+// Fences
+#define ATOMIC_THREAD_FENCE(mo) __atomic_thread_fence((mo))
+#define ATOMIC_SIGNAL_FENCE(mo) __atomic_signal_fence((mo))
+#else
+#error "Atomics not implemented for this compiler"
+#endif
 
 
 // ////////////////////////
