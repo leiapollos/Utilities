@@ -148,9 +148,6 @@ namespace nstl {
     };
 } // namespace nstl
 
-#define Bit(n) (1ULL << (n))
-#define BitMask(start, end) ((Bit((end) - (start) + 1) - 1) << (start))
-
 template<typename E>
 struct bitmask_enum_traits {
     static constexpr bool enabled = false;
@@ -165,122 +162,121 @@ struct bitmask_enum_traits {
     };
 
 template<typename E>
-struct Flags;
-
-template<typename E>
-typename nstl::enable_if<bitmask_enum_traits<E>::enabled, Flags<E>>::type
-operator|(E lhs, E rhs) {
-    return Flags<E>(lhs) | rhs;
-}
-
-template<typename E>
-typename nstl::enable_if<bitmask_enum_traits<E>::enabled, Flags<E>>::type
-operator&(E lhs, E rhs) {
-    return Flags<E>(lhs) & rhs;
-}
-
-template<typename E>
-typename nstl::enable_if<bitmask_enum_traits<E>::enabled, Flags<E>>::type
-operator^(E lhs, E rhs) {
-    return Flags<E>(lhs) ^ rhs;
-}
-
-template<typename E>
-typename nstl::enable_if<bitmask_enum_traits<E>::enabled, Flags<E>>::type
-operator~(E val) {
-    return ~Flags<E>(val);
-}
-
-template<typename E>
 struct Flags {
     using underlying = typename bitmask_enum_traits<E>::underlying_type;
-    underlying value;
+    underlying value = 0; // raw bitfield, default zero
 
-    constexpr Flags() : value(0) {
+    constexpr Flags() = default;
+    constexpr Flags(E bits) : value(static_cast<underlying>(bits)) {
+        static_assert(bitmask_enum_traits<E>::enabled, "Flags used with non-enabled enum type; add ENABLE_BITMASK(YourEnum)");
     }
-
-    constexpr Flags(E flag) : value(static_cast<underlying>(flag)) {
-    }
-
-    constexpr explicit Flags(underlying v) : value(v) {
-    }
-
-    constexpr Flags<E>& set(Flags<E> flags, bool condition) {
-        if (condition) {
-            value |= flags.value;
-        } else {
-            value &= ~flags.value;
-        }
-        return *this;
-    }
-
-    constexpr Flags<E>& set(Flags<E> flags) {
-        value |= flags.value;
-        return *this;
-    }
-
-    constexpr Flags<E>& clear(Flags<E> flags) {
-        value &= ~flags.value;
-        return *this;
-    }
-
-    constexpr Flags<E>& toggle(Flags<E> flags) {
-        value ^= flags.value;
-        return *this;
-    }
-
-    constexpr bool has(Flags<E> flags) const {
-        return (value & flags.value) == flags.value;
-    }
-
-    constexpr bool any(Flags<E> flags) const {
-        return (value & flags.value) != 0;
-    }
-
-    constexpr Flags<E>& operator|=(Flags<E> other) {
-        value |= other.value;
-        return *this;
-    }
-
-    constexpr Flags<E>& operator&=(Flags<E> other) {
-        value &= other.value;
-        return *this;
-    }
-
-    constexpr Flags<E>& operator^=(Flags<E> other) {
-        value ^= other.value;
-        return *this;
-    }
-
-    constexpr Flags<E> operator|(Flags<E> other) const {
-        return Flags<E>(value | other.value);
-    }
-
-    constexpr Flags<E> operator&(Flags<E> other) const {
-        return Flags<E>(value & other.value);
-    }
-
-    constexpr Flags<E> operator^(Flags<E> other) const {
-        return Flags<E>(value ^ other.value);
-    }
-
-    constexpr Flags<E> operator~() const {
-        return Flags<E>(~value);
-    }
-
-    constexpr bool operator==(Flags<E> other) const {
-        return value == other.value;
-    }
-
-    constexpr bool operator!=(Flags<E> other) const {
-        return value != other.value;
-    }
-
-    constexpr explicit operator bool() const {
-        return value != 0;
-    }
-
-    constexpr explicit operator underlying() const {
-        return value;
-    }
+    constexpr explicit Flags(underlying v) : value(v) {}
 };
+
+template<typename E>
+using flags_u_t = typename bitmask_enum_traits<E>::underlying_type;
+
+template<typename E>
+constexpr flags_u_t<E> flags_cast(E v) {
+    static_assert(bitmask_enum_traits<E>::enabled, "Flags used with non-enabled enum type; add ENABLE_BITMASK_OPERATORS(YourEnum)");
+    return static_cast<flags_u_t<E>>(v);
+}
+
+template<typename E>
+constexpr bool flags_has(Flags<E> f, E bits) {
+    flags_u_t<E> u = flags_cast(bits);
+    return (f.value & u) == u;
+}
+
+template<typename E>
+constexpr bool flags_any(Flags<E> f, E bits) {
+    return (f.value & flags_cast(bits)) != 0;
+}
+
+template<typename E>
+constexpr bool flags_is_zero(Flags<E> f) {
+    return f.value == 0;
+}
+
+template<typename E>
+constexpr flags_u_t<E> flags_value(Flags<E> f) {
+    return f.value;
+}
+
+template<typename E>
+constexpr bool flags_eq(Flags<E> a, Flags<E> b) {
+    return a.value == b.value;
+}
+
+template<typename E>
+inline void flags_set(Flags<E>* f, E bits) {
+    f->value |= flags_cast(bits);
+}
+
+template<typename E>
+inline void flags_clear(Flags<E>* f, E bits) {
+    f->value &= ~flags_cast(bits);
+}
+
+template<typename E>
+inline void flags_toggle(Flags<E>* f, E bits) {
+    f->value ^= flags_cast(bits);
+}
+
+template<typename E>
+inline void flags_set_if(Flags<E>* f, E bits, bool condition) {
+    if (condition) {
+        flags_set(f, bits);
+    } else {
+        flags_clear(f, bits);
+    }
+}
+
+#define FLAGS_OP_ENABLE_IF template<typename E, typename nstl::enable_if<bitmask_enum_traits<E>::enabled, int>::type = 0>
+
+#define FLAGS_DEFINE_BINOPS(OP) \
+FLAGS_OP_ENABLE_IF \
+constexpr Flags<E> operator OP (Flags<E> a, Flags<E> b) { \
+    return Flags<E>{(typename Flags<E>::underlying)(a.value OP b.value)}; \
+} \
+FLAGS_OP_ENABLE_IF \
+constexpr Flags<E> operator OP (Flags<E> a, E b) { \
+    return Flags<E>{(typename Flags<E>::underlying)(a.value OP flags_cast(b))}; \
+} \
+FLAGS_OP_ENABLE_IF \
+constexpr Flags<E> operator OP (E a, Flags<E> b) { \
+    return Flags<E>{(typename Flags<E>::underlying)(flags_cast(a) OP b.value)}; \
+} \
+FLAGS_OP_ENABLE_IF \
+constexpr Flags<E> operator OP (E a, E b) { \
+    return Flags<E>{(typename Flags<E>::underlying)(flags_cast(a) OP flags_cast(b))}; \
+}
+
+#define FLAGS_DEFINE_COMPOUND_OP(OP) \
+template<typename E> \
+inline Flags<E>& operator OP##= (Flags<E>& a, Flags<E> b) { \
+    a.value = (typename Flags<E>::underlying)(a.value OP b.value); \
+    return a; \
+} \
+template<typename E> \
+inline Flags<E>& operator OP##= (Flags<E>& a, E b) { \
+    a.value = (typename Flags<E>::underlying)(a.value OP flags_cast(b)); \
+    return a; \
+}
+
+FLAGS_DEFINE_BINOPS(|)
+FLAGS_DEFINE_BINOPS(&)
+FLAGS_DEFINE_BINOPS(^)
+
+FLAGS_DEFINE_COMPOUND_OP(|)
+FLAGS_DEFINE_COMPOUND_OP(&)
+FLAGS_DEFINE_COMPOUND_OP(^)
+
+template<typename E, typename nstl::enable_if<bitmask_enum_traits<E>::enabled, int>::type = 0>
+constexpr Flags<E> operator~(Flags<E> a) {
+    return Flags<E>{(typename Flags<E>::underlying)(~a.value)};
+}
+template<typename E, typename nstl::enable_if<bitmask_enum_traits<E>::enabled, int>::type = 0>
+constexpr Flags<E> operator~(E a) {
+    return Flags<E>{(typename Flags<E>::underlying)(~flags_cast(a))};
+}

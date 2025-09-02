@@ -56,7 +56,7 @@ void* arena_push(Arena* arena, U64 size, U64 alignment) {
     U64 newPos = alignedPos + size;
 
     if (newPos > current->reserved) {
-        if (current->flags.has(DoChain)) {
+        if (flags_has(current->flags, DoChain)) {
             Arena* nextArena = arena_alloc(
                 .arenaSize = MAX(current->reserved, size),
                 .committedSize = size,
@@ -149,8 +149,8 @@ static void scratch_thread_init_with_params(const ArenaParameters& params) {
     }
 
     ArenaParameters p = params;
-    if (!p.flags.has(DoChain)) {
-        p.flags = p.flags | DoChain;
+    if (!flags_has(p.flags, DoChain)) {
+        flags_set(&p.flags, DoChain);
     }
 
     for (U32 i = 0; i < SCRATCH_TLS_ARENA_COUNT; ++i) {
