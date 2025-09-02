@@ -70,7 +70,6 @@ debug_break(); \
 // ////////////////////////
 // Keywords
 
-#define FUNCTION static
 #define EXTERN_C extern "C"
 
 
