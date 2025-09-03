@@ -101,6 +101,19 @@ EXTERN_C void __asan_unpoison_memory_region(void const volatile* addr, U32 size)
 
 #define ARRAY_COUNT(arr) (sizeof(arr) / sizeof(arr[0]))
 
+// //////////////////////////////
+// Cache line size
+
+#ifndef CACHE_LINE_SIZE
+#  if defined(PLATFORM_ARCH_ARM64)
+#    define CACHE_LINE_SIZE 256
+#  elif defined(PLATFORM_ARCH_X64)
+#    define CACHE_LINE_SIZE 64
+#  else
+#    define CACHE_LINE_SIZE 64
+#  endif
+#endif
+
 
 // //////////////////////////////
 // Atomics
