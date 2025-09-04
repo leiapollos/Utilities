@@ -13,8 +13,8 @@
 #include <iostream>
 #include <chrono>
 #include "nstl/spmc/spmc.hpp"
-#include "nstl/spmc/spmc.cpp"
 #include "nstl/thread_pool/thread_pool.hpp"
+#include "nstl/spmc/spmc.cpp"
 #include "nstl/thread_pool/thread_pool.cpp"
 
 struct opt {
@@ -66,14 +66,17 @@ void entry_point() {
         std::cout << "Starting Job System Tests" << std::endl;
         Arena* arena = arena_alloc(.arenaSize = MB(64));
         U32 workerCount = 4;
-        JobSystem* js = job_system_init(arena, workerCount);
+    JobSystem* js = job_system_init(arena, workerCount);
+    job_system_thread_bind(js, 0); // bind main thread as worker 0
 
     struct Counter { U64 value; };
     Counter counter{0};
 
         auto jobFunc = [](void* p) {
             Counter* c = (Counter*)p;
-            ATOMIC_FETCH_ADD(&c->value, 1, MEMORY_ORDER_RELAXED);
+            U64 val = ATOMIC_FETCH_ADD(&c->value, 1, MEMORY_ORDER_RELAXED);
+            usleep(10); // simulate work
+//            std::cout << "Job executed, counter: " << val << std::endl;
         };
 
         const int totalJobs = 32;
@@ -89,14 +92,11 @@ void entry_point() {
             jobs[i].func = (OS_ThreadFunc*)jobFunc;
             jobs[i].params = &counter;
             jobs[i].parent = &root;
-            jobs[i].remainingJobs = 0;
-            job_system_submit(js, &jobs[i]);
+            job_system_submit_main(js, &jobs[i]);
         }
 
         // Spin-wait for completion (test helper)
-        while (ATOMIC_LOAD(&root.remainingJobs, MEMORY_ORDER_RELAXED) > 0) {
-            sleep(0);
-        }
+    job_system_wait(js, &root);
         U64 count = ATOMIC_LOAD(&counter.value, MEMORY_ORDER_RELAXED);
         std::cout << "Executed jobs: " << count << " / " << totalJobs << std::endl;
 
@@ -106,18 +106,22 @@ void entry_point() {
         auto parentSpawn = [](void* p) {
             struct Payload { JobSystem* js; Counter* c; Job* root; };
             Payload* pl = (Payload*)p;
-            ATOMIC_FETCH_ADD(&pl->c->value, 1, MEMORY_ORDER_RELAXED);
+            U64 val = ATOMIC_FETCH_ADD(&pl->c->value, 1, MEMORY_ORDER_RELAXED);
+            std::cout << "Counter: " << val << std::endl;
             for (int k = 0; k < 2; ++k) {
                 Job* j = (Job*)arena_push(get_scratch(0,0).arena, sizeof(Job), alignof(Job));
                 memset(j, 0, sizeof(Job));
                 j->func = (OS_ThreadFunc*)[](void* p2){
                     Counter* c2 = (Counter*)p2;
-                    ATOMIC_FETCH_ADD(&c2->value, 1, MEMORY_ORDER_RELAXED);
+                    U64 val = ATOMIC_FETCH_ADD(&c2->value, 1, MEMORY_ORDER_RELAXED);
+                    std::cout << "Counter: " << val << std::endl;
+                    usleep(10); // simulate work
                 };
                 j->params = pl->c;
                 j->parent = pl->root;
-                job_system_submit(pl->js, j);
+                job_system_submit_main(pl->js, j);
             }
+            usleep(10); // simulate work
         };
         const int parents = 8;
         struct Payload { JobSystem* js; Counter* c; Job* root; } payload{js, &counter2, &root2};
@@ -127,12 +131,10 @@ void entry_point() {
             pj->func = (OS_ThreadFunc*)parentSpawn;
             pj->params = &payload;
             pj->parent = &root2;
-            job_system_submit(js, pj);
+            job_system_submit_main(js, pj);
         }
         // Wait
-        while (ATOMIC_LOAD(&root2.remainingJobs, MEMORY_ORDER_RELAXED) > 0) {
-            sleep(0);
-        }
+    job_system_wait(js, &root2);
         U64 count2 = ATOMIC_LOAD(&counter2.value, MEMORY_ORDER_RELAXED);
         std::cout << "Nested jobs executed: " << count2 << " (expected >= " << parents << ")" << std::endl;
 
