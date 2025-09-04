@@ -67,7 +67,7 @@ void entry_point() {
         Arena* arena = arena_alloc(.arenaSize = MB(64));
         U32 workerCount = 4;
     JobSystem* js = job_system_init(arena, workerCount);
-    job_system_thread_bind(js, 0); // bind main thread as worker 0
+        job_system_thread_bind(js, workerCount); // bind main thread as worker 0
 
     struct Counter { U64 value; };
     Counter counter{0};
@@ -107,21 +107,21 @@ void entry_point() {
             struct Payload { JobSystem* js; Counter* c; Job* root; };
             Payload* pl = (Payload*)p;
             U64 val = ATOMIC_FETCH_ADD(&pl->c->value, 1, MEMORY_ORDER_RELAXED);
-            std::cout << "Counter: " << val << std::endl;
-            for (int k = 0; k < 2; ++k) {
+//            std::cout << "Counter: " << val << std::endl;
+            for (int k = 0; k < 2000; ++k) {
                 Job* j = (Job*)arena_push(get_scratch(0,0).arena, sizeof(Job), alignof(Job));
                 memset(j, 0, sizeof(Job));
                 j->func = (OS_ThreadFunc*)[](void* p2){
                     Counter* c2 = (Counter*)p2;
                     U64 val = ATOMIC_FETCH_ADD(&c2->value, 1, MEMORY_ORDER_RELAXED);
-                    std::cout << "Counter: " << val << std::endl;
-                    usleep(10); // simulate work
+//                    std::cout << "Counter: " << val << std::endl;
+                    usleep(1000); // simulate work
                 };
                 j->params = pl->c;
                 j->parent = pl->root;
-                job_system_submit_main(pl->js, j);
+                job_system_submit(pl->js, j);
             }
-            usleep(10); // simulate work
+//            usleep(10); // simulate work
         };
         const int parents = 8;
         struct Payload { JobSystem* js; Counter* c; Job* root; } payload{js, &counter2, &root2};
