@@ -142,6 +142,10 @@ static void OS_thread_detach(OS_Handle thread) {
     free_OS_entity(entity);
 }
 
+static void OS_thread_yield() {
+    sched_yield();
+}
+
 static U32 OS_get_thread_id_u32() {
     U64 threadId64 = 0;
     pthread_threadid_np(0, &threadId64);
