@@ -49,54 +49,62 @@ void arena_release(Arena* arena) {
 }
 
 void* arena_push(Arena* arena, U64 size, U64 alignment) {
-    Arena* current = arena;
+    ASSERT_DEBUG(arena && "Arena must not be null");
     ASSERT_DEBUG(is_power_of_two(alignment) && "Alignment must be a power of two");
 
-    U64 alignedPos = align_pow2(current->pos, alignment);
-    U64 newPos = alignedPos + size;
+    Arena* current = arena->current ? arena->current : arena;
 
-    if (newPos > current->reserved) {
-        if (flags_has(current->flags, DoChain)) {
-            Arena* nextArena = arena_alloc(
-                .arenaSize = MAX(current->reserved, size),
-                .committedSize = size,
-                .flags = current->flags,
-            );
-            nextArena->startPos = current->startPos + current->reserved;
-            nextArena->prev = current;
-            current->current = nextArena;
-            current = nextArena;
-        } else {
+    for (;;) {
+        U64 alignedPos = align_pow2(current->pos, alignment);
+        U64 newPos = alignedPos + size;
+
+        if (newPos <= current->reserved) {
+            if (newPos > current->committed) {
+                auto sysInfo = OS_get_system_info();
+                U64 pageSize = sysInfo->pageSize;
+
+                U64 newCommitTarget = align_pow2(newPos, pageSize);
+                newCommitTarget = MIN(newCommitTarget, current->reserved);
+
+                U64 sizeToCommit = newCommitTarget - current->committed;
+                void* commitStartAddr = (U8*) current + current->committed;
+
+                OS_commit(commitStartAddr, sizeToCommit);
+                current->committed = newCommitTarget;
+                ASAN_POISON_MEMORY_REGION(commitStartAddr, sizeToCommit);
+            }
+
+            void* result = (U8*) current + alignedPos;
+            current->pos = newPos;
+            arena->current = current;
+            ASAN_UNPOISON_MEMORY_REGION(result, size);
+
+            if (UNLIKELY(result == nullptr)) {
+                ASSERT_DEBUG(false && "Allocation Failure");
+                OS_abort(1);
+            }
+
+            return result;
+        }
+
+        if (!flags_has(current->flags, DoChain)) {
             ASSERT_DEBUG((newPos <= current->reserved) && "Arena is out of bounds");
             OS_abort(1);
         }
+
+        U64 nextArenaSize = MAX(current->reserved, size + ARENA_HEADER_SIZE);
+        Arena* nextArena = arena_alloc(
+            .arenaSize = nextArenaSize,
+            .committedSize = nextArenaSize,
+            .flags = current->flags,
+        );
+        nextArena->startPos = current->startPos + current->reserved;
+        nextArena->prev = current;
+        current->current = nextArena;
+        current = nextArena;
+        arena->current = current;
+        // loop to recompute alignedPos/newPos for the new arena block
     }
-
-    if (newPos > current->committed) {
-        auto sysInfo = OS_get_system_info();
-        U64 pageSize = sysInfo->pageSize;
-
-        U64 newCommitTarget = align_pow2(newPos, pageSize);
-        newCommitTarget = MIN(newCommitTarget, current->reserved);
-
-        U64 sizeToCommit = newCommitTarget - current->committed;
-        void* commitStartAddr = (U8*) current + current->committed;
-
-        OS_commit(commitStartAddr, sizeToCommit);
-        current->committed = newCommitTarget;
-        ASAN_POISON_MEMORY_REGION(commitStartAddr, sizeToCommit);
-    }
-
-    void* result = (U8*) current + alignedPos;
-    current->pos = newPos;
-    ASAN_UNPOISON_MEMORY_REGION(result, size);
-
-    if (UNLIKELY(result == nullptr)) {
-        ASSERT_DEBUG(false && "Allocation Failure");
-        OS_abort(1);
-    }
-
-    return result;
 }
 
 void arena_pop_to(Arena* arena, U64 pos) {
