@@ -146,6 +146,16 @@ static void OS_thread_yield() {
     sched_yield();
 }
 
+static void OS_cpu_pause() {
+#if defined(PLATFORM_ARCH_ARM64)
+    __builtin_arm_yield();
+#elif defined(PLATFORM_ARCH_X64)
+    __builtin_ia32_pause();
+#else
+    __asm__ __volatile__("nop");
+#endif
+}
+
 static U32 OS_get_thread_id_u32() {
     U64 threadId64 = 0;
     pthread_threadid_np(0, &threadId64);

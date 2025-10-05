@@ -52,6 +52,7 @@ static OS_Handle OS_thread_create(OS_ThreadFunc* func, void* arg);
 static B32 OS_thread_join(OS_Handle thread);
 static void OS_thread_detach(OS_Handle thread);
 static void OS_thread_yield();
+static void OS_cpu_pause();
 
 static U32 OS_get_thread_id_u32();
 static OS_Handle OS_mutex_create();
