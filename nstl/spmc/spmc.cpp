@@ -5,57 +5,56 @@
 // Bounded work-stealing deque implementation (Chase-Lev).
 // References: Chase & Lev (SPAA'05).
 
-static
-WSDeque* wsdq_create(Arena* arena, U64 capacity) {
-    ASSERT_DEBUG(capacity != 0 && is_power_of_two(capacity));
+#define WSDQ_SLOT(dq, index) ((dq)->buffer + (((index) & (dq)->mask) * (dq)->elementSize))
 
-    WSDeque* dq = (WSDeque*)arena_push(arena, sizeof(WSDeque), CACHE_LINE_SIZE);
+static
+WSDeque* wsdq_create(Arena* arena, U64 capacity, U64 elementSize) {
+    ASSERT_DEBUG(capacity != 0 && is_power_of_two(capacity));
+    ASSERT_DEBUG(elementSize > 0);
+
+    WSDeque* dq = (WSDeque*) arena_push(arena, sizeof(WSDeque), CACHE_LINE_SIZE);
     ASSERT_DEBUG(dq);
 
     dq->capacity = capacity;
     dq->mask = capacity - 1u;
-    dq->buffer = (void**)arena_push(arena, capacity * sizeof(uintptr), CACHE_LINE_SIZE);
+    dq->elementSize = elementSize;
+    dq->buffer = (U8*) arena_push(arena, capacity * elementSize, CACHE_LINE_SIZE);
     ASSERT_DEBUG(dq->buffer);
 
-    for (U64 i = 0; i < capacity; ++i) {
-        dq->buffer[i] = nullptr;
-    }
+    memset(dq->buffer, 0, capacity * elementSize);
 
     ATOMIC_STORE(&dq->bottom, 0u, MEMORY_ORDER_RELAXED);
     ATOMIC_STORE(&dq->top, 0u, MEMORY_ORDER_RELAXED);
-
     return dq;
 }
 
 static
-B32 wsdq_push(WSDeque* dq, void* value) {
+B32 wsdq_push(WSDeque* dq, const void* value) {
     ASSERT_DEBUG(dq);
     ASSERT_DEBUG(value != nullptr);
 
     U64 b = ATOMIC_LOAD(&dq->bottom, MEMORY_ORDER_RELAXED);
     U64 t = ATOMIC_LOAD(&dq->top, MEMORY_ORDER_ACQUIRE);
-    void** buffer = dq->buffer;
 
     if ((b - t) >= dq->capacity) {
+        ASSERT_DEBUG(false && "WSDeque overflow");
         return 0;
     }
 
-    buffer[b & dq->mask] = value;
+    U8* slot = WSDQ_SLOT(dq, b);
+    memcpy(slot, value, dq->elementSize);
     ATOMIC_STORE(&dq->bottom, b + 1u, MEMORY_ORDER_RELEASE);
     return 1;
 }
 
 static
-B32 wsdq_pop(WSDeque* dq, void** out_value) {
+B32 wsdq_pop(WSDeque* dq, void* out_value) {
     ASSERT_DEBUG(dq);
     ASSERT_DEBUG(out_value);
-
-    void** buffer = dq->buffer;
 
     U64 b_cur = ATOMIC_LOAD(&dq->bottom, MEMORY_ORDER_RELAXED);
     U64 t = ATOMIC_LOAD(&dq->top, MEMORY_ORDER_ACQUIRE);
     if (t >= b_cur) {
-        *out_value = nullptr;
         return 0;
     }
 
@@ -65,7 +64,8 @@ B32 wsdq_pop(WSDeque* dq, void** out_value) {
     t = ATOMIC_LOAD(&dq->top, MEMORY_ORDER_RELAXED);
 
     if (t <= b) {
-        void* x = buffer[b & dq->mask];
+        U8* slot = WSDQ_SLOT(dq, b);
+        memcpy(out_value, slot, dq->elementSize);
 
         if (t == b) {
             U64 expected = t;
@@ -75,24 +75,21 @@ B32 wsdq_pop(WSDeque* dq, void** out_value) {
                                          false,
                                          MEMORY_ORDER_SEQ_CST,
                                          MEMORY_ORDER_RELAXED)) {
-                *out_value = nullptr;
                 ATOMIC_STORE(&dq->bottom, b + 1u, MEMORY_ORDER_RELAXED);
                 return 0;
             }
             ATOMIC_STORE(&dq->bottom, b + 1u, MEMORY_ORDER_RELAXED);
         }
 
-        *out_value = x;
         return 1;
     }
 
     ATOMIC_STORE(&dq->bottom, b + 1u, MEMORY_ORDER_RELAXED);
-    *out_value = nullptr;
     return 0;
 }
 
 static
-B32 wsdq_steal(WSDeque* dq, void** out_value) {
+B32 wsdq_steal(WSDeque* dq, void* out_value) {
     ASSERT_DEBUG(dq);
     ASSERT_DEBUG(out_value);
 
@@ -100,7 +97,7 @@ B32 wsdq_steal(WSDeque* dq, void** out_value) {
     U64 b = ATOMIC_LOAD(&dq->bottom, MEMORY_ORDER_ACQUIRE);
 
     if (t < b) {
-        void* x = dq->buffer[t & dq->mask];
+        U8* slot = WSDQ_SLOT(dq, t);
         U64 expected = t;
         if (ATOMIC_COMPARE_EXCHANGE(&dq->top,
                                     &expected,
@@ -108,12 +105,11 @@ B32 wsdq_steal(WSDeque* dq, void** out_value) {
                                     false,
                                     MEMORY_ORDER_SEQ_CST,
                                     MEMORY_ORDER_RELAXED)) {
-            *out_value = x;
+            memcpy(out_value, slot, dq->elementSize);
             return 1;
         }
     }
 
-    *out_value = nullptr;
     return 0;
 }
 
@@ -122,5 +118,5 @@ S64 wsdq_count_approx(const WSDeque* dq) {
     U64 b = ATOMIC_LOAD(&dq->bottom, MEMORY_ORDER_RELAXED);
     U64 t = ATOMIC_LOAD(&dq->top, MEMORY_ORDER_RELAXED);
     U64 cnt = (b >= t) ? (b - t) : 0u;
-    return (S64)cnt;
+    return (S64) cnt;
 }
