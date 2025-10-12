@@ -194,6 +194,109 @@ static void OS_mutex_unlock(OS_Handle mutex) {
 
 
 // ////////////////////////
+// File I/O
+
+static OS_Handle OS_file_open(const char* path, OS_FileOpenMode mode) {
+    int flags = 0;
+    // Permission bits for newly created files: 0666 = rw-rw-rw-.
+    int modeBits = 0666;
+
+    if (mode == OS_FileOpenMode_Read) {
+        flags |= O_RDONLY;
+    } else if (mode == OS_FileOpenMode_Write) {
+        flags |= O_WRONLY;
+    } else if (mode == OS_FileOpenMode_Create) {
+        flags |= (O_CREAT | O_WRONLY | O_TRUNC);
+    } else {
+        ASSERT_ALWAYS(false && "Invalid OS_FileOpenMode");
+    }
+
+    int fd = open(path, flags, modeBits);
+    if (fd == -1) {
+        return (OS_Handle){0};
+    }
+
+    OS_MACOS_Entity* fileEntity = alloc_OS_entity();
+    fileEntity->type = OS_MACOS_EntityType::File;
+    fileEntity->file.fd = fd;
+    OS_Handle handle = {(U64*)fileEntity};
+    return handle;
+}
+
+static void OS_file_close(OS_Handle fileHandle) {
+    if (!fileHandle.handle) return;
+    OS_MACOS_Entity* entity = (OS_MACOS_Entity*)fileHandle.handle;
+    if (entity->type == OS_MACOS_EntityType::File) {
+        if (entity->file.fd != -1) close(entity->file.fd);
+    }
+    free_OS_entity(entity);
+}
+
+static U64 OS_file_size(OS_Handle fileHandle) {
+    OS_MACOS_Entity* entity = (OS_MACOS_Entity*)fileHandle.handle;
+    ASSERT_DEBUG(entity && entity->type == OS_MACOS_EntityType::File);
+    struct stat fileStat;
+    if (fstat(entity->file.fd, &fileStat) != 0) return 0;
+    return (U64)fileStat.st_size;
+}
+
+static void OS_file_set_hints(OS_Handle fileHandle, U64 hints) {
+    OS_MACOS_Entity* entity = (OS_MACOS_Entity*)fileHandle.handle;
+    ASSERT_DEBUG(entity && entity->type == OS_MACOS_EntityType::File);
+    int enableValue = 1, disableValue = 0;
+    fcntl(entity->file.fd, F_NOCACHE, FLAGS_HAS(hints, OS_FileHint_NoCache) ? enableValue : disableValue);
+    fcntl(entity->file.fd, F_RDAHEAD, FLAGS_HAS(hints, OS_FileHint_Sequential) ? enableValue : disableValue);
+}
+
+static OS_FileMapping OS_file_map_ro(OS_Handle fileHandle) {
+    OS_FileMapping mapping = {0,0};
+    OS_MACOS_Entity* entity = (OS_MACOS_Entity*)fileHandle.handle;
+    ASSERT_DEBUG(entity && entity->type == OS_MACOS_EntityType::File);
+    U64 length = OS_file_size(fileHandle);
+    if (length == 0) return mapping;
+    void* mappedPtr = mmap(0, length, PROT_READ, MAP_PRIVATE, entity->file.fd, 0);
+    if (mappedPtr == MAP_FAILED) return mapping;
+    mapping.ptr = mappedPtr; mapping.length = length;
+    return mapping;
+}
+
+static void OS_file_unmap(OS_FileMapping mapping) {
+    if (mapping.ptr && mapping.length) munmap(mapping.ptr, mapping.length);
+}
+
+static U64 OS_file_read(OS_Handle fileHandle, RangeU64 range, void* dst) {
+    OS_MACOS_Entity* entity = (OS_MACOS_Entity*)fileHandle.handle;
+    ASSERT_DEBUG(entity && entity->type == OS_MACOS_EntityType::File);
+    U8* destinationBytes = (U8*)dst;
+    U64 totalTransferred = 0;
+    U64 bytesToTransfer = (range.max >= range.min) ? (range.max - range.min) : 0;
+    while (totalTransferred < bytesToTransfer) {
+        size_t chunkSize = (size_t)MIN(bytesToTransfer - totalTransferred, (U64)SSIZE_MAX);
+        ssize_t bytesRead = pread(entity->file.fd, destinationBytes + totalTransferred, chunkSize, (off_t)(range.min + totalTransferred));
+        if (bytesRead < 0) return totalTransferred;
+        if (bytesRead == 0) break;
+        totalTransferred += (U64)bytesRead;
+    }
+    return totalTransferred;
+}
+
+static U64 OS_file_write(OS_Handle fileHandle, RangeU64 range, const void* src) {
+    OS_MACOS_Entity* entity = (OS_MACOS_Entity*)fileHandle.handle;
+    ASSERT_DEBUG(entity && entity->type == OS_MACOS_EntityType::File);
+    const U8* sourceBytes = (const U8*)src;
+    U64 totalTransferred = 0;
+    U64 bytesToTransfer = (range.max >= range.min) ? (range.max - range.min) : 0;
+    while (totalTransferred < bytesToTransfer) {
+        size_t chunkSize = (size_t)MIN(bytesToTransfer - totalTransferred, (U64)SSIZE_MAX);
+        ssize_t bytesWritten = pwrite(entity->file.fd, sourceBytes + totalTransferred, chunkSize, (off_t)(range.min + totalTransferred));
+        if (bytesWritten < 0) return totalTransferred;
+        if (bytesWritten == 0) break;
+        totalTransferred += (U64)bytesWritten;
+    }
+    return totalTransferred;
+}
+
+// ////////////////////////
 // State
 
 static OS_MACOS_Entity* alloc_OS_entity() {

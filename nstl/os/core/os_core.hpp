@@ -62,6 +62,36 @@ static void OS_mutex_unlock(OS_Handle mutex);
 
 
 // ////////////////////////
+// File I/O
+
+enum OS_FileOpenMode : U32 {
+    OS_FileOpenMode_Read   = 0,
+    OS_FileOpenMode_Write  = 1,
+    OS_FileOpenMode_Create = 2,
+};
+
+struct OS_FileMapping {
+    void* ptr;
+    U64 length;
+};
+
+static OS_Handle OS_file_open(const char* path, OS_FileOpenMode mode);
+static void OS_file_close(OS_Handle h);
+static U64 OS_file_read(OS_Handle h, RangeU64 range, void* dst);
+static U64 OS_file_write(OS_Handle h, RangeU64 range, const void* src);
+static U64 OS_file_size(OS_Handle h);
+static OS_FileMapping OS_file_map_ro(OS_Handle h);
+static void OS_file_unmap(OS_FileMapping m);
+
+enum OS_FileHintFlags : U64 {
+    OS_FileHint_None       = 0,
+    OS_FileHint_NoCache    = (1ull << 0),
+    OS_FileHint_Sequential = (1ull << 1),
+};
+static void OS_file_set_hints(OS_Handle h, U64 hints);
+
+
+// ////////////////////////
 // Entry Point
 
 static void entry_point();

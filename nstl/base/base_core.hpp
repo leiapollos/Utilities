@@ -102,6 +102,14 @@ EXTERN_C void __asan_unpoison_memory_region(void const volatile* addr, U32 size)
 #define ARRAY_COUNT(arr) (sizeof(arr) / sizeof(arr[0]))
 
 // //////////////////////////////
+// Ranges
+
+struct RangeU64 {
+    U64 min;
+    U64 max;
+};
+
+// //////////////////////////////
 // Cache line size
 
 #ifndef CACHE_LINE_SIZE

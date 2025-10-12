@@ -6,6 +6,9 @@
 
 #include <sys/mman.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <limits.h>
 #include <cstdlib>
 #include <math.h>
 #include <time.h>
@@ -24,6 +27,7 @@ enum class OS_MACOS_EntityType : U64 {
     Invalid = (0),
     Thread  = (1 << 0),
     Mutex   = (2 << 0),
+    File    = (3 << 0),
 };
 
 struct OS_MACOS_Entity {
@@ -36,6 +40,9 @@ struct OS_MACOS_Entity {
             void* args;
         } thread;
         pthread_mutex_t mutex;
+        struct {
+            int fd;
+        } file;
     };
 };
 
