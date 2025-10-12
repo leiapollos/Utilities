@@ -11,12 +11,11 @@ enum ArenaFlags : U64 {
     None = 0,
     DoChain = (1 << 0),
 };
-ENABLE_BITMASK_OPERATORS(ArenaFlags)
 
 struct ArenaParameters {
     U64 arenaSize = MB(4);
     U64 committedSize = KB(32);
-    Flags<ArenaFlags> flags = DoChain;
+    U64 flags = DoChain;
 };
 
 struct Arena {
@@ -24,7 +23,7 @@ struct Arena {
     U64 committed;
     U64 pos;
     U64 startPos; // This position is relative to the total arena size, including all blocks
-    Flags<ArenaFlags> flags;
+    U64 flags;
     Arena* prev;
     Arena* current;
 };

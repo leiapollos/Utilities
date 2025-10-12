@@ -87,7 +87,7 @@ void* arena_push(Arena* arena, U64 size, U64 alignment) {
             return result;
         }
 
-        if (!flags_has(current->flags, DoChain)) {
+        if (!FLAGS_HAS(current->flags, DoChain)) {
             ASSERT_DEBUG((newPos <= current->reserved) && "Arena is out of bounds");
             OS_abort(1);
         }
@@ -157,8 +157,8 @@ static void scratch_thread_init_with_params(const ArenaParameters& params) {
     }
 
     ArenaParameters p = params;
-    if (!flags_has(p.flags, DoChain)) {
-        flags_set(&p.flags, DoChain);
+    if (!FLAGS_HAS(p.flags, DoChain)) {
+        FLAGS_SET(&p.flags, DoChain);
     }
 
     for (U32 i = 0; i < SCRATCH_TLS_ARENA_COUNT; ++i) {
