@@ -46,7 +46,7 @@ struct OS_Handle {
     U64* handle;
 };
 
-typedef void OS_ThreadFunc(void *ptr);
+typedef void OS_ThreadFunc(void* ptr);
 
 static OS_Handle OS_thread_create(OS_ThreadFunc* func, void* arg);
 static B32 OS_thread_join(OS_Handle thread);
@@ -65,8 +65,8 @@ static void OS_mutex_unlock(OS_Handle mutex);
 // File I/O
 
 enum OS_FileOpenMode : U32 {
-    OS_FileOpenMode_Read   = 0,
-    OS_FileOpenMode_Write  = 1,
+    OS_FileOpenMode_Read = 0,
+    OS_FileOpenMode_Write = 1,
     OS_FileOpenMode_Create = 2,
 };
 
@@ -84,10 +84,11 @@ static OS_FileMapping OS_file_map_ro(OS_Handle h);
 static void OS_file_unmap(OS_FileMapping m);
 
 enum OS_FileHintFlags : U64 {
-    OS_FileHint_None       = 0,
-    OS_FileHint_NoCache    = (1ull << 0),
+    OS_FileHint_None = 0,
+    OS_FileHint_NoCache = (1ull << 0),
     OS_FileHint_Sequential = (1ull << 1),
 };
+
 static void OS_file_set_hints(OS_Handle h, U64 hints);
 
 
