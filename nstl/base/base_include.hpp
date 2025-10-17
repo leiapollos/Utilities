@@ -8,8 +8,9 @@
 
 #include "base_typedefs.hpp"
 #include "base_core.hpp"
-#include "base_profiling.hpp"
-#include "base_random.hpp"
 #include "base_math.hpp"
 #include "base_arena.hpp"
+#include "base_string.hpp"
+#include "base_profiling.hpp"
+#include "base_random.hpp"
 #include "base_entry_point.hpp"

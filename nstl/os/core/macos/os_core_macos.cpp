@@ -271,16 +271,43 @@ static void OS_file_unmap(OS_FileMapping mapping) {
         munmap(mapping.ptr, mapping.length);
 }
 
+static bool OS_is_seekable(int fd) {
+    return lseek(fd, 0, SEEK_CUR) != -1;
+}
+
 static U64 OS_file_read(OS_Handle fileHandle, RangeU64 range, void* dst) {
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*) fileHandle.handle;
     ASSERT_DEBUG(entity && entity->type == OS_MACOS_EntityType::File);
+    ASSERT_DEBUG(OS_is_seekable(entity->file.fd));
+
     U8* destinationBytes = (U8*) dst;
     U64 totalTransferred = 0;
     U64 bytesToTransfer = (range.max >= range.min) ? (range.max - range.min) : 0;
+
     while (totalTransferred < bytesToTransfer) {
         size_t chunkSize = (size_t) MIN(bytesToTransfer - totalTransferred, (U64)SSIZE_MAX);
-        ssize_t bytesRead = pread(entity->file.fd, destinationBytes + totalTransferred, chunkSize,
-                                  (off_t) (range.min + totalTransferred));
+        ssize_t bytesRead = pread(entity->file.fd, destinationBytes + totalTransferred,
+                                  chunkSize, (off_t) (range.min + totalTransferred));
+        if (bytesRead < 0)
+            return totalTransferred;
+        if (bytesRead == 0)
+            break;
+        totalTransferred += (U64) bytesRead;
+    }
+    return totalTransferred;
+}
+
+static U64 OS_file_read(OS_Handle fileHandle, U64 size, void* dst) {
+    OS_MACOS_Entity* entity = (OS_MACOS_Entity*) fileHandle.handle;
+    ASSERT_DEBUG(entity && entity->type == OS_MACOS_EntityType::File);
+    ASSERT_DEBUG(!OS_is_seekable(entity->file.fd));
+
+    U8* destinationBytes = (U8*) dst;
+    U64 totalTransferred = 0;
+
+    while (totalTransferred < size) {
+        size_t chunkSize = (size_t) MIN(size - totalTransferred, (U64)SSIZE_MAX);
+        ssize_t bytesRead = read(entity->file.fd, destinationBytes + totalTransferred, chunkSize);
         if (bytesRead < 0)
             return totalTransferred;
         if (bytesRead == 0)
@@ -293,13 +320,16 @@ static U64 OS_file_read(OS_Handle fileHandle, RangeU64 range, void* dst) {
 static U64 OS_file_write(OS_Handle fileHandle, RangeU64 range, const void* src) {
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*) fileHandle.handle;
     ASSERT_DEBUG(entity && entity->type == OS_MACOS_EntityType::File);
+    ASSERT_DEBUG(OS_is_seekable(entity->file.fd));
+
     const U8* sourceBytes = (const U8*) src;
     U64 totalTransferred = 0;
     U64 bytesToTransfer = (range.max >= range.min) ? (range.max - range.min) : 0;
+
     while (totalTransferred < bytesToTransfer) {
         size_t chunkSize = (size_t) MIN(bytesToTransfer - totalTransferred, (U64)SSIZE_MAX);
-        ssize_t bytesWritten = pwrite(entity->file.fd, sourceBytes + totalTransferred, chunkSize,
-                                      (off_t) (range.min + totalTransferred));
+        ssize_t bytesWritten = pwrite(entity->file.fd, sourceBytes + totalTransferred,
+                                      chunkSize, (off_t) (range.min + totalTransferred));
         if (bytesWritten < 0)
             return totalTransferred;
         if (bytesWritten == 0)
@@ -308,6 +338,27 @@ static U64 OS_file_write(OS_Handle fileHandle, RangeU64 range, const void* src) 
     }
     return totalTransferred;
 }
+
+static U64 OS_file_write(OS_Handle fileHandle, U64 size, const void* src) {
+    OS_MACOS_Entity* entity = (OS_MACOS_Entity*) fileHandle.handle;
+    ASSERT_DEBUG(entity && entity->type == OS_MACOS_EntityType::File);
+    ASSERT_DEBUG(!OS_is_seekable(entity->file.fd));
+
+    const U8* sourceBytes = (const U8*) src;
+    U64 totalTransferred = 0;
+
+    while (totalTransferred < size) {
+        size_t chunkSize = (size_t) MIN(size - totalTransferred, (U64)SSIZE_MAX);
+        ssize_t bytesWritten = write(entity->file.fd, sourceBytes + totalTransferred, chunkSize);
+        if (bytesWritten < 0)
+            return totalTransferred;
+        if (bytesWritten == 0)
+            break;
+        totalTransferred += (U64) bytesWritten;
+    }
+    return totalTransferred;
+}
+
 
 // ////////////////////////
 // State

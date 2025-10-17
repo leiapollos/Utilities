@@ -38,6 +38,9 @@ static void* arena_push(Arena* arena, U64 size, U64 alignment = sizeof(void*));
 static void arena_pop_to(Arena* arena, U64 pos);
 static U64 arena_get_pos(Arena* arena);
 
+#define ARENA_PUSH_ARRAY_ALIGNED(arena, T, count, alignment) (T*)arena_push(arena, sizeof(T)*count, alignment)
+#define ARENA_PUSH_ARRAY(arena, T, count) ARENA_PUSH_ARRAY_ALIGNED(arena, T, count, alignof(T))
+
 
 // ////////////////////////
 // Temp

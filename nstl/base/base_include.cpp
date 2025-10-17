@@ -3,6 +3,7 @@
 //
 
 #include "base_core.cpp"
+#include "base_string.cpp"
 #include "base_profiling.cpp"
 #include "base_random.cpp"
 #include "base_math.cpp"

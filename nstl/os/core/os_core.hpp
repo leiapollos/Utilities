@@ -78,7 +78,9 @@ struct OS_FileMapping {
 static OS_Handle OS_file_open(const char* path, OS_FileOpenMode mode);
 static void OS_file_close(OS_Handle h);
 static U64 OS_file_read(OS_Handle h, RangeU64 range, void* dst);
+static U64 OS_file_read(OS_Handle fileHandle, U64 size, void* dst);
 static U64 OS_file_write(OS_Handle h, RangeU64 range, const void* src);
+static U64 OS_file_write(OS_Handle h, U64 size, const void* src);
 static U64 OS_file_size(OS_Handle h);
 static OS_FileMapping OS_file_map_ro(OS_Handle h);
 static void OS_file_unmap(OS_FileMapping m);

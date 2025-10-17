@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <string.h>
+
 // ////////////////////////
 // Assert
 
@@ -99,7 +101,14 @@ EXTERN_C void __asan_unpoison_memory_region(void const volatile* addr, U32 size)
 #define NAME_CONCAT_2(A, B) A##B
 #define NAME_CONCAT(A, B)   NAME_CONCAT_2(A, B)
 
-#define ARRAY_COUNT(arr) (sizeof(arr) / sizeof(arr[0]))
+#define ARRAY_COUNT(arr)        (sizeof(arr) / sizeof(arr[0]))
+
+#define MEMCPY(dst, src, len)   memcpy(dst, src, len)
+#define MEMMOVE(dst, src, len)  memmove(dst, src, len)
+#define MEMCMP(a, b, len)       memcmp(a, b, len)
+#define MEMSET(dst, v, len)     memset(dst, v, len)
+
+#define C_STR_LEN(ptr)          strlen(ptr)
 
 // //////////////////////////////
 // Ranges

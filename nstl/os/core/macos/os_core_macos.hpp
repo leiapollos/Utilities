@@ -19,10 +19,6 @@
 // ////////////////////////
 // State
 
-struct OS_Mutex {
-    pthread_mutex_t m;
-};
-
 enum class OS_MACOS_EntityType : U64 {
     Invalid = (0),
     Thread = (1 << 0),
