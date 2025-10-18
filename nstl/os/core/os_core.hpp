@@ -84,6 +84,7 @@ static U64 OS_file_write(OS_Handle h, U64 size, const void* src);
 static U64 OS_file_size(OS_Handle h);
 static OS_FileMapping OS_file_map_ro(OS_Handle h);
 static void OS_file_unmap(OS_FileMapping m);
+static OS_Handle OS_get_log_handle();
 
 enum OS_FileHintFlags : U64 {
     OS_FileHint_None = 0,

@@ -15,7 +15,7 @@ static StringU8 str8_cpy(Arena* arena, StringU8 src) {
     return dst;
 }
 
-static StringU8 str8_cstring_cpy(Arena* arena, char* source) {
+static StringU8 str8_cstring_cpy(Arena* arena, const char* source) {
     StringU8 dst;
     U64 length = C_STR_LEN(source);
     dst.length = length;
@@ -25,7 +25,7 @@ static StringU8 str8_cstring_cpy(Arena* arena, char* source) {
     return dst;
 }
 
-static StringU8 str8_cstring(char* cstr) {
+static StringU8 str8_cstring(const char* cstr) {
     StringU8 str;
     U64 length = C_STR_LEN(cstr);
     str.length = length;

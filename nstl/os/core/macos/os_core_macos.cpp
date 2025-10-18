@@ -359,6 +359,19 @@ static U64 OS_file_write(OS_Handle fileHandle, U64 size, const void* src) {
     return totalTransferred;
 }
 
+static OS_Handle OS_get_log_handle() {
+    static OS_MACOS_Entity entity {
+        .type = OS_MACOS_EntityType::File,
+        .file {
+            .fd = STDOUT_FILENO,
+        },
+    };
+    static OS_Handle handle {
+        .handle = (U64*)&entity,
+    };
+    return handle;
+}
+
 
 // ////////////////////////
 // State

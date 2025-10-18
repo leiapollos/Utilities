@@ -13,5 +13,5 @@ static void log_init(Arena* logArena) {
 }
 
 static void log(LogLevel level, StringU8 str) {
-
+    OS_file_write(OS_get_log_handle(), str.length, str.data);
 }
