@@ -50,6 +50,15 @@ void work(void*arg) {
 }
 
 void entry_point() {
+    char test[4];
+    test[0] = 'a';
+    test[1] = 'b';
+    test[2] = '\n';
+    test[3] = '\0';
+    log(LogLevel_Debug, str8_cstring(test));
+    set_log_level(LogLevel_Warning);
+    log(LogLevel_Error, str8_cstring("123\n"));
+
     func(.c = 'A', .val = 42, .skip = true, .b2 = false,);
     int arg = 123;
     OS_Handle handle = OS_thread_create(work, &arg);

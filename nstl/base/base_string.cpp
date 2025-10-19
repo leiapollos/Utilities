@@ -32,3 +32,14 @@ static StringU8 str8_cstring(const char* cstr) {
     str.data = (U8*)cstr;
     return str;
 }
+
+static StringU8 str8_concat(Arena* arena, StringU8 a, StringU8 b) {
+    StringU8 res;
+    U64 totalLength = a.length + b.length;
+    res.length = totalLength;
+    res.data = ARENA_PUSH_ARRAY(arena, U8, totalLength + 1);
+    MEMMOVE(res.data, a.data, a.length);
+    MEMMOVE(res.data + a.length, b.data, b.length);
+    res.data[totalLength] = '\0';
+    return res;
+}

@@ -15,3 +15,4 @@ struct StringU8 {
 static StringU8 str8(Arena* arena, StringU8 source);
 static StringU8 str8_cstring_cpy(Arena* arena, const char* source);
 static StringU8 str8_cstring(const char* str);
+static StringU8 str8_concat(Arena* arena, StringU8 a, StringU8 b);
