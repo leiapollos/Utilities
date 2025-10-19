@@ -86,6 +86,8 @@ static OS_FileMapping OS_file_map_ro(OS_Handle h);
 static void OS_file_unmap(OS_FileMapping m);
 static OS_Handle OS_get_log_handle();
 
+bool OS_terminal_supports_color();
+
 enum OS_FileHintFlags : U64 {
     OS_FileHint_None = 0,
     OS_FileHint_NoCache = (1ull << 0),

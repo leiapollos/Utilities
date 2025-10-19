@@ -18,3 +18,5 @@ static StringU8 str8_cstring(const char* str);
 static StringU8 str8_concat_(Arena* arena, StringU8 a, StringU8 b);
 
 #define str8_concat(arena, ...) str8_concat_(arena, __VA_ARGS__, (StringU8){0})
+
+#define STR8_EMPTY() (str8_cstring(""))

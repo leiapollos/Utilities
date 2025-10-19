@@ -4,6 +4,9 @@
 
 
 static void base_entry_point(int argc, char **argv) {
+    Arena* logArena = arena_alloc();
+    log_init(logArena);
+
     entry_point();
 }
 

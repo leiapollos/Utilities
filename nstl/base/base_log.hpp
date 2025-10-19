@@ -15,8 +15,12 @@ enum LogLevel {
     LogLevel_Fatal,
 };
 
+struct LogLevelInfo {
+    StringU8 name;
+    StringU8 colorCode;    // ANSI color escape
+};
+
 static void log_init(Arena* logArena);
 static void set_log_level(LogLevel level);
-static StringU8 get_log_level_str(LogLevel level);
 
 static void log(LogLevel level, StringU8 str);

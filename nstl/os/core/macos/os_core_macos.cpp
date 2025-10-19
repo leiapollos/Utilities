@@ -360,16 +360,29 @@ static U64 OS_file_write(OS_Handle fileHandle, U64 size, const void* src) {
 }
 
 static OS_Handle OS_get_log_handle() {
-    static OS_MACOS_Entity entity {
+    static OS_MACOS_Entity entity{
         .type = OS_MACOS_EntityType::File,
-        .file {
+        .file{
             .fd = STDOUT_FILENO,
         },
     };
-    static OS_Handle handle {
-        .handle = (U64*)&entity,
+    static OS_Handle handle{
+        .handle = (U64*) &entity,
     };
     return handle;
+}
+
+bool OS_terminal_supports_color() {
+    if (getenv("NO_COLOR") != NULL)
+        return false;
+    if (!isatty(STDOUT_FILENO))
+        return false;
+
+    const char* term = getenv("TERM");
+    if (term && strcmp(term, "dumb") == 0)
+        return false;
+
+    return true;
 }
 
 
