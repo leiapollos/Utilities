@@ -33,13 +33,38 @@ static StringU8 str8_cstring(const char* cstr) {
     return str;
 }
 
-static StringU8 str8_concat(Arena* arena, StringU8 a, StringU8 b) {
-    StringU8 res;
-    U64 totalLength = a.length + b.length;
-    res.length = totalLength;
-    res.data = ARENA_PUSH_ARRAY(arena, U8, totalLength + 1);
-    MEMMOVE(res.data, a.data, a.length);
-    MEMMOVE(res.data + a.length, b.data, b.length);
-    res.data[totalLength] = '\0';
-    return res;
+static StringU8 str8_concat_(Arena* arena, StringU8 first, ...) {
+    va_list args;
+
+    va_start(args, first);
+    U64 totalLength = first.length;
+    StringU8 str;
+
+    while (true) {
+        str = va_arg(args, StringU8);
+        if (str.data == nullptr) break;
+        totalLength += str.length;
+    }
+    va_end(args);
+
+    StringU8 dst;
+    dst.length = totalLength;
+    dst.data = ARENA_PUSH_ARRAY(arena, U8, totalLength + 1);
+
+    va_start(args, first);
+    U64 offset = 0;
+
+    MEMMOVE(dst.data + offset, first.data, first.length);
+    offset += first.length;
+
+    while (1) {
+        str = va_arg(args, StringU8);
+        if (str.data == nullptr) break;
+        MEMMOVE(dst.data + offset, str.data, str.length);
+        offset += str.length;
+    }
+    va_end(args);
+
+    dst.data[totalLength] = '\0';
+    return dst;
 }

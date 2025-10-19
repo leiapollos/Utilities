@@ -5,7 +5,6 @@
 // ////////////////////////
 // Log
 
-#include "base_string.hpp"
 static thread_local Arena* g_log_arena;
 static LogLevel g_log_level = LogLevel::LogLevel_Debug;
 
@@ -46,8 +45,8 @@ static void log(LogLevel level, StringU8 str) {
     Arena* arena = tmp.arena;
     {
         StringU8 levelStr = get_log_level_str(level);
-        
-        StringU8 res = str8_concat(arena, levelStr, str);
+
+        StringU8 res = str8_concat(arena, str8_cstring("["), levelStr, str8_cstring("]:\t"), str);
         OS_file_write(OS_get_log_handle(), res.length, res.data);
     }
     temp_end(&tmp);
