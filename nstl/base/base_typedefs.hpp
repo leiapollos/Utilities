@@ -21,6 +21,7 @@ typedef uintptr_t uintptr;
 typedef float F32;
 typedef double F64;
 
+typedef bool B1;
 typedef S8 B8;
 typedef S16 B16;
 typedef S32 B32;

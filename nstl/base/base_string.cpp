@@ -29,8 +29,15 @@ static StringU8 str8_cstring(const char* cstr) {
     StringU8 str;
     U64 length = C_STR_LEN(cstr);
     str.length = length;
-    str.data = (U8*)cstr;
+    str.data = (U8*) cstr;
     return str;
+}
+
+static StringU8 str8(U8* data, U64 length) {
+    StringU8 result;
+    result.data = data;
+    result.length = length;
+    return result;
 }
 
 static StringU8 str8_concat_(Arena* arena, StringU8 first, ...) {
@@ -42,7 +49,8 @@ static StringU8 str8_concat_(Arena* arena, StringU8 first, ...) {
 
     while (true) {
         str = va_arg(args, StringU8);
-        if (str.data == nullptr) break;
+        if (str.data == nullptr)
+            break;
         totalLength += str.length;
     }
     va_end(args);
@@ -59,7 +67,8 @@ static StringU8 str8_concat_(Arena* arena, StringU8 first, ...) {
 
     while (1) {
         str = va_arg(args, StringU8);
-        if (str.data == nullptr) break;
+        if (str.data == nullptr)
+            break;
         MEMMOVE(dst.data + offset, str.data, str.length);
         offset += str.length;
     }
@@ -67,4 +76,39 @@ static StringU8 str8_concat_(Arena* arena, StringU8 first, ...) {
 
     dst.data[totalLength] = '\0';
     return dst;
+}
+
+static StringU8 str8_from_U64(Arena* arena, U64 value, U64 base) {
+    char buffer[64];
+    int len = snprintf(buffer, sizeof(buffer), "%llu", value);
+    return str8_cpy(arena, str8((U8*) buffer, len));
+}
+
+static StringU8 str8_from_S64(Arena* arena, S64 value) {
+    char buffer[64];
+    int len = snprintf(buffer, sizeof(buffer), "%lld", value);
+    return str8_cpy(arena, str8((U8*) buffer, len));
+}
+
+static StringU8 str8_from_F64(Arena* arena, F64 value, int precision) {
+    char buffer[64];
+    int len = snprintf(buffer, sizeof(buffer), "%.*g", precision, value);
+    return str8_cpy(arena, str8((U8*) buffer, len));
+}
+
+static StringU8 str8_from_bool(Arena* arena, B1 value) {
+    return value ? str8_cstring("true") : str8_cstring("false");
+}
+
+static StringU8 str8_from_ptr(Arena* arena, const void* ptr) {
+    char buffer[32];
+    int len = snprintf(buffer, sizeof(buffer), "%p", ptr);
+    return str8_cpy(arena, str8((U8*) buffer, len));
+}
+
+static StringU8 str8_from_char(Arena* arena, char c) {
+    U8* data = ARENA_PUSH_ARRAY(arena, U8, 2);
+    data[0] = c;
+    data[1] = '\0';
+    return str8(data, 1);
 }

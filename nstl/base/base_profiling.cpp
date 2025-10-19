@@ -4,11 +4,6 @@
 
 #if PROFILER_ENABLED
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-
 struct ProfilerGlobalState {
     U64 globalStartMicros;
     U32 threadCount;
