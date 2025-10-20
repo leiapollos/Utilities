@@ -78,6 +78,25 @@ static StringU8 str8_concat_(Arena* arena, StringU8 first, ...) {
     return dst;
 }
 
+static StringU8 str8_concat_n(Arena* arena,
+                              const StringU8* pieces,
+                              U64 count) {
+    U64 total = 0;
+    for (U64 i = 0; i < count; ++i)
+        total += pieces[i].length;
+
+    U8* out = ARENA_PUSH_ARRAY(arena, U8, total + 1);
+    U64 off = 0;
+    for (U64 i = 0; i < count; ++i) {
+        if (pieces[i].length) {
+            MEMMOVE(out + off, pieces[i].data, pieces[i].length);
+            off += pieces[i].length;
+        }
+    }
+    out[total] = '\0';
+    return str8(out, total);
+}
+
 static StringU8 str8_from_U64(Arena* arena, U64 value, U64 base) {
     char buffer[64];
     int len = snprintf(buffer, sizeof(buffer), "%llu", value);
@@ -111,4 +130,22 @@ static StringU8 str8_from_char(Arena* arena, char c) {
     data[0] = c;
     data[1] = '\0';
     return str8(data, 1);
+}
+
+static void str8list_init(Str8List* l, Arena* arena, U64 initialCap) {
+    l->arena = arena;
+    l->count = 0;
+    l->cap = initialCap ? initialCap : 8;
+    l->items = ARENA_PUSH_ARRAY(arena, StringU8, l->cap);
+}
+
+static void str8list_push(Str8List* l, StringU8 s) {
+    if (l->count >= l->cap) {
+        U64 newCap = l->cap * 2;
+        StringU8* n = ARENA_PUSH_ARRAY(l->arena, StringU8, newCap);
+        MEMMOVE(n, l->items, l->count * (U64)sizeof(StringU8));
+        l->items = n;
+        l->cap = newCap;
+    }
+    l->items[l->count++] = s;
 }
