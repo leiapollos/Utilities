@@ -50,6 +50,7 @@ void work(void*arg) {
 }
 
 void entry_point() {
+    Arena* a = arena_alloc();
     char test[4];
     test[0] = 'a';
     test[1] = 'b';
@@ -58,6 +59,8 @@ void entry_point() {
     log(LogLevel_Debug, str8_cstring(test));
     set_log_level(LogLevel_Warning);
     log(LogLevel_Error, str8_cstring("123\n"));
+    log_fmt(LogLevel_Warning, "123 {} lll\n", 1);
+    log_fmt(LogLevel_Debug, "no args");
 
     func(.c = 'A', .val = 42, .skip = true, .b2 = false,);
     int arg = 123;

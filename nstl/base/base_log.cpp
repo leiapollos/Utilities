@@ -27,10 +27,6 @@ static const LogLevelInfo g_log_level_info[] = {
         .name = str8_cstring("ERROR"),
         .colorCode = str8_cstring("\033[31m"), // Red
     },
-    [LogLevel_Fatal] = {
-        .name = str8_cstring("FATAL"),
-        .colorCode = str8_cstring("\033[35m"), // Magenta
-    },
 };
 
 static const LogLevelInfo* log_get_level_info(LogLevel level) {
@@ -56,15 +52,106 @@ static void log(LogLevel level, StringU8 str) {
         StringU8 color = (g_use_color) ? info->colorCode : STR8_EMPTY();
         StringU8 defaultColor = (g_use_color) ? g_default_terminal_color : STR8_EMPTY();
         StringU8 res = str8_concat(arena,
-            color,
-            str8_cstring("["),
-            info->name,
-            str8_cstring("]:\t"),
-            str,
-            defaultColor
+                                   color,
+                                   str8_cstring("["),
+                                   info->name,
+                                   str8_cstring("]:\t"),
+                                   str,
+                                   defaultColor
         );
 
         OS_file_write(OS_get_log_handle(), res.length, res.data);
+    }
+    temp_end(&tmp);
+}
+
+static StringU8 arg_to_string(Arena* arena, const LogFmtArg& arg) {
+    switch (arg.kind) {
+        case LogFmtKind::S64:
+            return str8_from_S64(arena, arg.S64Val);
+        case LogFmtKind::U64:
+            return str8_from_U64(arena, arg.U64Val);
+        case LogFmtKind::F64:
+            return str8_from_F64(arena, arg.F64Val);
+        case LogFmtKind::CSTR:
+            return str8_cstring(arg.cstrVal);
+        case LogFmtKind::CHAR:
+            return str8_from_char(arena, arg.chVal);
+        case LogFmtKind::PTR:
+            return str8_from_ptr(arena, arg.ptrVal);
+        case LogFmtKind::BOOL:
+            return str8_from_bool(arena, arg.boolVal);
+        case LogFmtKind::STRINGU8:
+            return arg.stringU8Val;
+        case LogFmtKind::END:
+            return STR8_EMPTY();
+    }
+    return STR8_EMPTY();
+}
+
+static void log_fmt_(LogLevel level,
+                     StringU8 fmt,
+                     const LogFmtArg* args) {
+    if (level < g_log_level) {
+        return;
+    }
+
+    Temp tmp = get_scratch(0, 0);
+    Arena* arena = tmp.arena; {
+        Str8List pieces;
+        str8list_init(&pieces, arena, 16);
+
+        const U8* data = fmt.data;
+        U64 len = fmt.length;
+        U64 i = 0;
+        U64 last = 0;
+        const LogFmtArg* it = args;
+
+        while (i < len) {
+            if (data[i] == '{') {
+                if (i + 1 < len && data[i + 1] == '{') {
+                    if (i > last) {
+                        str8list_push(&pieces, str8((U8*) (data + last), i - last));
+                    }
+                    str8list_push(&pieces, str8((U8*) "{", 1));
+                    i += 2;
+                    last = i;
+                } else if (i + 1 < len && data[i + 1] == '}') {
+                    if (i > last) {
+                        str8list_push(&pieces, str8((U8*) (data + last), i - last));
+                    }
+                    if (it && it->kind != LogFmtKind::END) {
+                        str8list_push(&pieces, arg_to_string(arena, *it));
+                        ++it;
+                    } else {
+                        str8list_push(&pieces, str8_cstring("<MISSING>"));
+                    }
+                    i += 2;
+                    last = i;
+                } else {
+                    ++i;
+                }
+            } else if (data[i] == '}') {
+                if (i + 1 < len && data[i + 1] == '}') {
+                    if (i > last) {
+                        str8list_push(&pieces, str8((U8*) (data + last), i - last));
+                    }
+                    str8list_push(&pieces, str8((U8*) "}", 1));
+                    i += 2;
+                    last = i;
+                } else {
+                    ++i;
+                }
+            } else {
+                ++i;
+            }
+        }
+        if (last < len) {
+            str8list_push(&pieces, str8((U8*) (data + last), len - last));
+        }
+
+        StringU8 formatted = str8_concat_n(arena, pieces.items, pieces.count);
+        log(level, formatted);
     }
     temp_end(&tmp);
 }
