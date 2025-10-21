@@ -153,7 +153,7 @@ static void log_fmt_(LogLevel level,
 #define log_fmt(level, fmt, ...)                                                    \
     do {                                                                            \
         const LogFmtArg _log_args[] = { __VA_OPT__(__VA_ARGS__,) LOG_ARG_END() };  \
-        log_fmt_(level, str8_cstring(fmt), _log_args);                              \
+        log_fmt_(level, str8(fmt), _log_args);                              \
     } while (0)
 
 #define LOG_DEBUG(fmt, ...)     log_fmt(LogLevel_Debug, fmt, __VA_ARGS__)

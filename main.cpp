@@ -56,9 +56,9 @@ void entry_point() {
     test[1] = 'b';
     test[2] = '\n';
     test[3] = '\0';
-    log(LogLevel_Debug, str8_cstring(test));
+    log(LogLevel_Debug, str8(test));
     set_log_level(LogLevel_Warning);
-    log(LogLevel_Error, str8_cstring("123\n"));
+    log(LogLevel_Error, str8("123\n"));
     log_fmt(LogLevel_Warning, "123 {} lll\n", 1);
     log_fmt(LogLevel_Debug, "no args");
 

@@ -9,25 +9,31 @@
 
 struct StringU8 {
     U8* data;
-    U64 length;
+    U64 size;
 };
 
-static StringU8 str8(Arena* arena, StringU8 source);
-static StringU8 str8_cstring_cpy(Arena* arena, const char* source);
-static StringU8 str8_cstring(const char* str);
-static StringU8 str8(const char* data, U64 length);
+static const StringU8 STR8_NIL = {(U8*)0, 0};
+static const StringU8 STR8_EMPTY = {(U8*)"", 0};
+
+static StringU8 str8(U8* source, U64 size);
+static StringU8 str8(const char* source, U64 size);
+static StringU8 str8(const char* source);
+static StringU8 str8_cpy(Arena* arena, const char* source, U64 size);
+static StringU8 str8_cpy(Arena* arena, const char* source);
+
 static StringU8 str8_concat_(Arena* arena, StringU8 first, ...);
-#define str8_concat(arena, ...) str8_concat_(arena, __VA_ARGS__, (StringU8){0})
+#define str8_concat(arena, ...) str8_concat_(arena, __VA_ARGS__, STR8_NIL)
 static StringU8 str8_concat_n(Arena* arena, const StringU8* pieces, U64 count);
 
-static StringU8 str8_from_U64(Arena* arena, U64 value, U64 base = 10);
+static B1 str8_is_nil(StringU8 s);
+static B1 str8_is_empty(StringU8 s);
+
+static StringU8 str8_from_U64(Arena* arena, U64 value, U64 base);
 static StringU8 str8_from_S64(Arena* arena, S64 value);
-static StringU8 str8_from_F64(Arena* arena, F64 value, int precision = 5);
+static StringU8 str8_from_F64(Arena* arena, F64 value, int precision);
 static StringU8 str8_from_bool(Arena* arena, B1 value);
 static StringU8 str8_from_ptr(Arena* arena, const void* ptr);
 static StringU8 str8_from_char(Arena* arena, char c);
-
-#define STR8_EMPTY() (str8_cstring(""))
 
 struct Str8List {
     StringU8* items;
