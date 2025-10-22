@@ -21,9 +21,10 @@ static StringU8 str8(const char* source);
 static StringU8 str8_cpy(Arena* arena, const char* source, U64 size);
 static StringU8 str8_cpy(Arena* arena, const char* source);
 
-static StringU8 str8_concat_(Arena* arena, StringU8 first, ...);
-#define str8_concat(arena, ...) str8_concat_(arena, __VA_ARGS__, STR8_NIL)
 static StringU8 str8_concat_n(Arena* arena, const StringU8* pieces, U64 count);
+#define str8_concat(arena, ...) \
+    str8_concat_n((arena), (StringU8[]){ __VA_ARGS__ }, \
+                  (U64)(sizeof((StringU8[]){ __VA_ARGS__ })/sizeof(StringU8)))
 
 static B1 str8_is_nil(StringU8 s);
 static B1 str8_is_empty(StringU8 s);

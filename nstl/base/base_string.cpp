@@ -35,43 +35,6 @@ static StringU8 str8_cstring_cpy(Arena* arena, const char* source) {
     return str8_cpy(arena, str8(source));
 }
 
-static StringU8 str8_concat_(Arena* arena, StringU8 first, ...) {
-    va_list args;
-
-    va_start(args, first);
-    U64 totalSize = first.size;
-    StringU8 str;
-
-    while (true) {
-        str = va_arg(args, StringU8);
-        if (str.data == nullptr)
-            break;
-        totalSize += str.size;
-    }
-    va_end(args);
-
-    StringU8 dst;
-    dst.size = totalSize;
-    dst.data = ARENA_PUSH_ARRAY(arena, U8, totalSize + 1);
-
-    va_start(args, first);
-    U64 offset = 0;
-
-    MEMMOVE(dst.data + offset, first.data, first.size);
-    offset += first.size;
-
-    while (1) {
-        str = va_arg(args, StringU8);
-        if (str.data == nullptr)
-            break;
-        MEMMOVE(dst.data + offset, str.data, str.size);
-        offset += str.size;
-    }
-    va_end(args);
-
-    dst.data[totalSize] = '\0';
-    return dst;
-}
 
 static StringU8 str8_concat_n(Arena* arena,
                               const StringU8* pieces,
@@ -97,13 +60,37 @@ static B1 str8_is_nil(StringU8 s) {
 }
 
 static B1 str8_is_empty(StringU8 s) {
-    return (B1)(s.size == 0);
+    return (B1)(s.size == 0 && s.data != 0);
 }
 
 static StringU8 str8_from_U64(Arena* arena, U64 value, U64 base) {
-    char buffer[64];
-    int len = snprintf(buffer, sizeof(buffer), "%llu", value);
-    return str8_cpy(arena, str8((U8*) buffer, len));
+    if (base < 2 || base > 16) {
+        base = 10;
+    }
+    U8 buffer[65]; // Enough for base-2 of 64-bit value plus null.
+    U64 i = 0;
+    if (value == 0) {
+        buffer[i++] = (U8)'0';
+    } else {
+        while (value != 0) {
+            U64 digit = value % base;
+            buffer[i++] = (U8)(digit < 10 ? ('0' + digit) : ('a' + (digit - 10)));
+            value /= base;
+        }
+    }
+    for (U64 l = 0, r = (i ? i - 1 : 0); l < r; ++l, --r) {
+        U8 tmp = buffer[l];
+        buffer[l] = buffer[r];
+        buffer[r] = tmp;
+    }
+    StringU8 out;
+    out.size = i;
+    out.data = ARENA_PUSH_ARRAY(arena, U8, i + 1);
+    if (i) {
+        MEMMOVE(out.data, buffer, i);
+    }
+    out.data[i] = '\0';
+    return out;
 }
 
 static StringU8 str8_from_S64(Arena* arena, S64 value) {
@@ -119,7 +106,7 @@ static StringU8 str8_from_F64(Arena* arena, F64 value, int precision) {
 }
 
 static StringU8 str8_from_bool(Arena* arena, B1 value) {
-    return value ? str8("true") : str8("false");
+    return value ? str8_cstring_cpy(arena, "true") : str8_cstring_cpy(arena, "false");
 }
 
 static StringU8 str8_from_ptr(Arena* arena, const void* ptr) {
@@ -150,5 +137,6 @@ static void str8list_push(Str8List* l, StringU8 s) {
         l->items = n;
         l->cap = newCap;
     }
-    l->items[l->count++] = s;
+    StringU8 copy = str8_cpy(l->arena, s);
+    l->items[l->count++] = copy;
 }

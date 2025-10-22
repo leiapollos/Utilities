@@ -96,7 +96,7 @@ static void log_fmt_(LogLevel level,
         return;
     }
 
-    Temp tmp = get_scratch(0, 0);
+    Temp tmp = temp_begin(g_log_arena);
     Arena* arena = tmp.arena; {
         Str8List pieces;
         str8list_init(&pieces, arena, 16);
