@@ -51,13 +51,15 @@ static void log(LogLevel level, StringU8 str) {
         const LogLevelInfo* info = log_get_level_info(level);
         StringU8 color = (g_use_color) ? info->colorCode : STR8_EMPTY;
         StringU8 defaultColor = (g_use_color) ? g_default_terminal_color : STR8_EMPTY;
-        StringU8 res = str8_concat(arena,
-                                   color,
-                                   str8("["),
-                                   info->name,
-                                   str8("]:\t"),
-                                   str,
-                                   defaultColor
+        StringU8 res;
+        str8_concat(res,
+                    arena,
+                    color,
+                    str8("["),
+                    info->name,
+                    str8("]:\t"),
+                    str,
+                    defaultColor
         );
 
         OS_file_write(OS_get_log_handle(), res.size, res.data);
@@ -83,15 +85,14 @@ static StringU8 arg_to_string(Arena* arena, const LogFmtArg& arg) {
             return str8_from_bool(arena, arg.boolVal);
         case LogFmtKind::STRINGU8:
             return arg.stringU8Val;
-        case LogFmtKind::END:
-            return STR8_EMPTY;
     }
     return STR8_EMPTY;
 }
 
 static void log_fmt_(LogLevel level,
                      StringU8 fmt,
-                     const LogFmtArg* args) {
+                     const LogFmtArg* args,
+                     U64 argCount) {
     if (level < g_log_level) {
         return;
     }
@@ -106,6 +107,7 @@ static void log_fmt_(LogLevel level,
         U64 i = 0;
         U64 last = 0;
         const LogFmtArg* it = args;
+        const LogFmtArg* end = args ? args + argCount : 0;
 
         while (i < len) {
             if (data[i] == '{') {
@@ -120,7 +122,7 @@ static void log_fmt_(LogLevel level,
                     if (i > last) {
                         str8list_push(&pieces, str8((U8*) (data + last), i - last));
                     }
-                    if (it && it->kind != LogFmtKind::END) {
+                    if (it && it < end) {
                         str8list_push(&pieces, arg_to_string(arena, *it));
                         ++it;
                     } else {

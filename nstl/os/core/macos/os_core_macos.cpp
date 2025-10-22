@@ -213,13 +213,15 @@ static OS_Handle OS_file_open(const char* path, OS_FileOpenMode mode) {
 
     int fd = open(path, flags, modeBits);
     if (fd == -1) {
-        return (OS_Handle){0};
+        OS_Handle empty = {0};
+        return empty;
     }
 
     OS_MACOS_Entity* fileEntity = alloc_OS_entity();
     fileEntity->type = OS_MACOS_EntityType::File;
     fileEntity->file.fd = fd;
-    OS_Handle handle = {(U64*) fileEntity};
+    OS_Handle handle = {};
+    handle.handle = (U64*)fileEntity;
     return handle;
 }
 

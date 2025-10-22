@@ -6,6 +6,11 @@ FLAVOR=${1:-release} # Default to "release" if no argument is given
 CMAKE_ARGS=()
 
 # --- Build Flavors ---
+COMMON_WARN_FLAGS="-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Wformat=2 -Wnull-dereference -Wdouble-promotion -Wimplicit-fallthrough -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function"
+C_FLAGS="${COMMON_WARN_FLAGS}"
+CXX_FLAGS="${COMMON_WARN_FLAGS}"
+LD_FLAGS=""
+
 echo "==> Selected build flavor: ${FLAVOR}"
 case "${FLAVOR}" in
   release)
@@ -16,10 +21,9 @@ case "${FLAVOR}" in
   debug)
     CMAKE_ARGS+=("-DCMAKE_BUILD_TYPE=Debug")
     CMAKE_ARGS+=("-DADDRESS_SANITIZER=1")
-    # Inject compiler and linker flags directly
-    CMAKE_ARGS+=("-DCMAKE_C_FLAGS=-fsanitize=address -fno-omit-frame-pointer")
-    CMAKE_ARGS+=("-DCMAKE_CXX_FLAGS=-fsanitize=address -fno-omit-frame-pointer")
-    CMAKE_ARGS+=("-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address")
+    C_FLAGS+=" -fsanitize=address -fno-omit-frame-pointer"
+    CXX_FLAGS+=" -fsanitize=address -fno-omit-frame-pointer"
+    LD_FLAGS="-fsanitize=address"
     ;;
 
   *)
@@ -28,6 +32,12 @@ case "${FLAVOR}" in
     exit 1
     ;;
 esac
+
+CMAKE_ARGS+=("-DCMAKE_C_FLAGS=${C_FLAGS}")
+CMAKE_ARGS+=("-DCMAKE_CXX_FLAGS=${CXX_FLAGS}")
+if [[ -n "${LD_FLAGS}" ]]; then
+  CMAKE_ARGS+=("-DCMAKE_EXE_LINKER_FLAGS=${LD_FLAGS}")
+fi
 
 # --- Execution ---
 echo "==> Cleaning build directory..."

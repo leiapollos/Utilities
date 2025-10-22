@@ -27,7 +27,11 @@ void func_(bool shouldPrint, opt o) {
     std::cout << o.skip << " " << o.val << " " << o.b2 << " " << o.c << std::endl;
 }
 
-#define func(...) func_(true, (opt){.c = 'd', __VA_ARGS__})
+#define func(...)                                             \
+    do {                                                     \
+        opt _tmp_opt = {.c = 'd', __VA_ARGS__};                           \
+        func_(true, _tmp_opt);                                                  \
+    } while (0)
 
 void work(void*arg) {
     int val = *(int*)arg;

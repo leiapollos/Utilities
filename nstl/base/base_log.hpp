@@ -37,7 +37,6 @@ enum class LogFmtKind {
     STRINGU8,
     PTR,
     BOOL,
-    END,
 };
 
 struct LogFmtArg {
@@ -140,20 +139,20 @@ struct LogFmtArg {
     }
 };
 
-static inline LogFmtArg LOG_ARG_END() {
-    LogFmtArg arg = {};
-    arg.kind = LogFmtKind::END;
-    return arg;
-}
-
 static void log_fmt_(LogLevel level,
                      StringU8 fmt,
-                     const LogFmtArg* args);
+                     const LogFmtArg* args,
+                     U64 argCount);
 
-#define log_fmt(level, fmt, ...)                                                    \
-    do {                                                                            \
-        const LogFmtArg _log_args[] = { __VA_OPT__(__VA_ARGS__,) LOG_ARG_END() };  \
-        log_fmt_(level, str8(fmt), _log_args);                              \
+#define log_fmt(level, fmt, ...)                                                          \
+    do {                                                                                  \
+        /* Dummy first element keeps zero-arg calls valid;                                \
+        pointer skips it and count subtracts it. */                                       \
+        const LogFmtArg _log_args_local[] = { LogFmtArg(), __VA_ARGS__ };                 \
+        const U64 _log_args_count =                                                       \
+            (U64)((sizeof(_log_args_local) / sizeof(LogFmtArg)) - 1);                     \
+        const LogFmtArg* _log_args_ptr = (_log_args_count > 0) ? (_log_args_local + 1) : 0; \
+        log_fmt_(level, str8(fmt), _log_args_ptr, _log_args_count);                       \
     } while (0)
 
 #define LOG_DEBUG(fmt, ...)     log_fmt(LogLevel_Debug, fmt, __VA_ARGS__)

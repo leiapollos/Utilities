@@ -137,9 +137,9 @@ static thread_local Scratch_TLS g_scratch_tls = {
     .initialized = 0,
 };
 
-static inline B32 scratch_collides_many(Arena* cand,
-                                        Arena* const* excludes,
-                                        U32 count) {
+static B32 scratch_collides_many(Arena* cand,
+                                 Arena* const* excludes,
+                                 U32 count) {
     if (cand == 0 || excludes == 0) {
         return 0;
     }
@@ -187,7 +187,7 @@ static void scratch_thread_shutdown() {
     g_scratch_tls.initialized = 0;
 }
 
-static inline Temp temp_begin(Arena* arena) {
+static Temp temp_begin(Arena* arena) {
     Temp t = {arena, arena_get_pos(arena), 0};
     return t;
 }

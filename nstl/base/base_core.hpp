@@ -12,7 +12,7 @@
 // ////////////////////////
 // Assert
 
-inline void debug_break() {
+void debug_break() {
 #if defined(_MSC_VER)
     __debugbreak();
 #elif defined(__clang__) || defined(__GNUC__)

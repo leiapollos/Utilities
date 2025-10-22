@@ -82,7 +82,11 @@ static JobSystemStats job_system_get_totals(JobSystem* jobSystem);
 
 #define job_system_submit(jobInit, ...) \
     do { \
-        Job _jobTmp = (Job){ JOB_REMOVE_PARENS jobInit }; \
+        Job _jobTmp; \
+        { \
+            Job _jobInitValues = { JOB_REMOVE_PARENS jobInit }; \
+            _jobTmp = _jobInitValues; \
+        } \
         __VA_OPT__( static_assert(sizeof(__VA_ARGS__) <= JOB_PARAMETER_SPACE, "Parameter too large for inline storage"); ) \
         __VA_OPT__( memcpy(_jobTmp.parameters, &(__VA_ARGS__), (U32)sizeof(__VA_ARGS__)); ) \
         job_system_submit_(_jobTmp); \
