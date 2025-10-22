@@ -32,12 +32,18 @@ esac
 # --- Execution ---
 echo "==> Cleaning build directory..."
 rm -rf "${BUILD_DIR}"
+mkdir -p "${BUILD_DIR}"
 
 echo "==> Configuring CMake..."
-# Note: We pass all flags directly to the cmake command
-cmake -B "${BUILD_DIR}" "${CMAKE_ARGS[@]}" .
+# Always force out-of-source build using explicit -S/-B.
+cmake -S . -B "${BUILD_DIR}" "${CMAKE_ARGS[@]}"
+
+if [ ! -d "${BUILD_DIR}" ]; then
+  echo "Error: expected build directory '${BUILD_DIR}' to exist after configure." >&2
+  exit 2
+fi
 
 echo "==> Building..."
-cmake --build "${BUILD_DIR}"
+cmake --build "${BUILD_DIR}" -- -j$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
 echo "==> Done. Artifacts in '${BUILD_DIR}/'"
