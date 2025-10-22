@@ -6,7 +6,7 @@ FLAVOR=${1:-release} # Default to "release" if no argument is given
 CMAKE_ARGS=()
 
 # --- Build Flavors ---
-COMMON_WARN_FLAGS="-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Wformat=2 -Wnull-dereference -Wdouble-promotion -Wimplicit-fallthrough -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function"
+COMMON_WARN_FLAGS="-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Wformat=2 -Wnull-dereference -Wdouble-promotion -Wimplicit-fallthrough -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function -Wno-gnu-anonymous-struct -Wno-nested-anon-types -Wno-variadic-macro-arguments-omitted"
 C_FLAGS="${COMMON_WARN_FLAGS}"
 CXX_FLAGS="${COMMON_WARN_FLAGS}"
 LD_FLAGS=""

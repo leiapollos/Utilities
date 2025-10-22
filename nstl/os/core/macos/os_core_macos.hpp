@@ -61,4 +61,4 @@ struct OS_MACOS_State {
 // ////////////////////////
 // Globals
 
-static OS_MACOS_State osMacosState = {0};
+static OS_MACOS_State osMacosState = {};

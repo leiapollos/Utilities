@@ -16,7 +16,7 @@ static OS_SystemInfo* OS_get_system_info() {
 static U64 OS_get_time_microseconds() {
     timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
-    U64 result = (t.tv_nsec / THOUSAND(1ULL)) + (t.tv_sec * MILLION(1ULL));
+    U64 result = ((U64) t.tv_nsec / THOUSAND(1ULL)) + ((U64) t.tv_sec * MILLION(1ULL));
     return result;
 }
 
@@ -221,7 +221,7 @@ static OS_Handle OS_file_open(const char* path, OS_FileOpenMode mode) {
     fileEntity->type = OS_MACOS_EntityType::File;
     fileEntity->file.fd = fd;
     OS_Handle handle = {};
-    handle.handle = (U64*)fileEntity;
+    handle.handle = (U64*) fileEntity;
     return handle;
 }
 

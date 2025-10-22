@@ -37,7 +37,7 @@ static StringU8 str8_from_S64(Arena* arena, S64 value);
 static StringU8 str8_from_F64(Arena* arena, F64 value, int precision);
 static StringU8 str8_from_bool(Arena* arena, B1 value);
 static StringU8 str8_from_ptr(Arena* arena, const void* ptr);
-static StringU8 str8_from_char(Arena* arena, char c);
+static StringU8 str8_from_char(Arena* arena, U8 c);
 
 struct Str8List {
     StringU8* items;

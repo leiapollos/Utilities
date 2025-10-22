@@ -10,14 +10,14 @@ static StringU8 str8(U8* source, U64 size) {
 }
 
 static StringU8 str8(const char* source, U64 size) {
-    return StringU8{(U8*)source, size};
+    return StringU8{(U8*) source, size};
 }
 
 static StringU8 str8(const char* source) {
     if (source == 0) {
         return STR8_EMPTY;
     }
-    return StringU8{(U8*)source, C_STR_LEN(source)};
+    return StringU8{(U8*) source, C_STR_LEN(source)};
 }
 
 static StringU8 str8_cpy(Arena* arena, StringU8 src) {
@@ -56,11 +56,11 @@ static StringU8 str8_concat_n(Arena* arena,
 }
 
 static B1 str8_is_nil(StringU8 s) {
-    return (B1)(s.data == 0);
+    return (B1) (s.data == 0);
 }
 
 static B1 str8_is_empty(StringU8 s) {
-    return (B1)(s.size == 0 && s.data != 0);
+    return (B1) (s.size == 0 && s.data != 0);
 }
 
 static StringU8 str8_from_U64(Arena* arena, U64 value, U64 base) {
@@ -70,11 +70,11 @@ static StringU8 str8_from_U64(Arena* arena, U64 value, U64 base) {
     U8 buffer[65]; // Enough for base-2 of 64-bit value plus null.
     U64 i = 0;
     if (value == 0) {
-        buffer[i++] = (U8)'0';
+        buffer[i++] = (U8) '0';
     } else {
         while (value != 0) {
             U64 digit = value % base;
-            buffer[i++] = (U8)(digit < 10 ? ('0' + digit) : ('a' + (digit - 10)));
+            buffer[i++] = (U8) (digit < 10 ? ('0' + digit) : ('a' + (digit - 10)));
             value /= base;
         }
     }
@@ -96,13 +96,15 @@ static StringU8 str8_from_U64(Arena* arena, U64 value, U64 base) {
 static StringU8 str8_from_S64(Arena* arena, S64 value) {
     char buffer[64];
     int len = snprintf(buffer, sizeof(buffer), "%lld", value);
-    return str8_cpy(arena, str8((U8*) buffer, len));
+    ASSERT_DEBUG(len >= 0);
+    return str8_cpy(arena, str8((U8*) buffer, (U64) len));
 }
 
 static StringU8 str8_from_F64(Arena* arena, F64 value, int precision) {
     char buffer[64];
     int len = snprintf(buffer, sizeof(buffer), "%.*g", precision, value);
-    return str8_cpy(arena, str8((U8*) buffer, len));
+    ASSERT_DEBUG(len >= 0);
+    return str8_cpy(arena, str8((U8*) buffer, (U64) len));
 }
 
 static StringU8 str8_from_bool(Arena* arena, B1 value) {
@@ -112,10 +114,11 @@ static StringU8 str8_from_bool(Arena* arena, B1 value) {
 static StringU8 str8_from_ptr(Arena* arena, const void* ptr) {
     char buffer[32];
     int len = snprintf(buffer, sizeof(buffer), "%p", ptr);
-    return str8_cpy(arena, str8((U8*) buffer, len));
+    ASSERT_DEBUG(len >= 0);
+    return str8_cpy(arena, str8((U8*) buffer, (U64) len));
 }
 
-static StringU8 str8_from_char(Arena* arena, char c) {
+static StringU8 str8_from_char(Arena* arena, U8 c) {
     U8* data = ARENA_PUSH_ARRAY(arena, U8, 2);
     data[0] = c;
     data[1] = '\0';

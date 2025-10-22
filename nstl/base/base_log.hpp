@@ -47,7 +47,7 @@ struct LogFmtArg {
         U64 U64Val;
         F64 F64Val;
         const char* cstrVal;
-        char chVal;
+        U8 chVal;
         const void* ptrVal;
         B1 boolVal;
         StringU8 stringU8Val;
@@ -58,7 +58,7 @@ struct LogFmtArg {
         cstrVal = "(null)";
     }
 
-    LogFmtArg(char v) {
+    LogFmtArg(U8 v) {
         kind = LogFmtKind::CHAR;
         chVal = v;
     }
@@ -116,11 +116,6 @@ struct LogFmtArg {
     LogFmtArg(S64 v) {
         kind = LogFmtKind::S64;
         S64Val = v;
-    }
-
-    LogFmtArg(U8 v) {
-        kind = LogFmtKind::U64;
-        U64Val = (U64) v;
     }
 
     LogFmtArg(U16 v) {
