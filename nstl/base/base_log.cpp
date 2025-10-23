@@ -46,7 +46,7 @@ static void log(LogLevel level, StringU8 str) {
     if (level < g_log_level) {
         return;
     }
-    Temp tmp = get_scratch(0, 0);
+    Temp tmp = temp_begin(g_log_arena);
     Arena* arena = tmp.arena; {
         const LogLevelInfo* info = log_get_level_info(level);
         StringU8 color = (g_use_color) ? info->colorCode : STR8_EMPTY;
