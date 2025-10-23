@@ -51,16 +51,13 @@ static void log(LogLevel level, StringU8 str) {
         const LogLevelInfo* info = log_get_level_info(level);
         StringU8 color = (g_use_color) ? info->colorCode : STR8_EMPTY;
         StringU8 defaultColor = (g_use_color) ? g_default_terminal_color : STR8_EMPTY;
-        StringU8 res;
-        str8_concat(res,
-                    arena,
-                    color,
-                    str8("["),
-                    info->name,
-                    str8("]:\t"),
-                    str,
-                    defaultColor
-        );
+        StringU8 res = str8_concat(arena,
+                                   color,
+                                   str8("["),
+                                   info->name,
+                                   str8("]:\t"),
+                                   str,
+                                   defaultColor);
 
         OS_file_write(OS_get_log_handle(), res.size, res.data);
     }
