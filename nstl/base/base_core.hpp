@@ -42,7 +42,7 @@ debug_break(); \
 // Branch Prediction
 
 #if defined(COMPILER_MSVC)
-#if _MSC_VER >= 1928 && defined(__cplusplus) && __cplusplus >= 202002L
+#if _MSC_VER >= 1928 && defined(CPP_LANG) && _MSVC_LANG >= 202002L
 // MSVC with C++20 support for [[likely]] and [[unlikely]]
 #define LIKELY(condition) [[likely]] (condition)
 #define UNLIKELY(condition) [[unlikely]] (condition)

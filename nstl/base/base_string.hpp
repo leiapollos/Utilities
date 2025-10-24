@@ -22,7 +22,7 @@ static StringU8 str8_cpy(Arena* arena, const char* source, U64 size);
 static StringU8 str8_cpy(Arena* arena, const char* source);
 
 static StringU8 str8_concat_n(Arena* arena, const StringU8* pieces, U64 count);
-#ifdef __cplusplus
+#ifdef CPP_LANG
 
 /* C++ (requires C++11) */
 #define str8_concat(arena, ...)                                             \

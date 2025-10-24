@@ -46,3 +46,13 @@
 #else
 #warning "Unknown compiler"
 #endif
+
+// -----------------------------------------------------------------------------
+// Language Detection
+// -----------------------------------------------------------------------------
+
+#if defined(__cplusplus)
+#define CPP_LANG __cplusplus
+#else
+#define C_LANG
+#endif
