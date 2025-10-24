@@ -5,7 +5,6 @@
 // ////////////////////////
 // Log
 
-static thread_local Arena* g_log_arena;
 static LogLevel g_log_level = LogLevel::LogLevel_Debug;
 static bool g_use_color = false;
 static const StringU8 g_default_terminal_color = str8("\033[0m");
@@ -33,8 +32,7 @@ static const LogLevelInfo* log_get_level_info(LogLevel level) {
     return &g_log_level_info[level];
 }
 
-static void log_init(Arena* logArena) {
-    g_log_arena = logArena;
+static void log_init() {
     g_use_color = OS_terminal_supports_color();
 }
 
@@ -46,7 +44,7 @@ static void log(LogLevel level, StringU8 str) {
     if (level < g_log_level) {
         return;
     }
-    Temp tmp = temp_begin(g_log_arena);
+    Temp tmp = get_scratch(0,0);
     Arena* arena = tmp.arena; {
         const LogLevelInfo* info = log_get_level_info(level);
         StringU8 color = (g_use_color) ? info->colorCode : STR8_EMPTY;
@@ -92,7 +90,7 @@ static void log_fmt_(LogLevel level,
         return;
     }
 
-    Temp tmp = temp_begin(g_log_arena);
+    Temp tmp = get_scratch(0,0);;
     Arena* arena = tmp.arena; {
         Str8List pieces;
         str8list_init(&pieces, arena, 16);
