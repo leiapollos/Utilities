@@ -43,13 +43,12 @@ static StringU8 str8_concat_n(Arena* arena, const StringU8* pieces, U64 count);
 
 #endif
 
-static B1 str8_is_nil(StringU8 s);
-static B1 str8_is_empty(StringU8 s);
+static B8 str8_is_nil(StringU8 s);
+static B8 str8_is_empty(StringU8 s);
 
 static StringU8 str8_from_U64(Arena* arena, U64 value, U64 base);
 static StringU8 str8_from_S64(Arena* arena, S64 value);
 static StringU8 str8_from_F64(Arena* arena, F64 value, int precision);
-static StringU8 str8_from_bool(Arena* arena, B1 value);
 static StringU8 str8_from_ptr(Arena* arena, const void* ptr);
 static StringU8 str8_from_char(Arena* arena, U8 c);
 

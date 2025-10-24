@@ -78,8 +78,6 @@ static StringU8 arg_to_string(Arena* arena, const LogFmtArg& arg) {
             return str8_from_char(arena, arg.chVal);
         case LogFmtKind::PTR:
             return str8_from_ptr(arena, arg.ptrVal);
-        case LogFmtKind::BOOL:
-            return str8_from_bool(arena, arg.boolVal);
         case LogFmtKind::STRINGU8:
             return arg.stringU8Val;
     }

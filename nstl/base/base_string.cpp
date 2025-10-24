@@ -55,12 +55,12 @@ static StringU8 str8_concat_n(Arena* arena,
     return str8(out, total);
 }
 
-static B1 str8_is_nil(StringU8 s) {
-    return (B1) (s.data == 0);
+static B8 str8_is_nil(StringU8 s) {
+    return (B8) (s.data == 0);
 }
 
-static B1 str8_is_empty(StringU8 s) {
-    return (B1) (s.size == 0 && s.data != 0);
+static B8 str8_is_empty(StringU8 s) {
+    return (s.size == 0 && s.data != 0);
 }
 
 static StringU8 str8_from_U64(Arena* arena, U64 value, U64 base) {
@@ -105,10 +105,6 @@ static StringU8 str8_from_F64(Arena* arena, F64 value, int precision) {
     int len = snprintf(buffer, sizeof(buffer), "%.*g", precision, value);
     ASSERT_DEBUG(len >= 0);
     return str8_cpy(arena, str8((U8*) buffer, (U64) len));
-}
-
-static StringU8 str8_from_bool(Arena* arena, B1 value) {
-    return value ? str8_cstring_cpy(arena, "true") : str8_cstring_cpy(arena, "false");
 }
 
 static StringU8 str8_from_ptr(Arena* arena, const void* ptr) {

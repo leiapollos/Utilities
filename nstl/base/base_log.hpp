@@ -36,7 +36,6 @@ enum class LogFmtKind {
     CHAR,
     STRINGU8,
     PTR,
-    BOOL,
 };
 
 struct LogFmtArg {
@@ -49,7 +48,6 @@ struct LogFmtArg {
         const char* cstrVal;
         U8 chVal;
         const void* ptrVal;
-        B1 boolVal;
         StringU8 stringU8Val;
     };
 
@@ -71,11 +69,6 @@ struct LogFmtArg {
     LogFmtArg(StringU8 v) {
         kind = LogFmtKind::STRINGU8;
         stringU8Val = v;
-    }
-
-    LogFmtArg(B1 v) {
-        kind = LogFmtKind::BOOL;
-        boolVal = v;
     }
 
     LogFmtArg(void* v) {
