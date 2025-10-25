@@ -44,22 +44,23 @@ static void log(LogLevel level, StringU8 str) {
     if (level < g_log_level) {
         return;
     }
-    Temp tmp = get_scratch(0,0);
-    Arena* arena = tmp.arena; {
-        const LogLevelInfo* info = log_get_level_info(level);
-        StringU8 color = (g_use_color) ? info->colorCode : STR8_EMPTY;
-        StringU8 defaultColor = (g_use_color) ? g_default_terminal_color : STR8_EMPTY;
-        StringU8 res = str8_concat(arena,
-                                   color,
-                                   str8("["),
-                                   info->name,
-                                   str8("]:\t"),
-                                   str,
-                                   defaultColor);
 
-        OS_file_write(OS_get_log_handle(), res.size, res.data);
-    }
-    temp_end(&tmp);
+    Temp tmp = get_scratch(0, 0);
+    DEFER_REF(temp_end(&tmp));
+    Arena* arena = tmp.arena;
+
+    const LogLevelInfo* info = log_get_level_info(level);
+    StringU8 color = (g_use_color) ? info->colorCode : STR8_EMPTY;
+    StringU8 defaultColor = (g_use_color) ? g_default_terminal_color : STR8_EMPTY;
+    StringU8 res = str8_concat(arena,
+                               color,
+                               str8("["),
+                               info->name,
+                               str8("]:\t"),
+                               str,
+                               defaultColor);
+
+    OS_file_write(OS_get_log_handle(), res.size, res.data);
 }
 
 static StringU8 arg_to_string(Arena* arena, const LogFmtArg& arg) {
@@ -90,63 +91,62 @@ static void log_fmt_(LogLevel level,
         return;
     }
 
-    Temp tmp = get_scratch(0,0);;
-    Arena* arena = tmp.arena; {
-        Str8List pieces;
-        str8list_init(&pieces, arena, 16);
+    Temp tmp = get_scratch(0, 0);
+    DEFER_REF(temp_end(&tmp));
+    Arena* arena = tmp.arena;
+    Str8List pieces;
+    str8list_init(&pieces, arena, 16);
 
-        const U8* data = fmt.data;
-        U64 len = fmt.size;
-        U64 i = 0;
-        U64 last = 0;
-        const LogFmtArg* it = args;
-        const LogFmtArg* end = args ? args + argCount : 0;
+    const U8* data = fmt.data;
+    U64 len = fmt.size;
+    U64 i = 0;
+    U64 last = 0;
+    const LogFmtArg* it = args;
+    const LogFmtArg* end = args ? args + argCount : 0;
 
-        while (i < len) {
-            if (data[i] == '{') {
-                if (i + 1 < len && data[i + 1] == '{') {
-                    if (i > last) {
-                        str8list_push(&pieces, str8((U8*) (data + last), i - last));
-                    }
-                    str8list_push(&pieces, str8((U8*) "{", 1));
-                    i += 2;
-                    last = i;
-                } else if (i + 1 < len && data[i + 1] == '}') {
-                    if (i > last) {
-                        str8list_push(&pieces, str8((U8*) (data + last), i - last));
-                    }
-                    if (it && it < end) {
-                        str8list_push(&pieces, arg_to_string(arena, *it));
-                        ++it;
-                    } else {
-                        str8list_push(&pieces, str8("<MISSING>"));
-                    }
-                    i += 2;
-                    last = i;
-                } else {
-                    ++i;
+    while (i < len) {
+        if (data[i] == '{') {
+            if (i + 1 < len && data[i + 1] == '{') {
+                if (i > last) {
+                    str8list_push(&pieces, str8((U8*) (data + last), i - last));
                 }
-            } else if (data[i] == '}') {
-                if (i + 1 < len && data[i + 1] == '}') {
-                    if (i > last) {
-                        str8list_push(&pieces, str8((U8*) (data + last), i - last));
-                    }
-                    str8list_push(&pieces, str8((U8*) "}", 1));
-                    i += 2;
-                    last = i;
-                } else {
-                    ++i;
+                str8list_push(&pieces, str8((U8*) "{", 1));
+                i += 2;
+                last = i;
+            } else if (i + 1 < len && data[i + 1] == '}') {
+                if (i > last) {
+                    str8list_push(&pieces, str8((U8*) (data + last), i - last));
                 }
+                if (it && it < end) {
+                    str8list_push(&pieces, arg_to_string(arena, *it));
+                    ++it;
+                } else {
+                    str8list_push(&pieces, str8("<MISSING>"));
+                }
+                i += 2;
+                last = i;
             } else {
                 ++i;
             }
+        } else if (data[i] == '}') {
+            if (i + 1 < len && data[i + 1] == '}') {
+                if (i > last) {
+                    str8list_push(&pieces, str8((U8*) (data + last), i - last));
+                }
+                str8list_push(&pieces, str8((U8*) "}", 1));
+                i += 2;
+                last = i;
+            } else {
+                ++i;
+            }
+        } else {
+            ++i;
         }
-        if (last < len) {
-            str8list_push(&pieces, str8((U8*) (data + last), len - last));
-        }
-
-        StringU8 formatted = str8_concat_n(arena, pieces.items, pieces.count);
-        log(level, formatted);
     }
-    temp_end(&tmp);
+    if (last < len) {
+        str8list_push(&pieces, str8((U8*) (data + last), len - last));
+    }
+
+    StringU8 formatted = str8_concat_n(arena, pieces.items, pieces.count);
+    log(level, formatted);
 }

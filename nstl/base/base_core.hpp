@@ -175,3 +175,41 @@ struct RangeU64 {
 #define FLAGS_SET(ptr, bits)      ((*(ptr)) |=  (U64)(bits))
 #define FLAGS_CLEAR(ptr, bits)    ((*(ptr)) &= ~(U64)(bits))
 #define FLAGS_TOGGLE(ptr, bits)   ((*(ptr)) ^=  (U64)(bits))
+
+
+// ////////////////////////
+// Defer
+
+typedef void (*defer_fn)(void*);
+
+struct DeferGuard {
+    defer_fn fn;
+    void* ctx;
+    bool active;
+
+    DeferGuard(defer_fn f, void* c) : fn(f), ctx(c), active(true) {}
+    ~DeferGuard() {
+        if (active && fn) {
+            fn(ctx);
+        }
+    }
+    void dismiss() {
+        active = false;
+    }
+};
+
+#define DEFER_UNIQ(prefix) NAME_CONCAT(prefix, __COUNTER__)
+
+#define DEFER_IMPL(ID, CAP, CODE)                                         \
+    auto NAME_CONCAT(ID, _lam) = CAP() { \
+        CODE;  \
+    };                        \
+    defer_fn NAME_CONCAT(ID, _fn) = [](void* _ctx) {                     \
+        typedef decltype(NAME_CONCAT(ID, _lam))                          \
+        NAME_CONCAT(ID, _lam_t);                                      \
+        (*static_cast<NAME_CONCAT(ID, _lam_t)*>(_ctx))();                \
+    };                                                                     \
+    DeferGuard NAME_CONCAT(ID, _g)(NAME_CONCAT(ID, _fn), &NAME_CONCAT(ID, _lam))
+
+#define DEFER(CODE) DEFER_IMPL(DEFER_UNIQ(__defer_), [=], CODE)
+#define DEFER_REF(CODE) DEFER_IMPL(DEFER_UNIQ(__defer_), [&], CODE)

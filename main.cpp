@@ -65,6 +65,7 @@ void entry_point() {
     log(LogLevel_Error, str8("123\n"));
     log_fmt(LogLevel_Warning, "123 {} lll\n", 1);
     log_fmt(LogLevel_Debug, "no args");
+    DEFER(log_fmt(LogLevel_Warning, "321 {} lll\n", 1));
 
     func(.c = 'A', .val = 42, .skip = true, .b2 = false,);
     int arg = 123;
