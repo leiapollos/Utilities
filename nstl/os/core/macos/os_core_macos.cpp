@@ -192,6 +192,100 @@ static void OS_mutex_unlock(OS_Handle mutex) {
     pthread_mutex_unlock(&entity->mutex);
 }
 
+static OS_Handle OS_condition_variable_create() {
+    OS_MACOS_Entity* entity = alloc_OS_entity();
+    entity->type = OS_MACOS_EntityType_ConditionVariable;
+    pthread_cond_init(&entity->conditionVariable.cond, 0);
+
+    OS_Handle handle = {(U64*) entity};
+    return handle;
+}
+
+static void OS_condition_variable_destroy(OS_Handle conditionVariable) {
+    ASSERT_DEBUG(conditionVariable.handle != 0);
+    OS_MACOS_Entity* entity = (OS_MACOS_Entity*) conditionVariable.handle;
+    ASSERT_DEBUG(entity->type == OS_MACOS_EntityType_ConditionVariable);
+    pthread_cond_destroy(&entity->conditionVariable.cond);
+    free_OS_entity(entity);
+}
+
+static void OS_condition_variable_wait(OS_Handle conditionVariable, OS_Handle mutex) {
+    ASSERT_DEBUG(conditionVariable.handle != 0);
+    ASSERT_DEBUG(mutex.handle != 0);
+
+    OS_MACOS_Entity* conditionEntity = (OS_MACOS_Entity*) conditionVariable.handle;
+    OS_MACOS_Entity* mutexEntity = (OS_MACOS_Entity*) mutex.handle;
+
+    ASSERT_DEBUG(conditionEntity->type == OS_MACOS_EntityType_ConditionVariable);
+    ASSERT_DEBUG(mutexEntity->type == OS_MACOS_EntityType_Mutex);
+
+    pthread_cond_wait(&conditionEntity->conditionVariable.cond, &mutexEntity->mutex);
+}
+
+static void OS_condition_variable_signal(OS_Handle conditionVariable) {
+    ASSERT_DEBUG(conditionVariable.handle != 0);
+    OS_MACOS_Entity* entity = (OS_MACOS_Entity*) conditionVariable.handle;
+    ASSERT_DEBUG(entity->type == OS_MACOS_EntityType_ConditionVariable);
+    pthread_cond_signal(&entity->conditionVariable.cond);
+}
+
+static void OS_condition_variable_broadcast(OS_Handle conditionVariable) {
+    ASSERT_DEBUG(conditionVariable.handle != 0);
+    OS_MACOS_Entity* entity = (OS_MACOS_Entity*) conditionVariable.handle;
+    ASSERT_DEBUG(entity->type == OS_MACOS_EntityType_ConditionVariable);
+    pthread_cond_broadcast(&entity->conditionVariable.cond);
+}
+
+static OS_Handle OS_barrier_create(U32 threadCount) {
+    OS_MACOS_Entity* entity = alloc_OS_entity();
+    entity->type = OS_MACOS_EntityType_Barrier;
+
+    OS_Handle mutexHandle = OS_mutex_create();
+    OS_Handle conditionHandle = OS_condition_variable_create();
+
+    entity->barrier.mutexHandle = mutexHandle;
+    entity->barrier.conditionHandle = conditionHandle;
+    entity->barrier.threadCount = threadCount;
+    entity->barrier.waitingCount = 0;
+    entity->barrier.generation = 0;
+
+    OS_Handle handle = {(U64*) entity};
+    return handle;
+}
+
+static void OS_barrier_destroy(OS_Handle barrierHandle) {
+    ASSERT_DEBUG(barrierHandle.handle != 0);
+    OS_MACOS_Entity* entity = (OS_MACOS_Entity*) barrierHandle.handle;
+    ASSERT_DEBUG(entity->type == OS_MACOS_EntityType_Barrier);
+
+    OS_condition_variable_destroy(entity->barrier.conditionHandle);
+    OS_mutex_destroy(entity->barrier.mutexHandle);
+    free_OS_entity(entity);
+}
+
+static void OS_barrier_wait(OS_Handle barrierHandle) {
+    ASSERT_DEBUG(barrierHandle.handle != 0);
+    OS_MACOS_Entity* entity = (OS_MACOS_Entity*) barrierHandle.handle;
+    ASSERT_DEBUG(entity->type == OS_MACOS_EntityType_Barrier);
+
+    OS_mutex_lock(entity->barrier.mutexHandle);
+
+    U32 generation = entity->barrier.generation;
+    entity->barrier.waitingCount += 1;
+
+    if (entity->barrier.waitingCount == entity->barrier.threadCount) {
+        entity->barrier.waitingCount = 0;
+        entity->barrier.generation += 1;
+        OS_condition_variable_broadcast(entity->barrier.conditionHandle);
+    } else {
+        while (generation == entity->barrier.generation) {
+            OS_condition_variable_wait(entity->barrier.conditionHandle, entity->barrier.mutexHandle);
+        }
+    }
+
+    OS_mutex_unlock(entity->barrier.mutexHandle);
+}
+
 
 // ////////////////////////
 // File I/O

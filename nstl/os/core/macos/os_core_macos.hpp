@@ -24,6 +24,8 @@ enum OS_MACOS_EntityType : U64 {
     OS_MACOS_EntityType_Thread = (1 << 0),
     OS_MACOS_EntityType_Mutex = (2 << 0),
     OS_MACOS_EntityType_File = (3 << 0),
+    OS_MACOS_EntityType_ConditionVariable = (4 << 0),
+    OS_MACOS_EntityType_Barrier = (5 << 0),
 };
 
 struct OS_MACOS_Entity {
@@ -42,6 +44,18 @@ struct OS_MACOS_Entity {
         struct {
             int fd;
         } file;
+
+        struct {
+            pthread_cond_t cond;
+        } conditionVariable;
+
+        struct {
+            OS_Handle conditionHandle;
+            OS_Handle mutexHandle;
+            U32 threadCount;
+            U32 waitingCount;
+            U32 generation;
+        } barrier;
     };
 };
 

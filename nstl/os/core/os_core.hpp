@@ -60,6 +60,16 @@ static void OS_mutex_destroy(OS_Handle mutex);
 static void OS_mutex_lock(OS_Handle mutex);
 static void OS_mutex_unlock(OS_Handle mutex);
 
+static OS_Handle OS_condition_variable_create();
+static void OS_condition_variable_destroy(OS_Handle conditionVariable);
+static void OS_condition_variable_wait(OS_Handle conditionVariable, OS_Handle mutex);
+static void OS_condition_variable_signal(OS_Handle conditionVariable);
+static void OS_condition_variable_broadcast(OS_Handle conditionVariable);
+
+static OS_Handle OS_barrier_create(U32 threadCount);
+static void OS_barrier_destroy(OS_Handle barrier);
+static void OS_barrier_wait(OS_Handle barrier);
+
 
 // ////////////////////////
 // File I/O
