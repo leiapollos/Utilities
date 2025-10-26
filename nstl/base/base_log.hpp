@@ -28,14 +28,14 @@ static void log(LogLevel level, StringU8 str);
 // ////////////////////////
 // Log Formatting
 
-enum class LogFmtKind {
-    S64,
-    U64,
-    F64,
-    CSTR,
-    CHAR,
-    STRINGU8,
-    PTR,
+enum LogFmtKind {
+    LogFmtKind_S64,
+    LogFmtKind_U64,
+    LogFmtKind_F64,
+    LogFmtKind_CSTR,
+    LogFmtKind_CHAR,
+    LogFmtKind_STRINGU8,
+    LogFmtKind_PTR,
 };
 
 struct LogFmtArg {
@@ -46,83 +46,83 @@ struct LogFmtArg {
         U64 U64Val;
         F64 F64Val;
         const char* cstrVal;
-        U8 chVal;
+        U8 charVal;
         const void* ptrVal;
         StringU8 stringU8Val;
     };
 
     LogFmtArg() {
-        kind = LogFmtKind::CSTR;
+        kind = LogFmtKind_CSTR;
         cstrVal = "(null)";
     }
 
     LogFmtArg(U8 v) {
-        kind = LogFmtKind::CHAR;
-        chVal = v;
+        kind = LogFmtKind_CHAR;
+        charVal = v;
     }
 
     LogFmtArg(const char* v) {
-        kind = LogFmtKind::CSTR;
+        kind = LogFmtKind_CSTR;
         cstrVal = v ? v : "(null)";
     }
 
     LogFmtArg(StringU8 v) {
-        kind = LogFmtKind::STRINGU8;
+        kind = LogFmtKind_STRINGU8;
         stringU8Val = v;
     }
 
     LogFmtArg(void* v) {
-        kind = LogFmtKind::PTR;
+        kind = LogFmtKind_PTR;
         ptrVal = v;
     }
 
     LogFmtArg(const void* v) {
-        kind = LogFmtKind::PTR;
+        kind = LogFmtKind_PTR;
         ptrVal = v;
     }
 
     LogFmtArg(F32 v) {
-        kind = LogFmtKind::F64;
+        kind = LogFmtKind_F64;
         F64Val = (F64) v;
     }
 
     LogFmtArg(F64 v) {
-        kind = LogFmtKind::F64;
+        kind = LogFmtKind_F64;
         F64Val = v;
     }
 
     LogFmtArg(S8 v) {
-        kind = LogFmtKind::S64;
+        kind = LogFmtKind_S64;
         S64Val = (S64) v;
     }
 
     LogFmtArg(S16 v) {
-        kind = LogFmtKind::S64;
+        kind = LogFmtKind_S64;
         S64Val = (S64) v;
     }
 
     LogFmtArg(S32 v) {
-        kind = LogFmtKind::S64;
+        kind = LogFmtKind_S64;
         S64Val = (S64) v;
     }
 
     LogFmtArg(S64 v) {
-        kind = LogFmtKind::S64;
+        kind = LogFmtKind_S64;
         S64Val = v;
     }
 
     LogFmtArg(U16 v) {
-        kind = LogFmtKind::U64;
+        kind = LogFmtKind_U64;
         U64Val = (U64) v;
     }
 
     LogFmtArg(U32 v) {
-        kind = LogFmtKind::U64;
+        kind = LogFmtKind_U64;
         U64Val = (U64) v;
     }
 
     LogFmtArg(U64 v) {
-        kind = LogFmtKind::U64;
+        kind = LogFmtKind_U64;
         U64Val = v;
     }
 };

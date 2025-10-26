@@ -59,7 +59,7 @@ struct ProfilerEntry {
 };
 
 struct ProfilerThreadState {
-    U32 currentParentIndex; // 0 == ROOT
+    U32 currentParentIndex;
     U32 threadId;
     const char* threadName;
 
@@ -85,9 +85,9 @@ struct ProfClock {
     static U64 to_micros(U64 ticksOrMicros);
 };
 
-void ProfilerInitThread(const char* name, U32 traceEventCapacityIfEnabled);
-void ProfilerSetThreadName(const char* name);
-struct ProfilerThreadState* ProfilerGetTLS();
+void profiler_init_thread(const char* name, U32 traceEventCapacityIfEnabled);
+void profiler_set_thread_name(const char* name);
+struct ProfilerThreadState* profiler_get_tls();
 
 struct TimedScope {
     U32 index;
@@ -98,10 +98,10 @@ struct TimedScope {
     FORCE_INLINE ~TimedScope() noexcept;
 };
 
-void ProfilerInitialize();
-void ProfilerShutdown();
-void ProfilerPrintReport();
-void ProfilerDumpTraceJSON(const char* path);
+void profiler_initialize();
+void profiler_shutdown();
+void profiler_print_report();
+void profiler_dump_trace_json(const char* path);
 
 #else
 
@@ -109,17 +109,17 @@ void ProfilerDumpTraceJSON(const char* path);
 #define TIME_FUNCTION()
 #define PROFILER_ANCHOR_COUNT_CHECK()
 
-inline void ProfilerInitialize() {
+inline void profiler_initialize() {
 }
-inline void ProfilerShutdown() {
+inline void profiler_shutdown() {
 }
-inline void ProfilerInitThread(const char*, unsigned) {
+inline void profiler_init_thread(const char*, unsigned) {
 }
-inline void ProfilerSetThreadName(const char*) {
+inline void profiler_set_thread_name(const char*) {
 }
-inline void ProfilerPrintReport() {
+inline void profiler_print_report() {
 }
-inline void ProfilerDumpTraceJSON(const char*) {
+inline void profiler_dump_trace_json(const char*) {
 }
 
 #endif  // PROFILER_ENABLED

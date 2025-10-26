@@ -87,7 +87,7 @@ void* arena_push(Arena* arena, U64 size, U64 alignment) {
             return result;
         }
 
-        if (!FLAGS_HAS(current->flags, DoChain)) {
+        if (!FLAGS_HAS(current->flags, ArenaFlags_DoChain)) {
             ASSERT_DEBUG((newPos <= current->reserved) && "Arena is out of bounds");
             OS_abort(1);
         }
@@ -131,9 +131,9 @@ U64 arena_get_pos(Arena* arena) {
 // ////////////////////////
 // Scratch
 
-static thread_local Scratch_TLS g_scratch_tls = {
+thread_local Scratch_TLS g_scratchTls = {
     .slots = {0, 0},
-    .next_index = 0,
+    .nextIndex = 0,
     .initialized = 0,
 };
 
@@ -145,27 +145,28 @@ static B32 scratch_collides_many(Arena* cand,
     }
     for (U32 i = 0; i < count; ++i) {
         Arena* ex = excludes[i];
-        if (ex != 0 && cand == ex)
+        if (ex != 0 && cand == ex) {
             return 1;
+        }
     }
     return 0;
 }
 
 static void scratch_thread_init_with_params(const ArenaParameters& params) {
-    if (g_scratch_tls.initialized) {
+    if (g_scratchTls.initialized) {
         return;
     }
 
     ArenaParameters p = params;
-    if (!FLAGS_HAS(p.flags, DoChain)) {
-        FLAGS_SET(&p.flags, DoChain);
+    if (!FLAGS_HAS(p.flags, ArenaFlags_DoChain)) {
+        FLAGS_SET(&p.flags, ArenaFlags_DoChain);
     }
 
     for (U32 i = 0; i < SCRATCH_TLS_ARENA_COUNT; ++i) {
-        g_scratch_tls.slots[i] = arena_alloc(p);
+        g_scratchTls.slots[i] = arena_alloc(p);
     }
-    g_scratch_tls.next_index = 0;
-    g_scratch_tls.initialized = 1;
+    g_scratchTls.nextIndex = 0;
+    g_scratchTls.initialized = 1;
 }
 
 static void scratch_thread_init() {
@@ -174,17 +175,17 @@ static void scratch_thread_init() {
 }
 
 static void scratch_thread_shutdown() {
-    if (!g_scratch_tls.initialized) {
+    if (!g_scratchTls.initialized) {
         return;
     }
 
     for (U32 i = 0; i < SCRATCH_TLS_ARENA_COUNT; ++i) {
-        if (g_scratch_tls.slots[i]) {
-            arena_release(g_scratch_tls.slots[i]);
-            g_scratch_tls.slots[i] = 0;
+        if (g_scratchTls.slots[i]) {
+            arena_release(g_scratchTls.slots[i]);
+            g_scratchTls.slots[i] = 0;
         }
     }
-    g_scratch_tls.initialized = 0;
+    g_scratchTls.initialized = 0;
 }
 
 static Temp temp_begin(Arena* arena) {
@@ -198,27 +199,27 @@ static void temp_end(Temp* t) {
     }
 
     arena_pop_to(t->arena, t->pos);
-    if (t->is_temporary) {
+    if (t->isTemporary) {
         arena_release(t->arena);
     }
     t->arena = 0;
     t->pos = 0;
-    t->is_temporary = 0;
+    t->isTemporary = 0;
 }
 
 static Temp get_scratch(Arena* const* excludes, U32 count) {
-    ASSERT_DEBUG(g_scratch_tls.initialized && "Scratch TLS not initialized");
+    ASSERT_DEBUG(g_scratchTls.initialized && "Scratch TLS not initialized");
 
     static_assert(is_power_of_two(SCRATCH_TLS_ARENA_COUNT), "SCRATCH_TLS_ARENA_COUNT must be a power of two");
 
     U32 mask = SCRATCH_TLS_ARENA_COUNT - 1u;
 
-    U32 idx = g_scratch_tls.next_index & mask;
-    g_scratch_tls.next_index = (g_scratch_tls.next_index + 1u) & mask;
+    U32 idx = g_scratchTls.nextIndex & mask;
+    g_scratchTls.nextIndex = (g_scratchTls.nextIndex + 1u) & mask;
 
     for (U32 k = 0; k < SCRATCH_TLS_ARENA_COUNT; ++k) {
         U32 i = (idx + k) & mask;
-        Arena* cand = g_scratch_tls.slots[i];
+        Arena* cand = g_scratchTls.slots[i];
         if (!scratch_collides_many(cand, excludes, count)) {
             return temp_begin(cand);
         }
@@ -228,6 +229,6 @@ static Temp get_scratch(Arena* const* excludes, U32 count) {
     ArenaParameters p = {};
     Arena* temp_arena = arena_alloc(p);
     Temp t = temp_begin(temp_arena);
-    t.is_temporary = 1;
+    t.isTemporary = 1;
     return t;
 }

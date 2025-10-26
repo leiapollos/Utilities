@@ -11,16 +11,15 @@
 #include "nstl/os/os_include.cpp"
 
 #include <iostream>
-#include <chrono>
 
-struct opt {
+struct Opt {
     bool skip;
     int val;
     bool b2;
     char c;
 };
 
-void func_(bool shouldPrint, opt o) {
+void func_(bool shouldPrint, Opt o) {
     if (shouldPrint) {
         std::cout << "Hello, World!" << std::endl;
     }
@@ -29,7 +28,7 @@ void func_(bool shouldPrint, opt o) {
 
 #define func(...)                                             \
     do {                                                     \
-        opt _tmp_opt = {.c = 'd', __VA_ARGS__};                           \
+        Opt _tmp_opt = {.c = 'd', __VA_ARGS__};                           \
         func_(true, _tmp_opt);                                                  \
     } while (0)
 
@@ -74,28 +73,29 @@ void entry_point() {
     OS_thread_join(handle);
     std::cout << "Thread joined." << std::endl;
     
-    std::chrono::time_point startChrono = std::chrono::high_resolution_clock::now();
-    U64 start = OS_get_time_microseconds();
-    U64 size = 1024 * 1024 * 1024;
-    void* ptr = OS_reserve(size);
+    profiler_initialize();
+    
+    {
+        TIME_SCOPE("Arena and Memory Operations");
+        U64 size = 1024 * 1024 * 1024;
+        void* ptr = OS_reserve(size);
 
+        OS_SystemInfo* sysInfo = OS_get_system_info();
+        Arena* arena = arena_alloc(
+            .arenaSize = TB(79) + GB(575) + MB(1023) + KB(600),
+        );
+        void* currentPos = arena_push(arena, GB(4) - sysInfo->pageSize/2);
+        currentPos = (U8*)currentPos + sysInfo->pageSize - ARENA_HEADER_SIZE;
+        U8* res = (U8*)currentPos + MB(4) - ARENA_HEADER_SIZE;
+        memset(res, 0, ARENA_HEADER_SIZE);
+        Arena* temp = (Arena*)res;
+        temp->pos = 69698;
+        std::cout << temp->pos << " " << temp->reserved << " " << temp->committed << std::endl;
+        arena_release(arena);
 
-    OS_SystemInfo* sysInfo = OS_get_system_info();
-    Arena* arena = arena_alloc(
-        .arenaSize = TB(79) + GB(575) + MB(1023) + KB(600),
-    );
-    void* currentPos = arena_push(arena, GB(4) - sysInfo->pageSize/2);
-    currentPos = (U8*)currentPos + sysInfo->pageSize - ARENA_HEADER_SIZE;
-    U8* res = (U8*)currentPos + MB(4) - ARENA_HEADER_SIZE;
-    memset(res, 0, ARENA_HEADER_SIZE);
-    Arena* temp = (Arena*)res;
-    temp->pos = 69698;
-    std::cout << temp->pos << " " << temp->reserved << " " << temp->committed << std::endl;
-    arena_release(arena);
-
-    OS_release(ptr, size);
-    std::chrono::time_point endChrono = std::chrono::high_resolution_clock::now();
-    U64 end = OS_get_time_microseconds();
-    std::cout << end - start << " microseconds" << std::endl;
-    std::cout << endChrono.time_since_epoch().count() - startChrono.time_since_epoch().count() << " chrono" << std::endl;
+        OS_release(ptr, size);
+    }
+    
+    profiler_print_report();
+    profiler_shutdown();
 }

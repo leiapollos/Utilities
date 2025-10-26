@@ -7,15 +7,15 @@
 // ////////////////////////
 // Arena
 
-enum ArenaFlags : U64 {
-    None = 0,
-    DoChain = (1 << 0),
+enum ArenaFlags {
+    ArenaFlags_None = 0,
+    ArenaFlags_DoChain = (1 << 0),
 };
 
 struct ArenaParameters {
     U64 arenaSize = MB(4);
     U64 committedSize = KB(32);
-    U64 flags = DoChain;
+    U64 flags = ArenaFlags_DoChain;
 };
 
 struct Arena {
@@ -48,7 +48,7 @@ static U64 arena_get_pos(Arena* arena);
 struct Temp {
     Arena* arena;
     U64 pos;          // absolute position from arena_get_pos
-    B32 is_temporary; // if true, release arena on temp_end
+    B32 isTemporary; // if true, release arena on temp_end
 };
 
 static Temp temp_begin(Arena* arena);
@@ -62,7 +62,7 @@ static void temp_end(Temp* t);
 
 struct Scratch_TLS {
     Arena* slots[SCRATCH_TLS_ARENA_COUNT];
-    U32 next_index; // alternate 0 -> SCRATCH_TLS_ARENA_COUNT-1
+    U32 nextIndex;
     B32 initialized;
 };
 

@@ -3,7 +3,7 @@
 //
 
 
-static void base_entry_point(int argc, char **argv) {
+static void base_entry_point(int argc, char** argv) {
     log_init();
 
     entry_point();

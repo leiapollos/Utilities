@@ -5,11 +5,11 @@
 // ////////////////////////
 // Log
 
-static LogLevel g_log_level = LogLevel::LogLevel_Debug;
-static bool g_use_color = false;
-static const StringU8 g_default_terminal_color = str8("\033[0m");
+static LogLevel g_logLevel = LogLevel_Debug;
+static bool g_useColor = false;
+static const StringU8 g_defaultTerminalColor = str8("\033[0m");
 
-static const LogLevelInfo g_log_level_info[] = {
+static const LogLevelInfo g_logLevelInfo[] = {
     [LogLevel_Debug] = {
         .name = str8("DEBUG"),
         .colorCode = str8("\033[36m"), // Cyan
@@ -29,19 +29,19 @@ static const LogLevelInfo g_log_level_info[] = {
 };
 
 static const LogLevelInfo* log_get_level_info(LogLevel level) {
-    return &g_log_level_info[level];
+    return &g_logLevelInfo[level];
 }
 
 static void log_init() {
-    g_use_color = OS_terminal_supports_color();
+    g_useColor = OS_terminal_supports_color();
 }
 
 static void set_log_level(LogLevel level) {
-    g_log_level = level;
+    g_logLevel = level;
 }
 
 static void log(LogLevel level, StringU8 str) {
-    if (level < g_log_level) {
+    if (level < g_logLevel) {
         return;
     }
 
@@ -50,8 +50,8 @@ static void log(LogLevel level, StringU8 str) {
     Arena* arena = tmp.arena;
 
     const LogLevelInfo* info = log_get_level_info(level);
-    StringU8 color = (g_use_color) ? info->colorCode : STR8_EMPTY;
-    StringU8 defaultColor = (g_use_color) ? g_default_terminal_color : STR8_EMPTY;
+    StringU8 color = (g_useColor) ? info->colorCode : STR8_EMPTY;
+    StringU8 defaultColor = (g_useColor) ? g_defaultTerminalColor : STR8_EMPTY;
     StringU8 res = str8_concat(arena,
                                color,
                                str8("["),
@@ -65,19 +65,19 @@ static void log(LogLevel level, StringU8 str) {
 
 static StringU8 arg_to_string(Arena* arena, const LogFmtArg& arg) {
     switch (arg.kind) {
-        case LogFmtKind::S64:
+        case LogFmtKind_S64:
             return str8_from_S64(arena, arg.S64Val);
-        case LogFmtKind::U64:
+        case LogFmtKind_U64:
             return str8_from_U64(arena, arg.U64Val, 10);
-        case LogFmtKind::F64:
+        case LogFmtKind_F64:
             return str8_from_F64(arena, arg.F64Val, 5);
-        case LogFmtKind::CSTR:
+        case LogFmtKind_CSTR:
             return str8(arg.cstrVal);
-        case LogFmtKind::CHAR:
-            return str8_from_char(arena, arg.chVal);
-        case LogFmtKind::PTR:
+        case LogFmtKind_CHAR:
+            return str8_from_char(arena, arg.charVal);
+        case LogFmtKind_PTR:
             return str8_from_ptr(arena, arg.ptrVal);
-        case LogFmtKind::STRINGU8:
+        case LogFmtKind_STRINGU8:
             return arg.stringU8Val;
     }
     return STR8_EMPTY;
@@ -87,7 +87,7 @@ static void log_fmt_(LogLevel level,
                      StringU8 fmt,
                      const LogFmtArg* args,
                      U64 argCount) {
-    if (level < g_log_level) {
+    if (level < g_logLevel) {
         return;
     }
 

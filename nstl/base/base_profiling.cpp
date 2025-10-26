@@ -17,13 +17,14 @@ struct ProfilerGlobalState {
     OS_Handle registryMutex;
 };
 
-ProfilerGlobalState g_profiler = {};
+static ProfilerGlobalState g_profiler = {};
 
-static thread_local ProfilerThreadState* g_tls = nullptr;
+thread_local ProfilerThreadState* g_tlsProfilerState = nullptr;
 
-static void ProfilerRegisterTLS(ProfilerThreadState* tls) {
-    if (!tls)
+static void profiler_register_tls_(ProfilerThreadState* tls) {
+    if (!tls) {
         return;
+    }
     OS_mutex_lock(g_profiler.registryMutex);
     if (g_profiler.threadCount < PROFILER_MAX_THREADS) {
         g_profiler.threadStates[g_profiler.threadCount++] = tls;
@@ -51,7 +52,7 @@ U64 ProfClock::to_micros(U64 ticksOrMicros) {
 #endif
 }
 
-void ProfilerInitialize() {
+void profiler_initialize() {
     memset(&g_profiler, 0, sizeof(g_profiler));
     g_profiler.registryMutex = OS_mutex_create();
 
@@ -97,29 +98,31 @@ void ProfilerInitialize() {
     g_profiler.globalStartMicros = ProfClock::to_micros(ProfClock::now());
 }
 
-void ProfilerShutdown() {
+void profiler_shutdown() {
     OS_mutex_destroy(g_profiler.registryMutex);
     g_profiler.registryMutex = {0};
 }
 
-ProfilerThreadState* ProfilerGetTLS() {
-    if (g_tls)
-        return g_tls;
+ProfilerThreadState* profiler_get_tls() {
+    if (g_tlsProfilerState) {
+        return g_tlsProfilerState;
+    }
 
-    ProfilerInitThread(nullptr,
+    profiler_init_thread(nullptr,
 #if PROFILER_TRACE_EVENTS
                        PROFILER_DEFAULT_TRACE_EVENT_CAPACITY
 #else
                        0
 #endif
     );
-    return g_tls;
+    return g_tlsProfilerState;
 }
 
-void ProfilerInitThread(const char* name, U32 traceEventCapacityIfEnabled) {
-    if (g_tls) {
-        if (name)
-            g_tls->threadName = name;
+void profiler_init_thread(const char* name, U32 traceEventCapacityIfEnabled) {
+    if (g_tlsProfilerState) {
+        if (name) {
+            g_tlsProfilerState->threadName = name;
+        }
         return;
     }
 
@@ -145,17 +148,17 @@ void ProfilerInitThread(const char* name, U32 traceEventCapacityIfEnabled) {
     }
 #endif
 
-    g_tls = tls;
-    ProfilerRegisterTLS(tls);
+    g_tlsProfilerState = tls;
+    profiler_register_tls_(tls);
 }
 
-void ProfilerSetThreadName(const char* name) {
-    ProfilerThreadState* tls = ProfilerGetTLS();
+void profiler_set_thread_name(const char* name) {
+    ProfilerThreadState* tls = profiler_get_tls();
     tls->threadName = name;
 }
 
 FORCE_INLINE TimedScope::TimedScope(U32 index_, const char* label_) noexcept {
-    ProfilerThreadState* tls = ProfilerGetTLS();
+    ProfilerThreadState* tls = profiler_get_tls();
     index = index_;
 
     prevParent = tls->currentParentIndex;
@@ -168,9 +171,10 @@ FORCE_INLINE TimedScope::TimedScope(U32 index_, const char* label_) noexcept {
 }
 
 FORCE_INLINE TimedScope::~TimedScope() noexcept {
-    ProfilerThreadState* tls = g_tls;
-    if (!tls)
+    ProfilerThreadState* tls = g_tlsProfilerState;
+    if (!tls) {
         return;
+    }
 
     const U64 endTicks = ProfClock::now();
     const U64 elapsedTicks = (endTicks >= startTicks) ? (endTicks - startTicks) : 0;
@@ -202,7 +206,7 @@ FORCE_INLINE TimedScope::~TimedScope() noexcept {
 #endif
 }
 
-void ProfilerPrintReport() {
+void profiler_print_report() {
     ProfilerEntry agg[PROFILER_MAX_ANCHORS];
     memset(agg, 0, sizeof(agg));
 
@@ -211,20 +215,23 @@ void ProfilerPrintReport() {
 
     for (U32 t = 0; t < tcount; ++t) {
         ProfilerThreadState* tls = g_profiler.threadStates[t];
-        if (!tls)
+        if (!tls) {
             continue;
+        }
 
         for (U32 i = 1; i < PROFILER_MAX_ANCHORS; ++i) {
             const ProfilerEntry* src = &tls->entries[i];
-            if (src->callCount == 0)
+            if (src->callCount == 0) {
                 continue;
+            }
 
             ProfilerEntry* dst = &agg[i];
             dst->microsExclusive += src->microsExclusive;
             dst->microsInclusive += src->microsInclusive;
             dst->callCount += src->callCount;
-            if (!dst->label && src->label)
+            if (!dst->label && src->label) {
                 dst->label = src->label;
+            }
         }
     }
     OS_mutex_unlock(g_profiler.registryMutex);
@@ -287,14 +294,15 @@ void ProfilerPrintReport() {
     printf("==========================\n");
 }
 
-void ProfilerDumpTraceJSON(const char* path) {
+void profiler_dump_trace_json(const char* path) {
 #if !PROFILER_TRACE_EVENTS
     (void) path;
     return;
 #else
     FILE* f = fopen(path, "wb");
-    if (!f)
+    if (!f) {
         return;
+    }
 
     fprintf(f, "{ \"traceEvents\": [\n");
 
@@ -305,11 +313,13 @@ void ProfilerDumpTraceJSON(const char* path) {
 
     for (U32 t = 0; t < tcount; ++t) {
         ProfilerThreadState* tls = g_profiler.threadStates[t];
-        if (!tls || !tls->threadName)
+        if (!tls || !tls->threadName) {
             continue;
+        }
 
-        if (!first)
+        if (!first) {
             fprintf(f, ",\n");
+        }
         first = false;
 
         fprintf(f,
@@ -321,14 +331,16 @@ void ProfilerDumpTraceJSON(const char* path) {
 
     for (U32 t = 0; t < tcount; ++t) {
         ProfilerThreadState* tls = g_profiler.threadStates[t];
-        if (!tls || !tls->events)
+        if (!tls || !tls->events) {
             continue;
+        }
 
         for (U32 i = 0; i < tls->eventCount; ++i) {
             const ProfilerThreadState::TraceEvent* e = &tls->events[i];
 
-            if (!first)
+            if (!first) {
                 fprintf(f, ",\n");
+            }
             first = false;
 
             fprintf(f,
