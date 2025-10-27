@@ -77,6 +77,15 @@ debug_break(); \
 
 #define EXTERN_C extern "C"
 
+#if defined(COMPILER_MSVC) || (defined(COMPILER_CLANG) && defined(OS_WINDOWS))
+# pragma section(".rdata$", read)
+# define READ_ONLY __declspec(allocate(".rdata$"))
+#elif defined(COMPILER_CLANG) && defined(OS_LINUX)
+# define READ_ONLY __attribute__((section(".rodata")))
+#else
+// GCC read only attributes introduce some issues
+# define READ_ONLY
+#endif
 
 // ////////////////////////
 // Address Sanitizer

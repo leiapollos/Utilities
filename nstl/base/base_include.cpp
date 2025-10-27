@@ -8,5 +8,6 @@
 #include "base_math.cpp"
 #include "base_arena.cpp"
 #include "base_string.cpp"
+#include "base_threading.cpp"
 #include "base_log.cpp"
 #include "base_entry_point.cpp"

@@ -11,6 +11,7 @@
 #include "base_math.hpp"
 #include "base_arena.hpp"
 #include "base_string.hpp"
+#include "base_threading.hpp"
 #include "base_log.hpp"
 #include "base_profiling.hpp"
 #include "base_random.hpp"

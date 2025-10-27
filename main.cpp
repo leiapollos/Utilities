@@ -52,6 +52,36 @@ void work(void*arg) {
     std::cout << "Thread finished with value: " << val << std::endl;
 }
 
+struct CondVarTestState {
+    OS_Handle mutex;
+    OS_Handle condVar;
+    int flag;
+};
+
+void condition_variable_test_thread(void* arg) {
+    CondVarTestState* state = (CondVarTestState*) arg;
+    
+    OS_mutex_lock(state->mutex);
+    std::cout << "Thread waiting for condition..." << std::endl;
+    while (state->flag == 0) {
+        OS_condition_variable_wait(state->condVar, state->mutex);
+    }
+    std::cout << "Thread woke up! Flag is now: " << state->flag << std::endl;
+    OS_mutex_unlock(state->mutex);
+}
+
+struct BarrierTestState {
+    OS_Handle barrier;
+};
+
+void barrier_test_thread(void* arg) {
+    BarrierTestState* state = (BarrierTestState*) arg;
+    U32 threadId = OS_get_thread_id_u32();
+    std::cout << "Thread " << threadId << " reached barrier, waiting..." << std::endl;
+    OS_barrier_wait(state->barrier);
+    std::cout << "Thread " << threadId << " passed barrier!" << std::endl;
+}
+
 void entry_point() {
     Arena* a = arena_alloc();
     char test[4];
@@ -72,6 +102,51 @@ void entry_point() {
     std::cout << "Thread created." << std::endl;
     OS_thread_join(handle);
     std::cout << "Thread joined." << std::endl;
+    
+    // Test condition variable
+    {
+        std::cout << "\n=== Testing Condition Variable ===" << std::endl;
+        CondVarTestState* cvState = (CondVarTestState*) arena_push(a, sizeof(CondVarTestState));
+        cvState->mutex = OS_mutex_create();
+        cvState->condVar = OS_condition_variable_create();
+        cvState->flag = 0;
+        
+        OS_Handle cvThread = OS_thread_create(condition_variable_test_thread, cvState);
+        
+        sleep(1);
+        std::cout << "Main: Setting flag and signaling..." << std::endl;
+        OS_mutex_lock(cvState->mutex);
+        cvState->flag = 1;
+        OS_condition_variable_signal(cvState->condVar);
+        OS_mutex_unlock(cvState->mutex);
+        
+        OS_thread_join(cvThread);
+        
+        OS_condition_variable_destroy(cvState->condVar);
+        OS_mutex_destroy(cvState->mutex);
+        std::cout << "Condition variable test done!" << std::endl;
+    }
+    
+    // Test barrier
+    {
+        std::cout << "\n=== Testing Barrier ===" << std::endl;
+        U32 numThreads = 3;
+        
+        BarrierTestState* barrierState = (BarrierTestState*) arena_push(a, sizeof(BarrierTestState));
+        barrierState->barrier = OS_barrier_create(numThreads);
+        
+        OS_Handle* threads = (OS_Handle*) arena_push(a, sizeof(OS_Handle) * numThreads);
+        for (U32 i = 0; i < numThreads; i++) {
+            threads[i] = OS_thread_create(barrier_test_thread, barrierState);
+        }
+        
+        for (U32 i = 0; i < numThreads; i++) {
+            OS_thread_join(threads[i]);
+        }
+        
+        OS_barrier_destroy(barrierState->barrier);
+        std::cout << "Barrier test done!" << std::endl;
+    }
     
     profiler_initialize();
     

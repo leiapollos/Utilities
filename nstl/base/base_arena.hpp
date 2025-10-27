@@ -40,6 +40,7 @@ static U64 arena_get_pos(Arena* arena);
 
 #define ARENA_PUSH_ARRAY_ALIGNED(arena, T, count, alignment) (T*)arena_push(arena, sizeof(T)*count, alignment)
 #define ARENA_PUSH_ARRAY(arena, T, count) ARENA_PUSH_ARRAY_ALIGNED(arena, T, count, alignof(T))
+#define ARENA_PUSH_STRUCT(arena, T) (T*)arena_push(arena, sizeof(T), alignof(T))
 
 
 // ////////////////////////
@@ -60,13 +61,11 @@ static void temp_end(Temp* t);
 
 #define SCRATCH_TLS_ARENA_COUNT 2
 
-struct Scratch_TLS {
+struct ScratchArenas {
     Arena* slots[SCRATCH_TLS_ARENA_COUNT];
     U32 nextIndex;
     B32 initialized;
 };
+static_assert(is_power_of_two(SCRATCH_TLS_ARENA_COUNT), "SCRATCH_TLS_ARENA_COUNT must be a power of two");
 
-static void scratch_thread_init_with_params(const ArenaParameters& params);
-static void scratch_thread_init();
-static void scratch_thread_shutdown();
 static Temp get_scratch(Arena* const* excludes, U32 count);

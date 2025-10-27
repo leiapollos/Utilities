@@ -526,7 +526,7 @@ int main(int argc, char** argv) {
         info->logicalCores = static_cast<U32>(sysconf(_SC_NPROCESSORS_ONLN));
     }
 
-    scratch_thread_init();
+    thread_context_alloc();
 
     Arena* arena = arena_alloc();
     g_OS_MacOSState.arena = arena;

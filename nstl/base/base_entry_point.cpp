@@ -10,10 +10,10 @@ static void base_entry_point(int argc, char** argv) {
 }
 
 static void thread_entry_point(void (*func)(void* params), void* args) {
-    scratch_thread_init();
+    thread_context_alloc();
     log_init();
 
     func(args);
-    
-    scratch_thread_shutdown();
+
+    thread_context_destroy();
 }

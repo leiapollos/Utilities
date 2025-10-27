@@ -5,6 +5,8 @@
 // ////////////////////////
 // Arena
 
+#include "base_threading.hpp"
+
 Arena* arena_alloc_(const ArenaParameters& parameters) {
     ASSERT_DEBUG(parameters.arenaSize >= parameters.committedSize && "Arena size should be bigger than commit size");
 
@@ -131,12 +133,6 @@ U64 arena_get_pos(Arena* arena) {
 // ////////////////////////
 // Scratch
 
-thread_local Scratch_TLS g_scratchTls = {
-    .slots = {0, 0},
-    .nextIndex = 0,
-    .initialized = 0,
-};
-
 static B32 scratch_collides_many(Arena* cand,
                                  Arena* const* excludes,
                                  U32 count) {
@@ -150,42 +146,6 @@ static B32 scratch_collides_many(Arena* cand,
         }
     }
     return 0;
-}
-
-static void scratch_thread_init_with_params(const ArenaParameters& params) {
-    if (g_scratchTls.initialized) {
-        return;
-    }
-
-    ArenaParameters p = params;
-    if (!FLAGS_HAS(p.flags, ArenaFlags_DoChain)) {
-        FLAGS_SET(&p.flags, ArenaFlags_DoChain);
-    }
-
-    for (U32 i = 0; i < SCRATCH_TLS_ARENA_COUNT; ++i) {
-        g_scratchTls.slots[i] = arena_alloc(p);
-    }
-    g_scratchTls.nextIndex = 0;
-    g_scratchTls.initialized = 1;
-}
-
-static void scratch_thread_init() {
-    ArenaParameters p = {};
-    scratch_thread_init_with_params(p);
-}
-
-static void scratch_thread_shutdown() {
-    if (!g_scratchTls.initialized) {
-        return;
-    }
-
-    for (U32 i = 0; i < SCRATCH_TLS_ARENA_COUNT; ++i) {
-        if (g_scratchTls.slots[i]) {
-            arena_release(g_scratchTls.slots[i]);
-            g_scratchTls.slots[i] = 0;
-        }
-    }
-    g_scratchTls.initialized = 0;
 }
 
 static Temp temp_begin(Arena* arena) {
@@ -208,18 +168,17 @@ static void temp_end(Temp* t) {
 }
 
 static Temp get_scratch(Arena* const* excludes, U32 count) {
-    ASSERT_DEBUG(g_scratchTls.initialized && "Scratch TLS not initialized");
-
-    static_assert(is_power_of_two(SCRATCH_TLS_ARENA_COUNT), "SCRATCH_TLS_ARENA_COUNT must be a power of two");
 
     U32 mask = SCRATCH_TLS_ARENA_COUNT - 1u;
 
-    U32 idx = g_scratchTls.nextIndex & mask;
-    g_scratchTls.nextIndex = (g_scratchTls.nextIndex + 1u) & mask;
+    ThreadContext* tctx = thread_context();
+    ScratchArenas* scratch = tctx->arenas;
+    U32 idx = scratch->nextIndex & mask;
+    scratch->nextIndex = (scratch->nextIndex + 1u) & mask;
 
     for (U32 k = 0; k < SCRATCH_TLS_ARENA_COUNT; ++k) {
         U32 i = (idx + k) & mask;
-        Arena* cand = g_scratchTls.slots[i];
+        Arena* cand = scratch->slots[i];
         if (!scratch_collides_many(cand, excludes, count)) {
             return temp_begin(cand);
         }
