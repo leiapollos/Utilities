@@ -83,6 +83,7 @@ void barrier_test_thread(void* arg) {
 }
 
 void entry_point() {
+    TIME_SCOPE("entry_point");
     Arena* a = arena_alloc();
     char test[4];
     test[0] = 'a';
@@ -105,6 +106,7 @@ void entry_point() {
     
     // Test condition variable
     {
+        TIME_SCOPE("Condition Variable Tests");
         std::cout << "\n=== Testing Condition Variable ===" << std::endl;
         CondVarTestState* cvState = (CondVarTestState*) arena_push(a, sizeof(CondVarTestState));
         cvState->mutex = OS_mutex_create();
@@ -129,6 +131,7 @@ void entry_point() {
     
     // Test barrier
     {
+        TIME_SCOPE("Barrier Tests");
         std::cout << "\n=== Testing Barrier ===" << std::endl;
         U32 numThreads = 3;
         
@@ -147,8 +150,6 @@ void entry_point() {
         OS_barrier_destroy(barrierState->barrier);
         std::cout << "Barrier test done!" << std::endl;
     }
-    
-    profiler_initialize();
     
     {
         TIME_SCOPE("Arena and Memory Operations");
@@ -170,7 +171,4 @@ void entry_point() {
 
         OS_release(ptr, size);
     }
-    
-    profiler_print_report();
-    profiler_shutdown();
 }
