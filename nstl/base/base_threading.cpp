@@ -48,7 +48,7 @@ ThreadContext* thread_context_alloc() {
     return g_threadContext;
 }
 
-void thread_context_destroy() {
+void thread_context_release() {
     if (g_threadContext == nullptr) {
         ASSERT_DEBUG(false && "Trying to destroy null g_threadContext");
         return;
@@ -73,7 +73,7 @@ ThreadContext* thread_context() {
 static READ_ONLY SPMDGroup g_nilGroup {.laneCount = 0};
 static READ_ONLY SPMDMembership g_nilMembership {.group = &g_nilGroup};
 
-SPMDGroup* spmd_create_group(Arena* arena, U64 laneCount) {
+SPMDGroup* spmd_create_group(Arena* arena, U32 laneCount) {
     ASSERT_DEBUG(laneCount != 0 && "laneCount must be non-zero");
     SPMDGroup* group = ARENA_PUSH_STRUCT(arena, SPMDGroup);
     memset(&group, 0, sizeof(group));

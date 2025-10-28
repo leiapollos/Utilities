@@ -54,5 +54,5 @@ struct ThreadContext {
 };
 
 static ThreadContext* thread_context_alloc();
-static void thread_context_destroy();
+static void thread_context_release();
 static ThreadContext* thread_context();

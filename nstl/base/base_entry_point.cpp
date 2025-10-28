@@ -15,5 +15,5 @@ static void thread_entry_point(void (*func)(void* params), void* args) {
 
     func(args);
 
-    thread_context_destroy();
+    thread_context_release();
 }
