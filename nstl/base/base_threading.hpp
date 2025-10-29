@@ -51,6 +51,9 @@ static SPMDGroup* spmd_current_group();
 static U64 spmd_lane_id();
 static U64 spmd_lane_count();
 
+static RangeU64 spmd_split_range_(U64 totalCount, U64 laneId, U64 laneCount);
+#define SPMD_SPLIT_RANGE(totalCount) spmd_split_range_((totalCount), spmd_lane_id(), spmd_lane_count())
+
 static void spmd_broadcast(SPMDGroup* group, void* dst, void* src, U64 size, U64 rootLane);
 static void spmd_sync(SPMDGroup* group);
 static B32 spmd_is_root(SPMDGroup* group, U64 lane);

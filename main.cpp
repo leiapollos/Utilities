@@ -181,12 +181,18 @@ void entry_point() {
             U32* rootValue1;
             U32* rootValue2;
             U32 iterations;
+            U32 totalTasks;
+            U32* taskAssignments;
         };
 
         U32* rootValue1 = (U32*) arena_push(arena, sizeof(U32));
         U32* rootValue2 = (U32*) arena_push(arena, sizeof(U32));
         *rootValue1 = 0xA5A5A5A5;
         *rootValue2 = 0xDEADBEEF;
+
+        U32 totalTasks = 38;
+        U32* taskAssignments = (U32*) arena_push(arena, sizeof(U32) * totalTasks);
+        MEMSET(taskAssignments, 0xFF, sizeof(U32) * totalTasks);
 
         OS_Handle* threadHandles = (OS_Handle*) arena_push(arena, sizeof(OS_Handle) * laneCount);
         SPMDTestState* states = (SPMDTestState*) arena_push(arena, sizeof(SPMDTestState) * laneCount);
@@ -234,6 +240,26 @@ void entry_point() {
                 }
                 SPMD_SYNC();
             }
+
+            RangeU64 taskRange = SPMD_SPLIT_RANGE(st->totalTasks);
+            std::cout << "Task range: " << taskRange.min << " - " << taskRange.max << std::endl;
+            for (U64 taskIndex = taskRange.min; taskIndex < taskRange.max; ++taskIndex) {
+                st->taskAssignments[taskIndex] = (U32) laneId;
+            }
+            SPMD_SYNC();
+            if (SPMD_IS_ROOT(0)) {
+                B32 coverageOk = 1;
+                for (U32 taskIndex = 0; taskIndex < st->totalTasks; ++taskIndex) {
+                    if (st->taskAssignments[taskIndex] >= laneCountLocal) {
+                        coverageOk = 0;
+                        std::cout << "[SPMD Split] ERROR task " << taskIndex << " unassigned" << std::endl;
+                    }
+                }
+                if (coverageOk) {
+                    std::cout << "[SPMD Split] All " << st->totalTasks << " tasks assigned across " << laneCountLocal << " lanes" << std::endl;
+                }
+            }
+            SPMD_SYNC();
         };
 
         U32 iterations = 3;
@@ -246,6 +272,8 @@ void entry_point() {
             st->broadcastDst2 = (U32*) arena_push(arena, sizeof(U32));
             *st->broadcastDst1 = 0; *st->broadcastDst2 = 0;
             st->iterations = iterations;
+            st->totalTasks = totalTasks;
+            st->taskAssignments = taskAssignments;
             threadHandles[i] = OS_thread_create(spmd_test_thread, st);
         }
 

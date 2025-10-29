@@ -38,7 +38,6 @@ ThreadContext* thread_context_alloc() {
             scratch->slots[i] = arena_alloc();
         }
         scratch->nextIndex = 0;
-        scratch->initialized = 1;
         scratch->initialized = true;
     }
     {
@@ -77,7 +76,7 @@ SPMDGroup* spmd_create_group_(Arena* arena, U32 laneCount, const SPMDGroupParame
     ASSERT_DEBUG(laneCount != 0 && "laneCount must be non-zero");
     ASSERT_DEBUG(params.broadcastScratchSize != 0 && "broadcastScratchSize must be non-zero");
     SPMDGroup* group = ARENA_PUSH_STRUCT(arena, SPMDGroup);
-    memset(group, 0, sizeof(SPMDGroup));
+    MEMSET(group, 0, sizeof(SPMDGroup));
     group->laneCount = laneCount;
     group->barrier = barrier_alloc((U32)laneCount);
     group->dataSize = params.broadcastScratchSize;
@@ -152,6 +151,29 @@ U64 spmd_lane_count() {
     return (group != nullptr) ? group->laneCount : 0;
 }
 
+static RangeU64 spmd_split_range_(U64 totalCount, U64 laneId, U64 laneCount) {
+    RangeU64 range;
+    range.min = 0;
+    range.max = 0;
+
+    if ((laneCount == 0) || (totalCount == 0)) {
+        return range;
+    }
+
+    ASSERT_DEBUG(laneId < laneCount && "laneId out of range");
+
+    U64 base = totalCount / laneCount;
+    U64 remainder = totalCount % laneCount;
+
+    U64 start = laneId * base + MIN(laneId, remainder);
+    U64 count = base + ((laneId < remainder) ? 1u : 0u);
+
+    range.min = start;
+    range.max = start + count;
+
+    return range;
+}
+
 void spmd_broadcast(SPMDGroup* group, void* dst, void* src, U64 size, U64 rootLane) {
     ASSERT_DEBUG(group != nullptr && "group must be valid");
     ASSERT_DEBUG(dst != nullptr && "dst must be valid");
@@ -163,12 +185,12 @@ void spmd_broadcast(SPMDGroup* group, void* dst, void* src, U64 size, U64 rootLa
     barrier_wait(group->barrier);
 
     if (spmd_lane_id() == rootLane) {
-        memcpy(group->data, src, size);
+        MEMCPY(group->data, src, size);
     }
 
     barrier_wait(group->barrier);
 
-    memcpy(dst, group->data, size);
+    MEMCPY(dst, group->data, size);
 
     barrier_wait(group->barrier);
 }
