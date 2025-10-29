@@ -1,6 +1,20 @@
 //
 // Created by André Leite on 26/07/2025.
 //
+
+/*
+
+Stuff to work on:
+- Networking layer (Not started)
+- SPMD (ongoing)
+- Windows OS core (Not started)
+- Linux OS core (Not started)
+- Graphics abstraction layer (Not started) - consider using sokol_gfx
+
+*/
+
+
+
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Winitializer-overrides"
