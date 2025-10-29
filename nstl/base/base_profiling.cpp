@@ -21,6 +21,16 @@ static ProfilerGlobalState g_profiler = {};
 
 thread_local ProfilerThreadState* g_tlsProfilerState = nullptr;
 
+static StringU8 profiler_format_f64(Arena* arena, F64 value, int decimals) {
+    char buffer[64];
+    int len = snprintf(buffer, sizeof(buffer), "%.*f", decimals, value);
+    if (len < 0) {
+        return STR8_EMPTY;
+    }
+    StringU8 src = str8(buffer);
+    return str8_cpy(arena, src);
+}
+
 static void profiler_register_tls_(ProfilerThreadState* tls) {
     if (!tls) {
         return;
@@ -242,16 +252,26 @@ void profiler_print_report() {
                 ? (nowMicros - g_profiler.globalStartMicros)
                 : 0;
 
-    printf("\n=== Performance Report ===\n");
+    log(LogLevel_Info, str8("=== Performance Report ===\n"));
     if (totalMicros == 0) {
-        printf("Total Duration: 0.000 ms\n");
-        printf("(No time elapsed; nothing to report.)\n");
-        printf("==========================\n");
+        log(LogLevel_Info, str8("Total Duration: 0.000 ms\n"));
+        log(LogLevel_Info, str8("(No time elapsed; nothing to report.)\n"));
+        log(LogLevel_Info, str8("==========================\n"));
         return;
     }
 
-    printf("Total Duration: %.3f ms\n", (F64) totalMicros / 1000.0);
-    printf("--------------------------\n");
+    {
+        Temp tmp = get_scratch(0, 0);
+        Arena* arena = tmp.arena;
+        StringU8 durationStr = profiler_format_f64(arena, (F64) totalMicros / 1000.0, 3);
+        StringU8 line = str8_concat(arena,
+                                    str8("Total Duration: "),
+                                    durationStr,
+                                    str8(" ms\n"));
+        log(LogLevel_Info, line);
+        temp_end(&tmp);
+    }
+    log(LogLevel_Info, str8("--------------------------\n"));
 
     U32 sorted[PROFILER_MAX_ANCHORS];
     U32 count = 0;
@@ -282,16 +302,30 @@ void profiler_print_report() {
         const F64 pctInclusive =
                 100.0 * (F64) e->microsInclusive / (F64) totalMicros;
 
-        printf("%-32s %8llu calls | %8.3f ms (%5.1f%%) | %8.3f ms (%5.1f%% incl)\n",
-               e->label ? e->label : "(null)",
-               (unsigned long long) e->callCount,
-               msExclusive,
-               pctExclusive,
-               msInclusive,
-               pctInclusive);
+        Temp tmp = get_scratch(0, 0);
+        Arena* arena = tmp.arena;
+        char buffer[256];
+        StringU8 msExclusiveStr = profiler_format_f64(arena, msExclusive, 3);
+        StringU8 pctExclusiveStr = profiler_format_f64(arena, pctExclusive, 1);
+        StringU8 msInclusiveStr = profiler_format_f64(arena, msInclusive, 3);
+        StringU8 pctInclusiveStr = profiler_format_f64(arena, pctInclusive, 1);
+
+        int written = snprintf(buffer,
+                               sizeof(buffer),
+                               "%-32s %8llu calls | %8s ms (%5s%%) | %8s ms (%5s%% incl)\n",
+                               e->label ? e->label : "(null)",
+                               (unsigned long long) e->callCount,
+                               msExclusiveStr.data,
+                               pctExclusiveStr.data,
+                               msInclusiveStr.data,
+                               pctInclusiveStr.data);
+        if (written > 0) {
+            log(LogLevel_Info, str8(buffer));
+        }
+        temp_end(&tmp);
     }
 
-    printf("==========================\n");
+    log(LogLevel_Info, str8("==========================\n"));
 }
 
 void profiler_dump_trace_json(const char* path) {
@@ -299,12 +333,13 @@ void profiler_dump_trace_json(const char* path) {
     (void) path;
     return;
 #else
-    FILE* f = fopen(path, "wb");
-    if (!f) {
-        return;
-    }
+    Temp tmp = get_scratch(0, 0);
+    DEFER_REF(temp_end(&tmp));
+    Arena* arena = tmp.arena;
 
-    fprintf(f, "{ \"traceEvents\": [\n");
+    Str8List pieces;
+    str8list_init(&pieces, arena, 64);
+    str8list_push(&pieces, str8("{ \"traceEvents\": [\n"));
 
     bool first = true;
 
@@ -318,15 +353,16 @@ void profiler_dump_trace_json(const char* path) {
         }
 
         if (!first) {
-            fprintf(f, ",\n");
+            str8list_push(&pieces, str8(",\n"));
         }
         first = false;
 
-        fprintf(f,
-                "{\"ph\":\"M\",\"name\":\"thread_name\",\"pid\":1,"
-                "\"tid\":%u,\"args\":{\"name\":\"%s\"}}",
-                tls->threadId,
-                tls->threadName);
+        str8list_push(&pieces, str8("{\"ph\":\"M\",\"name\":\"thread_name\","
+                                     "\"pid\":1,\"tid\":"));
+        str8list_push(&pieces, str8_from_U64(arena, (U64) tls->threadId, 10));
+        str8list_push(&pieces, str8(",\"args\":{\"name\":\""));
+        str8list_push(&pieces, str8(tls->threadName));
+        str8list_push(&pieces, str8("\"}}"));
     }
 
     for (U32 t = 0; t < tcount; ++t) {
@@ -339,25 +375,40 @@ void profiler_dump_trace_json(const char* path) {
             const ProfilerThreadState::TraceEvent* e = &tls->events[i];
 
             if (!first) {
-                fprintf(f, ",\n");
+                str8list_push(&pieces, str8(",\n"));
             }
             first = false;
 
-            fprintf(f,
-                    "{\"name\":\"%s\",\"cat\":\"%s\",\"ph\":\"X\","
-                    "\"ts\":%llu,\"dur\":%llu,\"pid\":1,\"tid\":%u}",
-                    e->eventName ? e->eventName : "",
-                    e->category ? e->category : PROFILER_EVENT_CATEGORY,
-                    (unsigned long long) e->timestampMicros,
-                    (unsigned long long) e->durationMicros,
-                    e->threadId);
+            const char* eventName = e->eventName ? e->eventName : "";
+            const char* category = e->category ? e->category : PROFILER_EVENT_CATEGORY;
+
+            str8list_push(&pieces, str8("{\"name\":\""));
+            str8list_push(&pieces, str8(eventName));
+            str8list_push(&pieces, str8("\",\"cat\":\""));
+            str8list_push(&pieces, str8(category));
+            str8list_push(&pieces, str8("\",\"ph\":\"X\",\"ts\":"));
+            str8list_push(&pieces, str8_from_U64(arena, (U64) e->timestampMicros, 10));
+            str8list_push(&pieces, str8(",\"dur\":"));
+            str8list_push(&pieces, str8_from_U64(arena, (U64) e->durationMicros, 10));
+            str8list_push(&pieces, str8(",\"pid\":1,\"tid\":"));
+            str8list_push(&pieces, str8_from_U64(arena, (U64) e->threadId, 10));
+            str8list_push(&pieces, str8("}"));
         }
     }
 
     OS_mutex_unlock(g_profiler.registryMutex);
 
-    fprintf(f, "\n] }\n");
-    fclose(f);
+    str8list_push(&pieces, str8("\n] }\n"));
+
+    StringU8 json = str8_concat_n(arena, pieces.items, pieces.count);
+
+    OS_Handle file = OS_file_open(path, OS_FileOpenMode_Create);
+    if (!file.handle) {
+        return;
+    }
+
+    OS_file_write(file, json.size, json.data);
+    OS_file_close(file);
 #endif
 }
 
