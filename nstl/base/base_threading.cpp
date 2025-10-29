@@ -82,12 +82,13 @@ SPMDGroup* spmd_create_group_(Arena* arena, U32 laneCount, const SPMDGroupParame
     group->barrier = barrier_alloc((U32)laneCount);
     group->dataSize = params.broadcastScratchSize;
     group->data = arena_push(arena, group->dataSize);
+    group->nextLaneId = 0;
     return group;
 }
 
 void spmd_destroy_group(SPMDGroup* group) {
     ASSERT_DEBUG(group != nullptr && "group must be valid");
-    // TODO: do we really need this? Maybe not since we can just roll back the arena
+    barrier_release(group->barrier);
 }
 
 SPMDMembership* spmd_membership() {
@@ -106,9 +107,22 @@ SPMDMembership* spmd_membership() {
 void spmd_join_group(SPMDGroup* group, U64 lane) {
     ASSERT_DEBUG(g_threadContext != nullptr && "g_threadContext not initialized");
     ASSERT_DEBUG(group != nullptr && "group must be valid");
+    ASSERT_DEBUG(lane < group->laneCount && "lane out of range");
     SPMDMembership* membership = g_threadContext->membership;
     membership->group = group;
     membership->laneId = lane;
+}
+
+U64 spmd_join_group_auto(SPMDGroup* group) {
+    ASSERT_DEBUG(g_threadContext != nullptr && "g_threadContext not initialized");
+    ASSERT_DEBUG(group != nullptr && "group must be valid");
+    U64 lane = ATOMIC_FETCH_ADD(&group->nextLaneId, 1, MEMORY_ORDER_ACQ_REL);
+    ASSERT_DEBUG(lane < group->laneCount && "Too many threads trying to join group");
+    if (lane >= group->laneCount) {
+        return (U64)-1;
+    }
+    spmd_join_group(group, lane);
+    return lane;
 }
 
 void spmd_group_leave() {
@@ -135,7 +149,7 @@ U64 spmd_lane_id() {
 U64 spmd_lane_count() {
     SPMDMembership* membership = spmd_membership();
     SPMDGroup* group = membership->group;
-    return group->laneCount;
+    return (group != nullptr) ? group->laneCount : 0;
 }
 
 void spmd_broadcast(SPMDGroup* group, void* dst, void* src, U64 size, U64 rootLane) {
@@ -157,4 +171,15 @@ void spmd_broadcast(SPMDGroup* group, void* dst, void* src, U64 size, U64 rootLa
     memcpy(dst, group->data, size);
 
     barrier_wait(group->barrier);
+}
+
+void spmd_sync(SPMDGroup* group) {
+    ASSERT_DEBUG(group != nullptr && "group must be valid");
+    barrier_wait(group->barrier);
+}
+
+B32 spmd_is_root(SPMDGroup* group, U64 lane) {
+    ASSERT_DEBUG(group != nullptr && "group must be valid");
+    ASSERT_DEBUG(lane < group->laneCount && "lane out of range");
+    return (spmd_lane_id() == lane) ? 1 : 0;
 }

@@ -25,6 +25,8 @@ struct SPMDGroup {
 
     void* data;
     U64 dataSize;
+    
+    U64 nextLaneId;
 };
 
 struct SPMDMembership {
@@ -42,6 +44,7 @@ static SPMDGroup* spmd_create_group_(Arena* arena, U32 laneCount, const SPMDGrou
 static void spmd_destroy_group(SPMDGroup* group);
 
 static void spmd_join_group(SPMDGroup* group, U64 lane);
+static U64 spmd_join_group_auto(SPMDGroup* group);
 static void spmd_group_leave();
 
 static SPMDGroup* spmd_current_group();
@@ -49,6 +52,12 @@ static U64 spmd_lane_id();
 static U64 spmd_lane_count();
 
 static void spmd_broadcast(SPMDGroup* group, void* dst, void* src, U64 size, U64 rootLane);
+static void spmd_sync(SPMDGroup* group);
+static B32 spmd_is_root(SPMDGroup* group, U64 lane);
+
+#define SPMD_SYNC() spmd_sync(spmd_current_group())
+#define SPMD_IS_ROOT(lane) (spmd_is_root(spmd_current_group(), lane))
+#define SPMD_BROADCAST(dst, src, rootLane) spmd_broadcast(spmd_current_group(), dst, src, sizeof(*(dst)), rootLane)
 
 
 // ////////////////////////

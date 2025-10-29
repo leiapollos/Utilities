@@ -176,7 +176,6 @@ void entry_point() {
 
         struct SPMDTestState {
             SPMDGroup* group;
-            U32 lane;
             U32* broadcastDst1;
             U32* broadcastDst2;
             U32* rootValue1;
@@ -195,7 +194,9 @@ void entry_point() {
         auto spmd_test_thread = [](void* arg) {
             SPMDTestState* st = (SPMDTestState*) arg;
             thread_context_alloc();
-            spmd_join_group(st->group, st->lane);
+            U64 lane = spmd_join_group_auto(st->group);
+            ASSERT_DEBUG(lane != (U64)-1 && "Failed to join SPMD group");
+            DEFER(spmd_group_leave());
 
             U32 laneId = (U32) spmd_lane_id();
             U32 laneCountLocal = (U32) spmd_lane_count();
@@ -208,51 +209,48 @@ void entry_point() {
 
             for (U32 iter = 0; iter < st->iterations; ++iter) {
                 spmd_broadcast(st->group, st->broadcastDst1, st->rootValue1, sizeof(U32), 0);
-                if (laneId == 0) {
+                if (SPMD_IS_ROOT(0)) {
                     std::cout << "[Lane 0][Iter " << iter << "] Broadcast1 root value " << std::hex << *st->rootValue1 << std::dec << std::endl;
                 }
-                barrier_wait(st->group->barrier);
+                SPMD_SYNC();
                 if (*st->broadcastDst1 != *st->rootValue1) {
                     std::cout << "[Lane " << laneId << "][Iter " << iter << "] ERROR broadcast1 mismatch got " << std::hex << *st->broadcastDst1 << " expected " << *st->rootValue1 << std::dec << std::endl;
                 } else {
                     std::cout << "[Lane " << laneId << "][Iter " << iter << "] Received broadcast1 value: " << std::hex << *st->broadcastDst1 << std::dec << std::endl;
                 }
 
-                barrier_wait(st->group->barrier);
-                if (laneId == laneCountLocal - 1) {
+                SPMD_SYNC();
+                if (SPMD_IS_ROOT(laneCountLocal - 1)) {
                     *st->rootValue2 ^= 0x12345678;
                     std::cout << "[Lane last][Iter " << iter << "] Mutated rootValue2 to " << std::hex << *st->rootValue2 << std::dec << std::endl;
                 }
 
                 spmd_broadcast(st->group, st->broadcastDst2, st->rootValue2, sizeof(U32), laneCountLocal - 1);
-                barrier_wait(st->group->barrier);
+                SPMD_SYNC();
                 if (*st->broadcastDst2 != *st->rootValue2) {
                     std::cout << "[Lane " << laneId << "][Iter " << iter << "] ERROR broadcast2 mismatch got " << std::hex << *st->broadcastDst2 << " expected " << *st->rootValue2 << std::dec << std::endl;
                 } else {
                     std::cout << "[Lane " << laneId << "][Iter " << iter << "] Received broadcast2 value: " << std::hex << *st->broadcastDst2 << std::dec << std::endl;
                 }
-                barrier_wait(st->group->barrier);
+                SPMD_SYNC();
             }
-
-            spmd_group_leave();
         };
 
         U32 iterations = 3;
-        for (U32 lane = 0; lane < laneCount; ++lane) {
-            SPMDTestState* st = &states[lane];
+        for (U32 i = 0; i < laneCount; ++i) {
+            SPMDTestState* st = &states[i];
             st->group = group;
-            st->lane = lane;
             st->rootValue1 = rootValue1;
             st->rootValue2 = rootValue2;
             st->broadcastDst1 = (U32*) arena_push(arena, sizeof(U32));
             st->broadcastDst2 = (U32*) arena_push(arena, sizeof(U32));
             *st->broadcastDst1 = 0; *st->broadcastDst2 = 0;
             st->iterations = iterations;
-            threadHandles[lane] = OS_thread_create(spmd_test_thread, st);
+            threadHandles[i] = OS_thread_create(spmd_test_thread, st);
         }
 
-        for (U32 lane = 0; lane < laneCount; ++lane) {
-            OS_thread_join(threadHandles[lane]);
+        for (U32 i = 0; i < laneCount; ++i) {
+            OS_thread_join(threadHandles[i]);
         }
         std::cout << "SPMD test done!" << std::endl;
     }
