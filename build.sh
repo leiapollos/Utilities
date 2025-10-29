@@ -54,6 +54,10 @@ if [ ! -d "${BUILD_DIR}" ]; then
 fi
 
 echo "==> Building..."
+BUILD_START=$(date +%s.%N)
 cmake --build "${BUILD_DIR}" -- -j$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
+BUILD_END=$(date +%s.%N)
+BUILD_TIME=$(awk "BEGIN {printf \"%.2f\", $BUILD_END - $BUILD_START}")
+echo "==> Compilation time: ${BUILD_TIME}s"
 
 echo "==> Done. Artifacts in '${BUILD_DIR}/'"
