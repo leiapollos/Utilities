@@ -73,12 +73,15 @@ ThreadContext* thread_context() {
 static READ_ONLY SPMDGroup g_nilGroup {.laneCount = 0};
 static READ_ONLY SPMDMembership g_nilMembership {.group = &g_nilGroup};
 
-SPMDGroup* spmd_create_group(Arena* arena, U32 laneCount) {
+SPMDGroup* spmd_create_group_(Arena* arena, U32 laneCount, const SPMDGroupParameters& params) {
     ASSERT_DEBUG(laneCount != 0 && "laneCount must be non-zero");
+    ASSERT_DEBUG(params.broadcastScratchSize != 0 && "broadcastScratchSize must be non-zero");
     SPMDGroup* group = ARENA_PUSH_STRUCT(arena, SPMDGroup);
     memset(group, 0, sizeof(SPMDGroup));
     group->laneCount = laneCount;
-    group->barrier = barrier_alloc(laneCount);
+    group->barrier = barrier_alloc((U32)laneCount);
+    group->dataSize = params.broadcastScratchSize;
+    group->data = arena_push(arena, group->dataSize);
     return group;
 }
 

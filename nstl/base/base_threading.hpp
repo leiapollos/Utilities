@@ -32,7 +32,13 @@ struct SPMDMembership {
     SPMDGroup* group;
 };
 
-static SPMDGroup* spmd_create_group(Arena* arena, U64 laneCount);
+struct SPMDGroupParameters {
+    U64 broadcastScratchSize = KB(1);
+};
+
+static SPMDGroup* spmd_create_group_(Arena* arena, U32 laneCount, const SPMDGroupParameters& params);
+#define spmd_group_create(arena, laneCount, ...) spmd_create_group_(arena, laneCount, {__VA_ARGS__})
+
 static void spmd_destroy_group(SPMDGroup* group);
 
 static void spmd_join_group(SPMDGroup* group, U64 lane);

@@ -129,7 +129,6 @@ void entry_point() {
         std::cout << "Condition variable test done!" << std::endl;
     }
     
-    // Test barrier
     {
         TIME_SCOPE("Barrier Tests");
         std::cout << "\n=== Testing Barrier ===" << std::endl;
@@ -149,6 +148,99 @@ void entry_point() {
         
         OS_barrier_destroy(barrierState->barrier);
         std::cout << "Barrier test done!" << std::endl;
+    }
+
+    {
+        TIME_SCOPE("SPMD Group Tests");
+        std::cout << "\n=== Testing SPMD Group (sync + broadcast) ===" << std::endl;
+        U32 laneCount = 4;
+        Temp scratch = get_scratch(0, 0);
+        Arena* arena = scratch.arena;
+
+    SPMDGroup* group = spmd_group_create(arena, laneCount, .broadcastScratchSize = KB(4));
+
+        struct SPMDTestState {
+            SPMDGroup* group;
+            U32 lane;
+            U32* broadcastDst1;
+            U32* broadcastDst2;
+            U32* rootValue1;
+            U32* rootValue2;
+            U32 iterations;
+        };
+
+    U32* rootValue1 = (U32*) arena_push(arena, sizeof(U32));
+    U32* rootValue2 = (U32*) arena_push(arena, sizeof(U32));
+        *rootValue1 = 0xA5A5A5A5;
+        *rootValue2 = 0xDEADBEEF;
+
+        OS_Handle* threadHandles = (OS_Handle*) arena_push(arena, sizeof(OS_Handle) * laneCount);
+        SPMDTestState* states = (SPMDTestState*) arena_push(arena, sizeof(SPMDTestState) * laneCount);
+
+        auto spmd_test_thread = [](void* arg) {
+            SPMDTestState* st = (SPMDTestState*) arg;
+            thread_context_alloc();
+            spmd_join_group(st->group, st->lane);
+
+            U32 laneId = (U32) spmd_lane_id();
+            U32 laneCountLocal = (U32) spmd_lane_count();
+            std::cout << "[Lane " << laneId << "/" << laneCountLocal << "] Joined group" << std::endl;
+
+            struct timespec ts;
+            ts.tv_sec = 0;
+            ts.tv_nsec = (rand() % 100) * 1000 * 1000;
+            nanosleep(&ts, nullptr);
+
+            for (U32 iter = 0; iter < st->iterations; ++iter) {
+                spmd_broadcast(st->group, st->broadcastDst1, st->rootValue1, sizeof(U32), 0);
+                if (laneId == 0) {
+                    std::cout << "[Lane 0][Iter " << iter << "] Broadcast1 root value " << std::hex << *st->rootValue1 << std::dec << std::endl;
+                }
+                barrier_wait(st->group->barrier);
+                if (*st->broadcastDst1 != *st->rootValue1) {
+                    std::cout << "[Lane " << laneId << "][Iter " << iter << "] ERROR broadcast1 mismatch got " << std::hex << *st->broadcastDst1 << " expected " << *st->rootValue1 << std::dec << std::endl;
+                } else {
+                    std::cout << "[Lane " << laneId << "][Iter " << iter << "] Received broadcast1 value: " << std::hex << *st->broadcastDst1 << std::dec << std::endl;
+                }
+
+                barrier_wait(st->group->barrier);
+                if (laneId == laneCountLocal - 1) {
+                    *st->rootValue2 ^= 0x12345678;
+                    std::cout << "[Lane last][Iter " << iter << "] Mutated rootValue2 to " << std::hex << *st->rootValue2 << std::dec << std::endl;
+                }
+
+                spmd_broadcast(st->group, st->broadcastDst2, st->rootValue2, sizeof(U32), laneCountLocal - 1);
+                barrier_wait(st->group->barrier);
+                if (*st->broadcastDst2 != *st->rootValue2) {
+                    std::cout << "[Lane " << laneId << "][Iter " << iter << "] ERROR broadcast2 mismatch got " << std::hex << *st->broadcastDst2 << " expected " << *st->rootValue2 << std::dec << std::endl;
+                } else {
+                    std::cout << "[Lane " << laneId << "][Iter " << iter << "] Received broadcast2 value: " << std::hex << *st->broadcastDst2 << std::dec << std::endl;
+                }
+                barrier_wait(st->group->barrier);
+            }
+
+            spmd_group_leave();
+        };
+
+    U32 iterations = 3;
+        for (U32 lane = 0; lane < laneCount; ++lane) {
+            SPMDTestState* st = &states[lane];
+            st->group = group;
+            st->lane = lane;
+            st->rootValue1 = rootValue1;
+            st->rootValue2 = rootValue2;
+            st->broadcastDst1 = (U32*) arena_push(arena, sizeof(U32));
+            st->broadcastDst2 = (U32*) arena_push(arena, sizeof(U32));
+            *st->broadcastDst1 = 0; *st->broadcastDst2 = 0;
+            st->iterations = iterations;
+            threadHandles[lane] = OS_thread_create(spmd_test_thread, st);
+        }
+
+        for (U32 lane = 0; lane < laneCount; ++lane) {
+            OS_thread_join(threadHandles[lane]);
+        }
+        std::cout << "SPMD test done!" << std::endl;
+        temp_end(&scratch);
     }
     
     {
