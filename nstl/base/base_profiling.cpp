@@ -21,16 +21,6 @@ static ProfilerGlobalState g_profiler = {};
 
 thread_local ProfilerThreadState* g_tlsProfilerState = nullptr;
 
-static StringU8 profiler_format_f64(Arena* arena, F64 value, int decimals) {
-    char buffer[64];
-    int len = snprintf(buffer, sizeof(buffer), "%.*f", decimals, value);
-    if (len < 0) {
-        return STR8_EMPTY;
-    }
-    StringU8 src = str8(buffer);
-    return str8_cpy(arena, src);
-}
-
 static void profiler_register_tls_(ProfilerThreadState* tls) {
     if (!tls) {
         return;
@@ -252,26 +242,16 @@ void profiler_print_report() {
                 ? (nowMicros - g_profiler.globalStartMicros)
                 : 0;
 
-    log(LogLevel_Info, str8("=== Performance Report ===\n"));
+    LOG_INFO("=== Performance Report ===");
     if (totalMicros == 0) {
-        log(LogLevel_Info, str8("Total Duration: 0.000 ms\n"));
-        log(LogLevel_Info, str8("(No time elapsed; nothing to report.)\n"));
-        log(LogLevel_Info, str8("==========================\n"));
+        LOG_INFO("Total Duration: 0.000 ms");
+        LOG_INFO("(No time elapsed; nothing to report.)");
+        LOG_INFO("==========================");
         return;
     }
 
-    {
-        Temp tmp = get_scratch(0, 0);
-        Arena* arena = tmp.arena;
-        StringU8 durationStr = profiler_format_f64(arena, (F64) totalMicros / 1000.0, 3);
-        StringU8 line = str8_concat(arena,
-                                    str8("Total Duration: "),
-                                    durationStr,
-                                    str8(" ms\n"));
-        log(LogLevel_Info, line);
-        temp_end(&tmp);
-    }
-    log(LogLevel_Info, str8("--------------------------\n"));
+    LOG_INFO("Total Duration: {:.3f} ms", (F64) totalMicros / 1000.0);
+    LOG_INFO("--------------------------");
 
     U32 sorted[PROFILER_MAX_ANCHORS];
     U32 count = 0;
@@ -302,30 +282,16 @@ void profiler_print_report() {
         const F64 pctInclusive =
                 100.0 * (F64) e->microsInclusive / (F64) totalMicros;
 
-        Temp tmp = get_scratch(0, 0);
-        Arena* arena = tmp.arena;
-        char buffer[256];
-        StringU8 msExclusiveStr = profiler_format_f64(arena, msExclusive, 3);
-        StringU8 pctExclusiveStr = profiler_format_f64(arena, pctExclusive, 1);
-        StringU8 msInclusiveStr = profiler_format_f64(arena, msInclusive, 3);
-        StringU8 pctInclusiveStr = profiler_format_f64(arena, pctInclusive, 1);
-
-        int written = snprintf(buffer,
-                               sizeof(buffer),
-                               "%-32s %8llu calls | %8s ms (%5s%%) | %8s ms (%5s%% incl)\n",
-                               e->label ? e->label : "(null)",
-                               (unsigned long long) e->callCount,
-                               msExclusiveStr.data,
-                               pctExclusiveStr.data,
-                               msInclusiveStr.data,
-                               pctInclusiveStr.data);
-        if (written > 0) {
-            log(LogLevel_Info, str8(buffer));
-        }
-        temp_end(&tmp);
+        LOG_INFO("{} {} calls | {:.3f} ms ({:.1f}%) | {:.3f} ms ({:.1f}% incl)",
+                 e->label ? e->label : "(null)",
+                 e->callCount,
+                 msExclusive,
+                 pctExclusive,
+                 msInclusive,
+                 pctInclusive);
     }
 
-    log(LogLevel_Info, str8("==========================\n"));
+    LOG_INFO("==========================");
 }
 
 void profiler_dump_trace_json(const char* path) {

@@ -38,6 +38,13 @@ enum LogFmtKind {
     LogFmtKind_PTR,
 };
 
+struct LogFmtSpec {
+    B32 hasSpec;
+    int floatPrecision;
+    U64 intBase;
+    B32 uppercaseHex;
+};
+
 struct LogFmtArg {
     LogFmtKind kind;
 
@@ -127,6 +134,8 @@ struct LogFmtArg {
     }
 };
 
+static LogFmtSpec log_fmt_parse_spec(StringU8 specStr);
+static StringU8 arg_to_string(Arena* arena, const LogFmtArg& arg, LogFmtSpec spec);
 static void log_fmt_(LogLevel level,
                      B32 addNewline,
                      StringU8 fmt,

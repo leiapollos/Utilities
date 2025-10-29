@@ -219,35 +219,27 @@ void entry_point() {
             for (U32 iter = 0; iter < st->iterations; ++iter) {
                 spmd_broadcast(st->group, st->broadcastDst1, st->rootValue1, sizeof(U32), 0);
                 if (SPMD_IS_ROOT(0)) {
-                    StringU8 hexStr = str8_from_U64_hex(arena, *st->rootValue1);
-                    LOG_INFO("[Lane 0][Iter {}] Broadcast1 root value {}", iter, hexStr);
+                    LOG_INFO("[Lane 0][Iter {}] Broadcast1 root value 0x{:X}", iter, *st->rootValue1);
                 }
                 SPMD_SYNC();
                 if (*st->broadcastDst1 != *st->rootValue1) {
-                    StringU8 gotHex = str8_from_U64_hex(arena, *st->broadcastDst1);
-                    StringU8 expectedHex = str8_from_U64_hex(arena, *st->rootValue1);
-                    LOG_ERROR("[Lane {}][Iter {}] ERROR broadcast1 mismatch got {} expected {}", laneId, iter, gotHex, expectedHex);
+                    LOG_ERROR("[Lane {}][Iter {}] ERROR broadcast1 mismatch got 0x{:X} expected 0x{:X}", laneId, iter, *st->broadcastDst1, *st->rootValue1);
                 } else {
-                    StringU8 hexStr = str8_from_U64_hex(arena, *st->broadcastDst1);
-                    LOG_INFO("[Lane {}][Iter {}] Received broadcast1 value: {}", laneId, iter, hexStr);
+                    LOG_INFO("[Lane {}][Iter {}] Received broadcast1 value: 0x{:X}", laneId, iter, *st->broadcastDst1);
                 }
 
                 SPMD_SYNC();
                 if (SPMD_IS_ROOT(laneCountLocal - 1)) {
                     *st->rootValue2 ^= 0x12345678;
-                    StringU8 hexStr = str8_from_U64_hex(arena, *st->rootValue2);
-                    LOG_INFO("[Lane last][Iter {}] Mutated rootValue2 to {}", iter, hexStr);
+                    LOG_INFO("[Lane last][Iter {}] Mutated rootValue2 to 0x{:X}", iter, *st->rootValue2);
                 }
 
                 spmd_broadcast(st->group, st->broadcastDst2, st->rootValue2, sizeof(U32), laneCountLocal - 1);
                 SPMD_SYNC();
                 if (*st->broadcastDst2 != *st->rootValue2) {
-                    StringU8 gotHex = str8_from_U64_hex(arena, *st->broadcastDst2);
-                    StringU8 expectedHex = str8_from_U64_hex(arena, *st->rootValue2);
-                    LOG_ERROR("[Lane {}][Iter {}] ERROR broadcast2 mismatch got {} expected {}", laneId, iter, gotHex, expectedHex);
+                    LOG_ERROR("[Lane {}][Iter {}] ERROR broadcast2 mismatch got 0x{:X} expected 0x{:X}", laneId, iter, *st->broadcastDst2, *st->rootValue2);
                 } else {
-                    StringU8 hexStr = str8_from_U64_hex(arena, *st->broadcastDst2);
-                    LOG_INFO("[Lane {}][Iter {}] Received broadcast2 value: {}", laneId, iter, hexStr);
+                    LOG_INFO("[Lane {}][Iter {}] Received broadcast2 value: 0x{:X}", laneId, iter, *st->broadcastDst2);
                 }
                 SPMD_SYNC();
             }
@@ -313,5 +305,31 @@ void entry_point() {
         arena_release(arena);
 
         OS_release(ptr, size);
+    }
+
+    {
+        LOG_INFO("Testing format specifiers:");
+        F64 pi = 3.141592653589793;
+        U64 hexValue = 0xDEADBEEF;
+        S64 signedValue = -42;
+        U64 binaryValue = 13;
+        
+        LOG_INFO("Default float: {}", pi);                    // "Default float: 3.1416"
+        LOG_INFO("Float with 2 decimals: {:.2f}", pi);        // "Float with 2 decimals: 3.1"
+        LOG_INFO("Float with 6 decimals: {:.6f}", pi);        // "Float with 6 decimals: 3.14159"
+        LOG_INFO("Float with 0 decimals: {:.0f}", pi);        // "Float with 0 decimals: 3"
+        
+        LOG_INFO("Default integer: {}", hexValue);            // "Default integer: 3735928559"
+        LOG_INFO("Decimal: {:d}", hexValue);                 // "Decimal: 3735928559"
+        LOG_INFO("Hex lowercase: {:x}", hexValue);           // "Hex lowercase: deadbeef"
+        LOG_INFO("Hex uppercase: {:X}", hexValue);           // "Hex uppercase: DEADBEEF"
+        LOG_INFO("Binary: {:b}", binaryValue);                // "Binary: 1101"
+        LOG_INFO("Octal: {:o}", binaryValue);                 // "Octal: 15"
+        
+        LOG_INFO("Signed default: {}", signedValue);          // "Signed default: -42"
+        LOG_INFO("Signed hex: {:x}", signedValue);           // "Signed hex: -2a"
+        LOG_INFO("Signed binary: {:b}", signedValue);        // "Signed binary: -101010"
+        
+        LOG_INFO("Mixed format: pos=({:.2f}, {:.2f}) id=0x{:X}", 12.3456, -4.0123, hexValue);  // "Mixed format: pos=(12, -4) id=0xDEADBEEF"
     }
 }

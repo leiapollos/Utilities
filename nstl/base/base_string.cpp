@@ -93,11 +93,6 @@ static StringU8 str8_from_U64(Arena* arena, U64 value, U64 base) {
     return out;
 }
 
-static StringU8 str8_from_U64_hex(Arena* arena, U64 value) {
-    StringU8 hexStr = str8_from_U64(arena, value, 16);
-    return str8_concat(arena, str8("0x"), hexStr);
-}
-
 static StringU8 str8_from_S64(Arena* arena, S64 value) {
     char buffer[64];
     int len = snprintf(buffer, sizeof(buffer), "%lld", value);
@@ -107,7 +102,7 @@ static StringU8 str8_from_S64(Arena* arena, S64 value) {
 
 static StringU8 str8_from_F64(Arena* arena, F64 value, int precision) {
     char buffer[64];
-    int len = snprintf(buffer, sizeof(buffer), "%.*g", precision, value);
+    int len = snprintf(buffer, sizeof(buffer), "%.*f", precision, value);
     ASSERT_DEBUG(len >= 0);
     return str8_cpy(arena, str8((U8*) buffer, (U64) len));
 }
@@ -124,6 +119,22 @@ static StringU8 str8_from_char(Arena* arena, U8 c) {
     data[0] = c;
     data[1] = '\0';
     return str8(data, 1);
+}
+
+static StringU8 str8_to_uppercase(Arena* arena, StringU8 s) {
+    StringU8 result;
+    result.size = s.size;
+    result.data = ARENA_PUSH_ARRAY(arena, U8, s.size + 1);
+    for (U64 i = 0; i < s.size; ++i) {
+        U8 c = s.data[i];
+        if (c >= 'a' && c <= 'z') {
+            result.data[i] = (U8) (c - 'a' + 'A');
+        } else {
+            result.data[i] = c;
+        }
+    }
+    result.data[s.size] = '\0';
+    return result;
 }
 
 static void str8list_init(Str8List* l, Arena* arena, U64 initialCap) {

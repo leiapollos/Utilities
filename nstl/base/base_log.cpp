@@ -63,14 +63,95 @@ static void log(LogLevel level, StringU8 str) {
     OS_file_write(OS_get_log_handle(), res.size, res.data);
 }
 
-static StringU8 arg_to_string(Arena* arena, const LogFmtArg& arg) {
+static LogFmtSpec log_fmt_parse_spec(StringU8 specStr) {
+    LogFmtSpec spec;
+    spec.hasSpec = 0;
+    spec.floatPrecision = 5;
+    spec.intBase = 10;
+    spec.uppercaseHex = 0;
+
+    if (specStr.size == 0) {
+        return spec;
+    }
+
+    const U8* data = specStr.data;
+    U64 i = 0;
+    U64 len = specStr.size;
+
+    if (i < len && data[i] == ':') {
+        ++i;
+        spec.hasSpec = 1;
+
+        if (i < len && data[i] == '.') {
+            ++i;
+            int precision = 0;
+            U64 precisionStart = i;
+            while (i < len && data[i] >= '0' && data[i] <= '9') {
+                precision = precision * 10 + (data[i] - '0');
+                ++i;
+            }
+            if (i > precisionStart) {
+                spec.floatPrecision = precision;
+            }
+            if (i < len && data[i] == 'f') {
+                ++i;
+            }
+        } else if (i < len) {
+            U8 fmtChar = data[i];
+            if (fmtChar == 'd') {
+                spec.intBase = 10;
+                ++i;
+            } else if (fmtChar == 'x') {
+                spec.intBase = 16;
+                spec.uppercaseHex = 0;
+                ++i;
+            } else if (fmtChar == 'X') {
+                spec.intBase = 16;
+                spec.uppercaseHex = 1;
+                ++i;
+            } else if (fmtChar == 'b') {
+                spec.intBase = 2;
+                ++i;
+            } else if (fmtChar == 'o') {
+                spec.intBase = 8;
+                ++i;
+            }
+        }
+    }
+
+    return spec;
+}
+
+static StringU8 arg_to_string(Arena* arena, const LogFmtArg& arg, LogFmtSpec spec) {
     switch (arg.kind) {
-        case LogFmtKind_S64:
+        case LogFmtKind_S64: {
+            if (spec.hasSpec && spec.intBase != 10) {
+                U64 absVal = (U64) (arg.S64Val < 0 ? -arg.S64Val : arg.S64Val);
+                StringU8 result = str8_from_U64(arena, absVal, spec.intBase);
+                if (spec.uppercaseHex) {
+                    result = str8_to_uppercase(arena, result);
+                }
+                if (arg.S64Val < 0) {
+                    return str8_concat(arena, str8("-"), result);
+                }
+                return result;
+            }
             return str8_from_S64(arena, arg.S64Val);
-        case LogFmtKind_U64:
+        }
+        case LogFmtKind_U64: {
+            if (spec.hasSpec) {
+                StringU8 result = str8_from_U64(arena, arg.U64Val, spec.intBase);
+                if (spec.uppercaseHex) {
+                    result = str8_to_uppercase(arena, result);
+                }
+                return result;
+            }
             return str8_from_U64(arena, arg.U64Val, 10);
-        case LogFmtKind_F64:
-            return str8_from_F64(arena, arg.F64Val, 5);
+        }
+        case LogFmtKind_F64: {
+            int precision = spec.hasSpec ? spec.floatPrecision : 5;
+            return str8_from_F64(arena, arg.F64Val, precision);
+        }
         case LogFmtKind_CSTR:
             return str8(arg.cstrVal);
         case LogFmtKind_CHAR:
@@ -114,20 +195,29 @@ static void log_fmt_(LogLevel level,
                 str8list_push(&pieces, str8((U8*) "{", 1));
                 i += 2;
                 last = i;
-            } else if (i + 1 < len && data[i + 1] == '}') {
-                if (i > last) {
-                    str8list_push(&pieces, str8((U8*) (data + last), i - last));
-                }
-                if (it && it < end) {
-                    str8list_push(&pieces, arg_to_string(arena, *it));
-                    ++it;
-                } else {
-                    str8list_push(&pieces, str8("<MISSING>"));
-                }
-                i += 2;
-                last = i;
             } else {
-                ++i;
+                U64 specStart = i + 1;
+                U64 specEnd = specStart;
+                while (specEnd < len && data[specEnd] != '}') {
+                    ++specEnd;
+                }
+                if (specEnd < len) {
+                    if (i > last) {
+                        str8list_push(&pieces, str8((U8*) (data + last), i - last));
+                    }
+                    StringU8 specStr = str8((U8*) (data + specStart), specEnd - specStart);
+                    LogFmtSpec spec = log_fmt_parse_spec(specStr);
+                    if (it && it < end) {
+                        str8list_push(&pieces, arg_to_string(arena, *it, spec));
+                        ++it;
+                    } else {
+                        str8list_push(&pieces, str8("<MISSING>"));
+                    }
+                    i = specEnd + 1;
+                    last = i;
+                } else {
+                    ++i;
+                }
             }
         } else if (data[i] == '}') {
             if (i + 1 < len && data[i + 1] == '}') {
