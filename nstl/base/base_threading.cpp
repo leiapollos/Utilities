@@ -140,10 +140,18 @@ void spmd_broadcast(SPMDGroup* group, void* dst, void* src, U64 size, U64 rootLa
     ASSERT_DEBUG(dst != nullptr && "dst must be valid");
     ASSERT_DEBUG(src != nullptr && "src must be valid");
     ASSERT_DEBUG(size != 0 && "size must be valid");
+    ASSERT_DEBUG(rootLane < group->laneCount && "rootLane out of range");
+    ASSERT_DEBUG(size <= group->dataSize && "Broadcast size exceeds preallocated buffer; increase SPMDGroup::dataSize");
 
     barrier_wait(group->barrier);
+
     if (spmd_lane_id() == rootLane) {
-        memcpy(dst, src, size);
+        memcpy(group->data, src, size);
     }
+
+    barrier_wait(group->barrier);
+
+    memcpy(dst, group->data, size);
+
     barrier_wait(group->barrier);
 }
