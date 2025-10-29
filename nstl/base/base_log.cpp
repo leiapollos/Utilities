@@ -84,6 +84,7 @@ static StringU8 arg_to_string(Arena* arena, const LogFmtArg& arg) {
 }
 
 static void log_fmt_(LogLevel level,
+                     B32 addNewline,
                      StringU8 fmt,
                      const LogFmtArg* args,
                      U64 argCount) {
@@ -145,6 +146,10 @@ static void log_fmt_(LogLevel level,
     }
     if (last < len) {
         str8list_push(&pieces, str8((U8*) (data + last), len - last));
+    }
+
+    if (addNewline) {
+        str8list_push(&pieces, str8("\n"));
     }
 
     StringU8 formatted = str8_concat_n(arena, pieces.items, pieces.count);

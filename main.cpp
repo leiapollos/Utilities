@@ -24,7 +24,6 @@ Stuff to work on:
 #include "nstl/base/base_include.cpp"
 #include "nstl/os/os_include.cpp"
 
-#include <iostream>
 
 struct Opt {
     bool skip;
@@ -35,9 +34,9 @@ struct Opt {
 
 void func_(bool shouldPrint, Opt o) {
     if (shouldPrint) {
-        std::cout << "Hello, World!" << std::endl;
+        LOG_INFO("Hello, World!");
     }
-    std::cout << o.skip << " " << o.val << " " << o.b2 << " " << o.c << std::endl;
+    LOG_INFO("{} {} {} {}", o.skip, o.val, o.b2, o.c);
 }
 
 #define func(...)                                             \
@@ -48,22 +47,22 @@ void func_(bool shouldPrint, Opt o) {
 
 void work(void*arg) {
     int val = *(int*)arg;
-    std::cout << "Thread working with value: " << val << std::endl;
+    LOG_INFO("Thread working with value: {}", val);
     {
         Temp a = get_scratch(0, 0);
         void* p = arena_push(a.arena, TB(60));
-        std::cout << "Pushed 1MB to scratch arena at " << (void*)a.arena << std::endl;
+        LOG_INFO("Pushed 1MB to scratch arena at {}", (void*)a.arena);
         temp_end(&a);
     }
     {
         Temp a = get_scratch(0, 0);
         void* p = arena_push(a.arena, MB(4));
-        std::cout << "Pushed 1MB to scratch arena at " << (void*)a.arena << std::endl;
+        LOG_INFO("Pushed 1MB to scratch arena at {}", (void*)a.arena);
         temp_end(&a);
     }
     
     sleep(1);
-    std::cout << "Thread finished with value: " << val << std::endl;
+    LOG_INFO("Thread finished with value: {}", val);
 }
 
 struct CondVarTestState {
@@ -76,11 +75,11 @@ void condition_variable_test_thread(void* arg) {
     CondVarTestState* state = (CondVarTestState*) arg;
     
     OS_mutex_lock(state->mutex);
-    std::cout << "Thread waiting for condition..." << std::endl;
+    LOG_INFO("Thread waiting for condition...");
     while (state->flag == 0) {
         OS_condition_variable_wait(state->condVar, state->mutex);
     }
-    std::cout << "Thread woke up! Flag is now: " << state->flag << std::endl;
+    LOG_INFO("Thread woke up! Flag is now: {}", state->flag);
     OS_mutex_unlock(state->mutex);
 }
 
@@ -91,9 +90,9 @@ struct BarrierTestState {
 void barrier_test_thread(void* arg) {
     BarrierTestState* state = (BarrierTestState*) arg;
     U32 threadId = OS_get_thread_id_u32();
-    std::cout << "Thread " << threadId << " reached barrier, waiting..." << std::endl;
+    LOG_INFO("Thread {} reached barrier, waiting...", threadId);
     OS_barrier_wait(state->barrier);
-    std::cout << "Thread " << threadId << " passed barrier!" << std::endl;
+    LOG_INFO("Thread {} passed barrier!", threadId);
 }
 
 void entry_point() {
@@ -105,23 +104,23 @@ void entry_point() {
     test[2] = '\n';
     test[3] = '\0';
     log(LogLevel_Debug, str8(test));
-    set_log_level(LogLevel_Warning);
-    log(LogLevel_Error, str8("123\n"));
-    log_fmt(LogLevel_Warning, "123 {} lll\n", 1);
-    log_fmt(LogLevel_Debug, "no args");
-    DEFER(log_fmt(LogLevel_Warning, "321 {} lll\n", 1));
+    set_log_level(LogLevel_Info);
+    log(LogLevel_Error, str8("123"));
+    log_fmt(LogLevel_Warning, 1, "123 {} lll", 1);
+    log_fmt(LogLevel_Debug, 1, "no args");
+    DEFER(log_fmt(LogLevel_Warning, 1, "321 {} lll", 1));
 
     func(.c = 'A', .val = 42, .skip = true, .b2 = false,);
     int arg = 123;
     OS_Handle handle = OS_thread_create(work, &arg);
-    std::cout << "Thread created." << std::endl;
+    LOG_INFO("Thread created.");
     OS_thread_join(handle);
-    std::cout << "Thread joined." << std::endl;
+    LOG_INFO("Thread joined.");
     
     // Test condition variable
     {
         TIME_SCOPE("Condition Variable Tests");
-        std::cout << "\n=== Testing Condition Variable ===" << std::endl;
+        LOG_INFO("\n=== Testing Condition Variable ===");
         CondVarTestState* cvState = (CondVarTestState*) arena_push(a, sizeof(CondVarTestState));
         cvState->mutex = OS_mutex_create();
         cvState->condVar = OS_condition_variable_create();
@@ -130,7 +129,7 @@ void entry_point() {
         OS_Handle cvThread = OS_thread_create(condition_variable_test_thread, cvState);
         
         sleep(1);
-        std::cout << "Main: Setting flag and signaling..." << std::endl;
+        LOG_INFO("Main: Setting flag and signaling...");
         OS_mutex_lock(cvState->mutex);
         cvState->flag = 1;
         OS_condition_variable_signal(cvState->condVar);
@@ -140,12 +139,12 @@ void entry_point() {
         
         OS_condition_variable_destroy(cvState->condVar);
         OS_mutex_destroy(cvState->mutex);
-        std::cout << "Condition variable test done!" << std::endl;
+        LOG_INFO("Condition variable test done!");
     }
     
     {
         TIME_SCOPE("Barrier Tests");
-        std::cout << "\n=== Testing Barrier ===" << std::endl;
+        LOG_INFO("\n=== Testing Barrier ===");
         U32 numThreads = 3;
         
         BarrierTestState* barrierState = (BarrierTestState*) arena_push(a, sizeof(BarrierTestState));
@@ -161,12 +160,12 @@ void entry_point() {
         }
         
         OS_barrier_destroy(barrierState->barrier);
-        std::cout << "Barrier test done!" << std::endl;
+        LOG_INFO("Barrier test done!");
     }
 
     {
         TIME_SCOPE("SPMD Group Tests");
-        std::cout << "\n=== Testing SPMD Group (sync + broadcast) ===" << std::endl;
+        LOG_INFO("\n=== Testing SPMD Group (sync + broadcast) ===");
         U32 laneCount = 4;
         Temp scratch = get_scratch(0, 0);
         Arena* arena = scratch.arena;
@@ -204,9 +203,13 @@ void entry_point() {
             ASSERT_DEBUG(lane != (U64)-1 && "Failed to join SPMD group");
             DEFER(spmd_group_leave());
 
+            Temp scratch = get_scratch(0, 0);
+            DEFER_REF(temp_end(&scratch));
+            Arena* arena = scratch.arena;
+
             U32 laneId = (U32) spmd_lane_id();
             U32 laneCountLocal = (U32) spmd_lane_count();
-            std::cout << "[Lane " << laneId << "/" << laneCountLocal << "] Joined group" << std::endl;
+            LOG_INFO("[Lane {}/{}] Joined group", laneId, laneCountLocal);
 
             struct timespec ts;
             ts.tv_sec = 0;
@@ -216,33 +219,41 @@ void entry_point() {
             for (U32 iter = 0; iter < st->iterations; ++iter) {
                 spmd_broadcast(st->group, st->broadcastDst1, st->rootValue1, sizeof(U32), 0);
                 if (SPMD_IS_ROOT(0)) {
-                    std::cout << "[Lane 0][Iter " << iter << "] Broadcast1 root value " << std::hex << *st->rootValue1 << std::dec << std::endl;
+                    StringU8 hexStr = str8_from_U64_hex(arena, *st->rootValue1);
+                    LOG_INFO("[Lane 0][Iter {}] Broadcast1 root value {}", iter, hexStr);
                 }
                 SPMD_SYNC();
                 if (*st->broadcastDst1 != *st->rootValue1) {
-                    std::cout << "[Lane " << laneId << "][Iter " << iter << "] ERROR broadcast1 mismatch got " << std::hex << *st->broadcastDst1 << " expected " << *st->rootValue1 << std::dec << std::endl;
+                    StringU8 gotHex = str8_from_U64_hex(arena, *st->broadcastDst1);
+                    StringU8 expectedHex = str8_from_U64_hex(arena, *st->rootValue1);
+                    LOG_ERROR("[Lane {}][Iter {}] ERROR broadcast1 mismatch got {} expected {}", laneId, iter, gotHex, expectedHex);
                 } else {
-                    std::cout << "[Lane " << laneId << "][Iter " << iter << "] Received broadcast1 value: " << std::hex << *st->broadcastDst1 << std::dec << std::endl;
+                    StringU8 hexStr = str8_from_U64_hex(arena, *st->broadcastDst1);
+                    LOG_INFO("[Lane {}][Iter {}] Received broadcast1 value: {}", laneId, iter, hexStr);
                 }
 
                 SPMD_SYNC();
                 if (SPMD_IS_ROOT(laneCountLocal - 1)) {
                     *st->rootValue2 ^= 0x12345678;
-                    std::cout << "[Lane last][Iter " << iter << "] Mutated rootValue2 to " << std::hex << *st->rootValue2 << std::dec << std::endl;
+                    StringU8 hexStr = str8_from_U64_hex(arena, *st->rootValue2);
+                    LOG_INFO("[Lane last][Iter {}] Mutated rootValue2 to {}", iter, hexStr);
                 }
 
                 spmd_broadcast(st->group, st->broadcastDst2, st->rootValue2, sizeof(U32), laneCountLocal - 1);
                 SPMD_SYNC();
                 if (*st->broadcastDst2 != *st->rootValue2) {
-                    std::cout << "[Lane " << laneId << "][Iter " << iter << "] ERROR broadcast2 mismatch got " << std::hex << *st->broadcastDst2 << " expected " << *st->rootValue2 << std::dec << std::endl;
+                    StringU8 gotHex = str8_from_U64_hex(arena, *st->broadcastDst2);
+                    StringU8 expectedHex = str8_from_U64_hex(arena, *st->rootValue2);
+                    LOG_ERROR("[Lane {}][Iter {}] ERROR broadcast2 mismatch got {} expected {}", laneId, iter, gotHex, expectedHex);
                 } else {
-                    std::cout << "[Lane " << laneId << "][Iter " << iter << "] Received broadcast2 value: " << std::hex << *st->broadcastDst2 << std::dec << std::endl;
+                    StringU8 hexStr = str8_from_U64_hex(arena, *st->broadcastDst2);
+                    LOG_INFO("[Lane {}][Iter {}] Received broadcast2 value: {}", laneId, iter, hexStr);
                 }
                 SPMD_SYNC();
             }
 
             RangeU64 taskRange = SPMD_SPLIT_RANGE(st->totalTasks);
-            std::cout << "Task range: " << taskRange.min << " - " << taskRange.max << std::endl;
+            LOG_INFO("Task range: {} - {}", taskRange.min, taskRange.max);
             for (U64 taskIndex = taskRange.min; taskIndex < taskRange.max; ++taskIndex) {
                 st->taskAssignments[taskIndex] = (U32) laneId;
             }
@@ -252,11 +263,11 @@ void entry_point() {
                 for (U32 taskIndex = 0; taskIndex < st->totalTasks; ++taskIndex) {
                     if (st->taskAssignments[taskIndex] >= laneCountLocal) {
                         coverageOk = 0;
-                        std::cout << "[SPMD Split] ERROR task " << taskIndex << " unassigned" << std::endl;
+                        LOG_ERROR("[SPMD Split] ERROR task {} unassigned", taskIndex);
                     }
                 }
                 if (coverageOk) {
-                    std::cout << "[SPMD Split] All " << st->totalTasks << " tasks assigned across " << laneCountLocal << " lanes" << std::endl;
+                    LOG_INFO("[SPMD Split] All {} tasks assigned across {} lanes", st->totalTasks, laneCountLocal);
                 }
             }
             SPMD_SYNC();
@@ -280,7 +291,7 @@ void entry_point() {
         for (U32 i = 0; i < laneCount; ++i) {
             OS_thread_join(threadHandles[i]);
         }
-        std::cout << "SPMD test done!" << std::endl;
+        LOG_INFO("SPMD test done!");
     }
     
     {
@@ -298,7 +309,7 @@ void entry_point() {
         memset(res, 0, ARENA_HEADER_SIZE);
         Arena* temp = (Arena*)res;
         temp->pos = 69698;
-        std::cout << temp->pos << " " << temp->reserved << " " << temp->committed << std::endl;
+        LOG_INFO("{} {} {}", temp->pos, temp->reserved, temp->committed);
         arena_release(arena);
 
         OS_release(ptr, size);

@@ -93,6 +93,11 @@ static StringU8 str8_from_U64(Arena* arena, U64 value, U64 base) {
     return out;
 }
 
+static StringU8 str8_from_U64_hex(Arena* arena, U64 value) {
+    StringU8 hexStr = str8_from_U64(arena, value, 16);
+    return str8_concat(arena, str8("0x"), hexStr);
+}
+
 static StringU8 str8_from_S64(Arena* arena, S64 value) {
     char buffer[64];
     int len = snprintf(buffer, sizeof(buffer), "%lld", value);

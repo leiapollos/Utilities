@@ -47,6 +47,7 @@ static B8 str8_is_nil(StringU8 s);
 static B8 str8_is_empty(StringU8 s);
 
 static StringU8 str8_from_U64(Arena* arena, U64 value, U64 base);
+static StringU8 str8_from_U64_hex(Arena* arena, U64 value);
 static StringU8 str8_from_S64(Arena* arena, S64 value);
 static StringU8 str8_from_F64(Arena* arena, F64 value, int precision);
 static StringU8 str8_from_ptr(Arena* arena, const void* ptr);

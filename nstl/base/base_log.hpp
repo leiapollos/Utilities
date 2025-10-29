@@ -128,21 +128,22 @@ struct LogFmtArg {
 };
 
 static void log_fmt_(LogLevel level,
+                     B32 addNewline,
                      StringU8 fmt,
                      const LogFmtArg* args,
                      U64 argCount);
 
-#define log_fmt(level, fmt, ...)                                                                    \
+#define log_fmt(level, addNewline, fmt, ...)                                                        \
     ([&](){                                                                                         \
         /* Dummy first element keeps zero-arg calls valid;                                          \
         pointer skips it and count subtracts it. */                                                 \
         const LogFmtArg _log_args_local[] = { LogFmtArg(), __VA_ARGS__ };                           \
         const U64 _log_args_count = (U64)((sizeof(_log_args_local) / sizeof(LogFmtArg)) - 1);       \
         const LogFmtArg* _log_args_ptr = (_log_args_count > 0)? (_log_args_local + 1) : nullptr;    \
-        log_fmt_(level, str8(fmt), _log_args_ptr, _log_args_count);                                 \
+        log_fmt_(level, addNewline ? 1 : 0, str8(fmt), _log_args_ptr, _log_args_count);             \
     }())
 
-#define LOG_DEBUG(fmt, ...)     log_fmt(LogLevel_Debug, fmt, __VA_ARGS__)
-#define LOG_INFO(fmt, ...)      log_fmt(LogLevel_Info, fmt, __VA_ARGS__)
-#define LOG_WARNING(fmt, ...)   log_fmt(LogLevel_Warning, fmt, __VA_ARGS__)
-#define LOG_ERROR(fmt, ...)     log_fmt(LogLevel_Error, fmt, __VA_ARGS__)
+#define LOG_DEBUG(fmt, ...)     log_fmt(LogLevel_Debug, 1, fmt, __VA_ARGS__)
+#define LOG_INFO(fmt, ...)      log_fmt(LogLevel_Info, 1, fmt, __VA_ARGS__)
+#define LOG_WARNING(fmt, ...)   log_fmt(LogLevel_Warning, 1, fmt, __VA_ARGS__)
+#define LOG_ERROR(fmt, ...)     log_fmt(LogLevel_Error, 1, fmt, __VA_ARGS__)
