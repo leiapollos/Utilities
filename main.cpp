@@ -156,8 +156,9 @@ void entry_point() {
         U32 laneCount = 4;
         Temp scratch = get_scratch(0, 0);
         Arena* arena = scratch.arena;
+        DEFER_REF(temp_end(&scratch));
 
-    SPMDGroup* group = spmd_group_create(arena, laneCount, .broadcastScratchSize = KB(4));
+        SPMDGroup* group = spmd_group_create(arena, laneCount, .broadcastScratchSize = KB(4));
 
         struct SPMDTestState {
             SPMDGroup* group;
@@ -169,8 +170,8 @@ void entry_point() {
             U32 iterations;
         };
 
-    U32* rootValue1 = (U32*) arena_push(arena, sizeof(U32));
-    U32* rootValue2 = (U32*) arena_push(arena, sizeof(U32));
+        U32* rootValue1 = (U32*) arena_push(arena, sizeof(U32));
+        U32* rootValue2 = (U32*) arena_push(arena, sizeof(U32));
         *rootValue1 = 0xA5A5A5A5;
         *rootValue2 = 0xDEADBEEF;
 
@@ -222,7 +223,7 @@ void entry_point() {
             spmd_group_leave();
         };
 
-    U32 iterations = 3;
+        U32 iterations = 3;
         for (U32 lane = 0; lane < laneCount; ++lane) {
             SPMDTestState* st = &states[lane];
             st->group = group;
@@ -240,7 +241,6 @@ void entry_point() {
             OS_thread_join(threadHandles[lane]);
         }
         std::cout << "SPMD test done!" << std::endl;
-        temp_end(&scratch);
     }
     
     {
