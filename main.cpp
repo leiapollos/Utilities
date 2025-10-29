@@ -34,9 +34,9 @@ struct Opt {
 
 void func_(bool shouldPrint, Opt o) {
     if (shouldPrint) {
-        LOG_INFO("Hello, World!");
+        LOG_INFO("main", "Hello, World!");
     }
-    LOG_INFO("{} {} {} {}", o.skip, o.val, o.b2, o.c);
+    LOG_INFO("main", "{} {} {} {}", o.skip, o.val, o.b2, o.c);
 }
 
 #define func(...)                                             \
@@ -47,22 +47,22 @@ void func_(bool shouldPrint, Opt o) {
 
 void work(void*arg) {
     int val = *(int*)arg;
-    LOG_INFO("Thread working with value: {}", val);
+    LOG_INFO("threading", "Thread working with value: {}", val);
     {
         Temp a = get_scratch(0, 0);
         void* p = arena_push(a.arena, TB(60));
-        LOG_INFO("Pushed 1MB to scratch arena at {}", (void*)a.arena);
+        LOG_INFO("threading", "Pushed 1MB to scratch arena at {}", (void*)a.arena);
         temp_end(&a);
     }
     {
         Temp a = get_scratch(0, 0);
         void* p = arena_push(a.arena, MB(4));
-        LOG_INFO("Pushed 1MB to scratch arena at {}", (void*)a.arena);
+        LOG_INFO("threading", "Pushed 1MB to scratch arena at {}", (void*)a.arena);
         temp_end(&a);
     }
     
     sleep(1);
-    LOG_INFO("Thread finished with value: {}", val);
+    LOG_INFO("threading", "Thread finished with value: {}", val);
 }
 
 struct CondVarTestState {
@@ -75,11 +75,11 @@ void condition_variable_test_thread(void* arg) {
     CondVarTestState* state = (CondVarTestState*) arg;
     
     OS_mutex_lock(state->mutex);
-    LOG_INFO("Thread waiting for condition...");
+    LOG_INFO("threading", "Thread waiting for condition...");
     while (state->flag == 0) {
         OS_condition_variable_wait(state->condVar, state->mutex);
     }
-    LOG_INFO("Thread woke up! Flag is now: {}", state->flag);
+    LOG_INFO("threading", "Thread woke up! Flag is now: {}", state->flag);
     OS_mutex_unlock(state->mutex);
 }
 
@@ -90,9 +90,9 @@ struct BarrierTestState {
 void barrier_test_thread(void* arg) {
     BarrierTestState* state = (BarrierTestState*) arg;
     U32 threadId = OS_get_thread_id_u32();
-    LOG_INFO("Thread {} reached barrier, waiting...", threadId);
+    LOG_INFO("threading", "Thread {} reached barrier, waiting...", threadId);
     OS_barrier_wait(state->barrier);
-    LOG_INFO("Thread {} passed barrier!", threadId);
+    LOG_INFO("threading", "Thread {} passed barrier!", threadId);
 }
 
 void entry_point() {
@@ -103,24 +103,24 @@ void entry_point() {
     test[1] = 'b';
     test[2] = '\n';
     test[3] = '\0';
-    log(LogLevel_Debug, str8(test));
+    log(LogLevel_Debug, str8("main"), str8(test));
     set_log_level(LogLevel_Info);
-    log(LogLevel_Error, str8("123"));
-    log_fmt(LogLevel_Warning, 1, "123 {} lll", 1);
-    log_fmt(LogLevel_Debug, 1, "no args");
-    DEFER(log_fmt(LogLevel_Warning, 1, "321 {} lll", 1));
+    log(LogLevel_Error, str8("main"), str8("123"));
+    log_fmt(LogLevel_Warning, "main", 1, "123 {} lll", 1);
+    log_fmt(LogLevel_Debug, "main", 1, "no args");
+    DEFER(log_fmt(LogLevel_Warning, "main", 1, "321 {} lll", 1));
 
     func(.c = 'A', .val = 42, .skip = true, .b2 = false,);
     int arg = 123;
     OS_Handle handle = OS_thread_create(work, &arg);
-    LOG_INFO("Thread created.");
+    LOG_INFO("main", "Thread created.");
     OS_thread_join(handle);
-    LOG_INFO("Thread joined.");
+    LOG_INFO("main", "Thread joined.");
     
     // Test condition variable
     {
         TIME_SCOPE("Condition Variable Tests");
-        LOG_INFO("\n=== Testing Condition Variable ===");
+        LOG_INFO("main", "\n=== Testing Condition Variable ===");
         CondVarTestState* cvState = (CondVarTestState*) arena_push(a, sizeof(CondVarTestState));
         cvState->mutex = OS_mutex_create();
         cvState->condVar = OS_condition_variable_create();
@@ -129,7 +129,7 @@ void entry_point() {
         OS_Handle cvThread = OS_thread_create(condition_variable_test_thread, cvState);
         
         sleep(1);
-        LOG_INFO("Main: Setting flag and signaling...");
+        LOG_INFO("main", "Main: Setting flag and signaling...");
         OS_mutex_lock(cvState->mutex);
         cvState->flag = 1;
         OS_condition_variable_signal(cvState->condVar);
@@ -139,12 +139,12 @@ void entry_point() {
         
         OS_condition_variable_destroy(cvState->condVar);
         OS_mutex_destroy(cvState->mutex);
-        LOG_INFO("Condition variable test done!");
+        LOG_INFO("main", "Condition variable test done!");
     }
     
     {
         TIME_SCOPE("Barrier Tests");
-        LOG_INFO("\n=== Testing Barrier ===");
+        LOG_INFO("main", "\n=== Testing Barrier ===");
         U32 numThreads = 3;
         
         BarrierTestState* barrierState = (BarrierTestState*) arena_push(a, sizeof(BarrierTestState));
@@ -160,12 +160,12 @@ void entry_point() {
         }
         
         OS_barrier_destroy(barrierState->barrier);
-        LOG_INFO("Barrier test done!");
+        LOG_INFO("main", "Barrier test done!");
     }
 
     {
         TIME_SCOPE("SPMD Group Tests");
-        LOG_INFO("\n=== Testing SPMD Group (sync + broadcast) ===");
+        LOG_INFO("main", "\n=== Testing SPMD Group (sync + broadcast) ===");
         U32 laneCount = 4;
         Temp scratch = get_scratch(0, 0);
         Arena* arena = scratch.arena;
@@ -209,7 +209,7 @@ void entry_point() {
 
             U32 laneId = (U32) spmd_lane_id();
             U32 laneCountLocal = (U32) spmd_lane_count();
-            LOG_INFO("[Lane {}/{}] Joined group", laneId, laneCountLocal);
+            LOG_INFO("spmd", "[Lane {}/{}] Joined group", laneId, laneCountLocal);
 
             struct timespec ts;
             ts.tv_sec = 0;
@@ -219,33 +219,33 @@ void entry_point() {
             for (U32 iter = 0; iter < st->iterations; ++iter) {
                 spmd_broadcast(st->group, st->broadcastDst1, st->rootValue1, sizeof(U32), 0);
                 if (SPMD_IS_ROOT(0)) {
-                    LOG_INFO("[Lane 0][Iter {}] Broadcast1 root value 0x{:X}", iter, *st->rootValue1);
+                    LOG_INFO("spmd", "[Lane 0][Iter {}] Broadcast1 root value 0x{:X}", iter, *st->rootValue1);
                 }
                 SPMD_SYNC();
                 if (*st->broadcastDst1 != *st->rootValue1) {
-                    LOG_ERROR("[Lane {}][Iter {}] ERROR broadcast1 mismatch got 0x{:X} expected 0x{:X}", laneId, iter, *st->broadcastDst1, *st->rootValue1);
+                    LOG_ERROR("spmd", "[Lane {}][Iter {}] ERROR broadcast1 mismatch got 0x{:X} expected 0x{:X}", laneId, iter, *st->broadcastDst1, *st->rootValue1);
                 } else {
-                    LOG_INFO("[Lane {}][Iter {}] Received broadcast1 value: 0x{:X}", laneId, iter, *st->broadcastDst1);
+                    LOG_INFO("spmd", "[Lane {}][Iter {}] Received broadcast1 value: 0x{:X}", laneId, iter, *st->broadcastDst1);
                 }
 
                 SPMD_SYNC();
                 if (SPMD_IS_ROOT(laneCountLocal - 1)) {
                     *st->rootValue2 ^= 0x12345678;
-                    LOG_INFO("[Lane last][Iter {}] Mutated rootValue2 to 0x{:X}", iter, *st->rootValue2);
+                    LOG_INFO("spmd", "[Lane last][Iter {}] Mutated rootValue2 to 0x{:X}", iter, *st->rootValue2);
                 }
 
                 spmd_broadcast(st->group, st->broadcastDst2, st->rootValue2, sizeof(U32), laneCountLocal - 1);
                 SPMD_SYNC();
                 if (*st->broadcastDst2 != *st->rootValue2) {
-                    LOG_ERROR("[Lane {}][Iter {}] ERROR broadcast2 mismatch got 0x{:X} expected 0x{:X}", laneId, iter, *st->broadcastDst2, *st->rootValue2);
+                    LOG_ERROR("spmd", "[Lane {}][Iter {}] ERROR broadcast2 mismatch got 0x{:X} expected 0x{:X}", laneId, iter, *st->broadcastDst2, *st->rootValue2);
                 } else {
-                    LOG_INFO("[Lane {}][Iter {}] Received broadcast2 value: 0x{:X}", laneId, iter, *st->broadcastDst2);
+                    LOG_INFO("spmd", "[Lane {}][Iter {}] Received broadcast2 value: 0x{:X}", laneId, iter, *st->broadcastDst2);
                 }
                 SPMD_SYNC();
             }
 
             RangeU64 taskRange = SPMD_SPLIT_RANGE(st->totalTasks);
-            LOG_INFO("Task range: {} - {}", taskRange.min, taskRange.max);
+            LOG_INFO("spmd", "Task range: {} - {}", taskRange.min, taskRange.max);
             for (U64 taskIndex = taskRange.min; taskIndex < taskRange.max; ++taskIndex) {
                 st->taskAssignments[taskIndex] = (U32) laneId;
             }
@@ -255,11 +255,11 @@ void entry_point() {
                 for (U32 taskIndex = 0; taskIndex < st->totalTasks; ++taskIndex) {
                     if (st->taskAssignments[taskIndex] >= laneCountLocal) {
                         coverageOk = 0;
-                        LOG_ERROR("[SPMD Split] ERROR task {} unassigned", taskIndex);
+                        LOG_ERROR("spmd", "[SPMD Split] ERROR task {} unassigned", taskIndex);
                     }
                 }
                 if (coverageOk) {
-                    LOG_INFO("[SPMD Split] All {} tasks assigned across {} lanes", st->totalTasks, laneCountLocal);
+                    LOG_INFO("spmd", "[SPMD Split] All {} tasks assigned across {} lanes", st->totalTasks, laneCountLocal);
                 }
             }
             SPMD_SYNC();
@@ -283,7 +283,7 @@ void entry_point() {
         for (U32 i = 0; i < laneCount; ++i) {
             OS_thread_join(threadHandles[i]);
         }
-        LOG_INFO("SPMD test done!");
+        LOG_INFO("main", "SPMD test done!");
     }
     
     {
@@ -301,35 +301,35 @@ void entry_point() {
         memset(res, 0, ARENA_HEADER_SIZE);
         Arena* temp = (Arena*)res;
         temp->pos = 69698;
-        LOG_INFO("{} {} {}", temp->pos, temp->reserved, temp->committed);
+        LOG_INFO("main", "{} {} {}", temp->pos, temp->reserved, temp->committed);
         arena_release(arena);
 
         OS_release(ptr, size);
     }
 
     {
-        LOG_INFO("Testing format specifiers:");
+        LOG_INFO("main", "Testing format specifiers:");
         F64 pi = 3.141592653589793;
         U64 hexValue = 0xDEADBEEF;
         S64 signedValue = -42;
         U64 binaryValue = 13;
         
-        LOG_INFO("Default float: {}", pi);                    // "Default float: 3.1416"
-        LOG_INFO("Float with 2 decimals: {:.2f}", pi);        // "Float with 2 decimals: 3.1"
-        LOG_INFO("Float with 6 decimals: {:.6f}", pi);        // "Float with 6 decimals: 3.14159"
-        LOG_INFO("Float with 0 decimals: {:.0f}", pi);        // "Float with 0 decimals: 3"
+        LOG_INFO("main", "Default float: {}", pi);                    // "Default float: 3.1416"
+        LOG_INFO("main", "Float with 2 decimals: {:.2f}", pi);        // "Float with 2 decimals: 3.1"
+        LOG_INFO("main", "Float with 6 decimals: {:.6f}", pi);        // "Float with 6 decimals: 3.14159"
+        LOG_INFO("main", "Float with 0 decimals: {:.0f}", pi);        // "Float with 0 decimals: 3"
         
-        LOG_INFO("Default integer: {}", hexValue);            // "Default integer: 3735928559"
-        LOG_INFO("Decimal: {:d}", hexValue);                 // "Decimal: 3735928559"
-        LOG_INFO("Hex lowercase: {:x}", hexValue);           // "Hex lowercase: deadbeef"
-        LOG_INFO("Hex uppercase: {:X}", hexValue);           // "Hex uppercase: DEADBEEF"
-        LOG_INFO("Binary: {:b}", binaryValue);                // "Binary: 1101"
-        LOG_INFO("Octal: {:o}", binaryValue);                 // "Octal: 15"
+        LOG_INFO("main", "Default integer: {}", hexValue);            // "Default integer: 3735928559"
+        LOG_INFO("main", "Decimal: {:d}", hexValue);                 // "Decimal: 3735928559"
+        LOG_INFO("main", "Hex lowercase: {:x}", hexValue);           // "Hex lowercase: deadbeef"
+        LOG_INFO("main", "Hex uppercase: {:X}", hexValue);           // "Hex uppercase: DEADBEEF"
+        LOG_INFO("main", "Binary: {:b}", binaryValue);                // "Binary: 1101"
+        LOG_INFO("main", "Octal: {:o}", binaryValue);                 // "Octal: 15"
         
-        LOG_INFO("Signed default: {}", signedValue);          // "Signed default: -42"
-        LOG_INFO("Signed hex: {:x}", signedValue);           // "Signed hex: -2a"
-        LOG_INFO("Signed binary: {:b}", signedValue);        // "Signed binary: -101010"
+        LOG_INFO("main", "Signed default: {}", signedValue);          // "Signed default: -42"
+        LOG_INFO("main", "Signed hex: {:x}", signedValue);           // "Signed hex: -2a"
+        LOG_INFO("main", "Signed binary: {:b}", signedValue);        // "Signed binary: -101010"
         
-        LOG_INFO("Mixed format: pos=({:.2f}, {:.2f}) id=0x{:X}", 12.3456, -4.0123, hexValue);  // "Mixed format: pos=(12, -4) id=0xDEADBEEF"
+        LOG_INFO("main", "Mixed format: pos=({:.2f}, {:.2f}) id=0x{:X}", 12.3456, -4.0123, hexValue);  // "Mixed format: pos=(12, -4) id=0xDEADBEEF"
     }
 }

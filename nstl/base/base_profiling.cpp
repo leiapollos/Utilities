@@ -242,16 +242,16 @@ void profiler_print_report() {
                 ? (nowMicros - g_profiler.globalStartMicros)
                 : 0;
 
-    LOG_INFO("=== Performance Report ===");
+    LOG_INFO("profiler", "=== Performance Report ===");
     if (totalMicros == 0) {
-        LOG_INFO("Total Duration: 0.000 ms");
-        LOG_INFO("(No time elapsed; nothing to report.)");
-        LOG_INFO("==========================");
+        LOG_INFO("profiler", "Total Duration: 0.000 ms");
+        LOG_INFO("profiler", "(No time elapsed; nothing to report.)");
+        LOG_INFO("profiler", "==========================");
         return;
     }
 
-    LOG_INFO("Total Duration: {:.3f} ms", (F64) totalMicros / 1000.0);
-    LOG_INFO("--------------------------");
+    LOG_INFO("profiler", "Total Duration: {:.3f} ms", (F64) totalMicros / 1000.0);
+    LOG_INFO("profiler", "--------------------------");
 
     U32 sorted[PROFILER_MAX_ANCHORS];
     U32 count = 0;
@@ -282,7 +282,7 @@ void profiler_print_report() {
         const F64 pctInclusive =
                 100.0 * (F64) e->microsInclusive / (F64) totalMicros;
 
-        LOG_INFO("{} {} calls | {:.3f} ms ({:.1f}%) | {:.3f} ms ({:.1f}% incl)",
+        LOG_INFO("profiler", "{} {} calls | {:.3f} ms ({:.1f}%) | {:.3f} ms ({:.1f}% incl)",
                  e->label ? e->label : "(null)",
                  e->callCount,
                  msExclusive,
@@ -291,7 +291,7 @@ void profiler_print_report() {
                  pctInclusive);
     }
 
-    LOG_INFO("==========================");
+    LOG_INFO("profiler", "==========================");
 }
 
 void profiler_dump_trace_json(const char* path) {

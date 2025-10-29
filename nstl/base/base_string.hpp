@@ -46,6 +46,7 @@ static StringU8 str8_concat_n(Arena* arena, const StringU8* pieces, U64 count);
 
 static B8 str8_is_nil(StringU8 s);
 static B8 str8_is_empty(StringU8 s);
+static B8 str8_equal(StringU8 a, StringU8 b);
 
 static StringU8 str8_from_U64(Arena* arena, U64 value, U64 base);
 static StringU8 str8_from_S64(Arena* arena, S64 value);

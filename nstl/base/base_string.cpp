@@ -63,6 +63,16 @@ static B8 str8_is_empty(StringU8 s) {
     return (s.size == 0 && s.data != 0);
 }
 
+static B8 str8_equal(StringU8 a, StringU8 b) {
+    if (a.size != b.size) {
+        return 0;
+    }
+    if (a.size == 0) {
+        return 1;
+    }
+    return (MEMCMP(a.data, b.data, a.size) == 0);
+}
+
 static StringU8 str8_from_U64(Arena* arena, U64 value, U64 base) {
     if (base < 2 || base > 16) {
         base = 10;

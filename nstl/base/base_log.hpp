@@ -21,8 +21,9 @@ struct LogLevelInfo {
 
 static void log_init();
 static void set_log_level(LogLevel level);
+static void set_log_domain_level(StringU8 domain, LogLevel level);
 
-static void log(LogLevel level, StringU8 str);
+static void log(LogLevel level, StringU8 domain, StringU8 str);
 
 
 // ////////////////////////
@@ -137,22 +138,30 @@ struct LogFmtArg {
 static LogFmtSpec log_fmt_parse_spec(StringU8 specStr);
 static StringU8 arg_to_string(Arena* arena, const LogFmtArg& arg, LogFmtSpec spec);
 static void log_fmt_(LogLevel level,
+                     StringU8 domain,
                      B32 addNewline,
                      StringU8 fmt,
                      const LogFmtArg* args,
                      U64 argCount);
 
-#define log_fmt(level, addNewline, fmt, ...)                                                        \
+static inline StringU8 log_domain_wrap(const char* domain) {
+    return str8(domain);
+}
+static inline StringU8 log_domain_wrap(StringU8 domain) {
+    return domain;
+}
+
+#define log_fmt(level, domain, addNewline, fmt, ...)                                                 \
     ([&](){                                                                                         \
         /* Dummy first element keeps zero-arg calls valid;                                          \
         pointer skips it and count subtracts it. */                                                 \
         const LogFmtArg _log_args_local[] = { LogFmtArg(), __VA_ARGS__ };                           \
         const U64 _log_args_count = (U64)((sizeof(_log_args_local) / sizeof(LogFmtArg)) - 1);       \
         const LogFmtArg* _log_args_ptr = (_log_args_count > 0)? (_log_args_local + 1) : nullptr;    \
-        log_fmt_(level, addNewline ? 1 : 0, str8(fmt), _log_args_ptr, _log_args_count);             \
+        log_fmt_(level, log_domain_wrap(domain), addNewline ? 1 : 0, str8(fmt), _log_args_ptr, _log_args_count); \
     }())
 
-#define LOG_DEBUG(fmt, ...)     log_fmt(LogLevel_Debug, 1, fmt, __VA_ARGS__)
-#define LOG_INFO(fmt, ...)      log_fmt(LogLevel_Info, 1, fmt, __VA_ARGS__)
-#define LOG_WARNING(fmt, ...)   log_fmt(LogLevel_Warning, 1, fmt, __VA_ARGS__)
-#define LOG_ERROR(fmt, ...)     log_fmt(LogLevel_Error, 1, fmt, __VA_ARGS__)
+#define LOG_DEBUG(domain, fmt, ...)     log_fmt(LogLevel_Debug, domain, 1, fmt, __VA_ARGS__)
+#define LOG_INFO(domain, fmt, ...)      log_fmt(LogLevel_Info, domain, 1, fmt, __VA_ARGS__)
+#define LOG_WARNING(domain, fmt, ...)   log_fmt(LogLevel_Warning, domain, 1, fmt, __VA_ARGS__)
+#define LOG_ERROR(domain, fmt, ...)     log_fmt(LogLevel_Error, domain, 1, fmt, __VA_ARGS__)

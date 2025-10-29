@@ -5,9 +5,18 @@
 // ////////////////////////
 // Log
 
+struct LogDomainEntry {
+    LogDomainEntry* next;
+    StringU8 domain;
+    LogLevel level;
+};
+
 static LogLevel g_logLevel = LogLevel_Debug;
 static bool g_useColor = false;
 static const StringU8 g_defaultTerminalColor = str8("\033[0m");
+static LogDomainEntry* g_logDomainList = nullptr;
+static Arena* g_logDomainArena = nullptr;
+static OS_Handle g_logDomainMutex = {0};
 
 static const LogLevelInfo g_logLevelInfo[] = {
     [LogLevel_Debug] = {
@@ -32,16 +41,55 @@ static const LogLevelInfo* log_get_level_info(LogLevel level) {
     return &g_logLevelInfo[level];
 }
 
+static LogLevel log_get_domain_level(StringU8 domain) {
+    OS_mutex_lock(g_logDomainMutex);
+    DEFER_REF(OS_mutex_unlock(g_logDomainMutex));
+    
+    LogLevel result = g_logLevel;
+    for (LogDomainEntry* entry = g_logDomainList; entry != nullptr; entry = entry->next) {
+        if (str8_equal(entry->domain, domain)) {
+            result = entry->level;
+            break;
+        }
+    }
+    return result;
+}
+
 static void log_init() {
     g_useColor = OS_terminal_supports_color();
+    if (g_logDomainMutex.handle == nullptr) {
+        g_logDomainMutex = OS_mutex_create();
+    }
+    if (g_logDomainArena == nullptr) {
+        g_logDomainArena = arena_alloc();
+    }
 }
 
 static void set_log_level(LogLevel level) {
     g_logLevel = level;
 }
 
-static void log(LogLevel level, StringU8 str) {
-    if (level < g_logLevel) {
+static void set_log_domain_level(StringU8 domain, LogLevel level) {
+    OS_mutex_lock(g_logDomainMutex);
+    DEFER_REF(OS_mutex_unlock(g_logDomainMutex));
+    
+    for (LogDomainEntry* entry = g_logDomainList; entry != nullptr; entry = entry->next) {
+        if (str8_equal(entry->domain, domain)) {
+            entry->level = level;
+            return;
+        }
+    }
+    
+    LogDomainEntry* newEntry = ARENA_PUSH_STRUCT(g_logDomainArena, LogDomainEntry);
+    newEntry->domain = str8_cpy(g_logDomainArena, domain);
+    newEntry->level = level;
+    newEntry->next = g_logDomainList;
+    g_logDomainList = newEntry;
+}
+
+static void log(LogLevel level, StringU8 domain, StringU8 str) {
+    LogLevel domainLevel = log_get_domain_level(domain);
+    if (level < domainLevel) {
         return;
     }
 
@@ -56,6 +104,8 @@ static void log(LogLevel level, StringU8 str) {
                                color,
                                str8("["),
                                info->name,
+                               str8("]["),
+                               domain,
                                str8("]:\t"),
                                str,
                                defaultColor);
@@ -165,11 +215,13 @@ static StringU8 arg_to_string(Arena* arena, const LogFmtArg& arg, LogFmtSpec spe
 }
 
 static void log_fmt_(LogLevel level,
+                     StringU8 domain,
                      B32 addNewline,
                      StringU8 fmt,
                      const LogFmtArg* args,
                      U64 argCount) {
-    if (level < g_logLevel) {
+    LogLevel domainLevel = log_get_domain_level(domain);
+    if (level < domainLevel) {
         return;
     }
 
@@ -243,5 +295,5 @@ static void log_fmt_(LogLevel level,
     }
 
     StringU8 formatted = str8_concat_n(arena, pieces.items, pieces.count);
-    log(level, formatted);
+    log(level, domain, formatted);
 }
