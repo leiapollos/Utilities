@@ -13,12 +13,6 @@ Stuff to work on:
 
 */
 
-
-
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Winitializer-overrides"
-#endif
 #include "nstl/base/base_include.hpp"
 #include "nstl/os/os_include.hpp"
 #include "nstl/base/base_include.cpp"
