@@ -3,7 +3,6 @@
 //
 //  Inspired by: Molecular Musings blog post series "Job System 2.0: Lock-Free Work Stealing"
 //  https://blog.molecular-matters.com/2015/08/24/job-system-2-0-lock-free-work-stealing-part-1-basics/
-//
 
 #pragma once
 
@@ -50,16 +49,7 @@ struct alignas(CACHE_LINE_SIZE) Job {
 #define JOB_PARAMETER_SPACE (CACHE_LINE_SIZE - sizeof(JobFunc*) - sizeof(U64) - sizeof(Job*))
 static_assert(sizeof(Job) == CACHE_LINE_SIZE, "Job struct must exactly fill cache line");
 
-struct JobSystem {
-    WSDeque** queues;
-    OS_Handle* workers;
-    U32 workerCount;
-    U64 shutdown;
-#ifndef NDEBUG
-    JobSystemStats* workerStats; // length = workerCount + 1 (main + workers)
-    JobSystemStats totals;
-#endif
-};
+struct JobSystem;
 
 static JobSystem* job_system_create(Arena* arena, U32 workerCount);
 static void job_system_destroy(JobSystem* jobSystem);
@@ -91,3 +81,4 @@ static JobSystemStats job_system_get_totals(JobSystem* jobSystem);
         __VA_OPT__( memcpy(_jobTmp.parameters, &(__VA_ARGS__), (U32)sizeof(__VA_ARGS__)); ) \
         job_system_submit_(_jobTmp); \
     } while (0)
+

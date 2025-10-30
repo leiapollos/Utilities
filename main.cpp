@@ -89,6 +89,31 @@ void barrier_test_thread(void* arg) {
     LOG_INFO("threading", "Thread {} passed barrier!", threadId);
 }
 
+struct SPMDDispatchTestParams {
+    U32* resultArray;
+    U32 arraySize;
+    U32* broadcastValue;
+    U32* broadcastDst;
+};
+
+void spmd_dispatch_kernel(void* params) {
+    SPMDDispatchTestParams* p = (SPMDDispatchTestParams*) params;
+    U64 laneId = spmd_lane_id();
+    U64 laneCount = spmd_lane_count();
+
+    RangeU64 range = SPMD_SPLIT_RANGE(p->arraySize);
+    for (U64 i = range.min; i < range.max; ++i) {
+        p->resultArray[i] = (U32)(laneId + 1);
+    }
+
+    SPMD_BROADCAST(p->broadcastDst, p->broadcastValue, 0);
+    SPMD_SYNC();
+
+    if (SPMD_IS_ROOT(0)) {
+        LOG_INFO("spmd_dispatch", "[Lane 0] Broadcast received: 0x{:X}", *p->broadcastDst);
+    }
+}
+
 void entry_point() {
     TIME_SCOPE("entry_point");
     Arena* a = arena_alloc();
@@ -278,6 +303,71 @@ void entry_point() {
             OS_thread_join(threadHandles[i]);
         }
         LOG_INFO("main", "SPMD test done!");
+    }
+
+    {
+        TIME_SCOPE("SPMD Dispatch via Job System");
+        LOG_INFO("main", "\n=== Testing SPMD Dispatch via Job System ===");
+        
+        Temp scratch = get_scratch(0, 0);
+        Arena* arena = scratch.arena;
+        DEFER_REF(temp_end(&scratch));
+
+        U32 workerCount = 4;
+        JobSystem* jobSystem = job_system_create(arena, workerCount);
+        ASSERT_DEBUG(jobSystem != nullptr);
+
+        struct SPMDDispatchTestParams {
+            U32* resultArray;
+            U32 arraySize;
+            U32* broadcastValue;
+            U32* broadcastDst;
+        };
+
+        U32 arraySize = 1000;
+        U32* resultArray = (U32*) arena_push(arena, sizeof(U32) * arraySize);
+        MEMSET(resultArray, 0, sizeof(U32) * arraySize);
+
+        U32* broadcastValue = (U32*) arena_push(arena, sizeof(U32));
+        *broadcastValue = 0xCAFEBABE;
+        U32* broadcastDst = (U32*) arena_push(arena, sizeof(U32));
+        *broadcastDst = 0;
+
+        SPMDDispatchTestParams testParams = {};
+        testParams.resultArray = resultArray;
+        testParams.arraySize = arraySize;
+        testParams.broadcastValue = broadcastValue;
+        testParams.broadcastDst = broadcastDst;
+
+        U32 laneCount = 4;
+
+        spmd_dispatch(jobSystem, arena,
+            .laneCount = laneCount,
+            .kernel = spmd_dispatch_kernel,
+            .kernelParameters = &testParams,
+            .groupParams = {.broadcastScratchSize = KB(4)}
+        );
+
+        B32 allAssigned = 1;
+        for (U32 i = 0; i < arraySize; ++i) {
+            if (resultArray[i] == 0 || resultArray[i] > laneCount) {
+                allAssigned = 0;
+                LOG_ERROR("spmd_dispatch", "ERROR: resultArray[{}] = {} (expected 1-{})", i, resultArray[i], laneCount);
+                break;
+            }
+        }
+        if (allAssigned) {
+            LOG_INFO("spmd_dispatch", "All {} array elements assigned across {} lanes", arraySize, laneCount);
+        }
+
+        if (*broadcastDst == *broadcastValue) {
+            LOG_INFO("spmd_dispatch", "Broadcast test passed: 0x{:X}", *broadcastDst);
+        } else {
+            LOG_ERROR("spmd_dispatch", "Broadcast test failed: got 0x{:X}, expected 0x{:X}", *broadcastDst, *broadcastValue);
+        }
+
+        job_system_destroy(jobSystem);
+        LOG_INFO("main", "SPMD dispatch test done!");
     }
     
     {

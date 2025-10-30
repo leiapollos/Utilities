@@ -21,3 +21,4 @@ static B32 wsdq_push(WSDeque* dq, const void* value);
 static B32 wsdq_pop(WSDeque* dq, void* out_value);
 static B32 wsdq_steal(WSDeque* dq, void* out_value);
 static S64 wsdq_count_approx(const WSDeque* dq);
+

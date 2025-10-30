@@ -105,17 +105,36 @@ SPMDMembership* spmd_membership() {
 
 void spmd_join_group(SPMDGroup* group, U64 lane) {
     ASSERT_DEBUG(g_threadContext != nullptr && "g_threadContext not initialized");
+    if (!g_threadContext) {
+        return;
+    }
     ASSERT_DEBUG(group != nullptr && "group must be valid");
     ASSERT_DEBUG(lane < group->laneCount && "lane out of range");
     SPMDMembership* membership = g_threadContext->membership;
+    if (!membership) {
+        return;
+    }
     membership->group = group;
     membership->laneId = lane;
+}
+
+static B32 spmd_join_group_safe(SPMDGroup* group, U64 lane) {
+    if (!g_threadContext || !g_threadContext->membership || !group) {
+        return 0;
+    }
+    if (lane >= group->laneCount) {
+        return 0;
+    }
+    SPMDMembership* membership = g_threadContext->membership;
+    membership->group = group;
+    membership->laneId = lane;
+    return 1;
 }
 
 U64 spmd_join_group_auto(SPMDGroup* group) {
     ASSERT_DEBUG(g_threadContext != nullptr && "g_threadContext not initialized");
     ASSERT_DEBUG(group != nullptr && "group must be valid");
-    U64 lane = ATOMIC_FETCH_ADD(&group->nextLaneId, 1, MEMORY_ORDER_ACQ_REL);
+    U64 lane = ATOMIC_FETCH_ADD(&group->nextLaneId, 1, MEMORY_ORDER_RELAXED);
     ASSERT_DEBUG(lane < group->laneCount && "Too many threads trying to join group");
     if (lane >= group->laneCount) {
         return (U64)-1;
@@ -204,4 +223,80 @@ B32 spmd_is_root(SPMDGroup* group, U64 lane) {
     ASSERT_DEBUG(group != nullptr && "group must be valid");
     ASSERT_DEBUG(lane < group->laneCount && "lane out of range");
     return (spmd_lane_id() == lane) ? 1 : 0;
+}
+
+// ////////////////////////
+// SPMD Dispatch via Job System
+
+static
+void spmd_dispatch_lane_job(void* params) {
+    SPMDDispatchParameters* dispatchParams = (SPMDDispatchParameters*) params;
+    if (!dispatchParams || !dispatchParams->group || !dispatchParams->kernel) {
+        return;
+    }
+
+    U64 lane = spmd_join_group_auto(dispatchParams->group);
+    if (lane == (U64)-1) {
+        return;
+    }
+
+    DEFER(spmd_group_leave());
+    dispatchParams->kernel(dispatchParams->kernelParameters);
+}
+
+SPMDGroup* spmd_dispatch_(JobSystem* jobSystem, Arena* arena, const SPMDDispatchOptions& options) {
+    ASSERT_DEBUG(jobSystem != nullptr);
+    ASSERT_DEBUG(arena != nullptr);
+    ASSERT_DEBUG(options.laneCount > 0);
+    ASSERT_DEBUG(options.kernel != nullptr);
+
+    U32 laneCount = options.laneCount;
+#ifndef NDEBUG
+    ASSERT_DEBUG(laneCount <= jobSystem->workerCount && "laneCount exceeds available worker threads");
+#else
+    if (laneCount > jobSystem->workerCount) {
+        LOG_WARNING("spmd_dispatch", "laneCount {} exceeds available worker threads {}. Clamping to {}.", laneCount, jobSystem->workerCount, jobSystem->workerCount);
+        laneCount = jobSystem->workerCount;
+    }
+#endif
+
+    SPMDGroup* group = spmd_group_create(arena, laneCount, options.groupParams);
+    ASSERT_DEBUG(group != nullptr);
+    if (!group) {
+#ifdef NDEBUG
+        LOG_ERROR("spmd_dispatch", "Failed to create SPMDGroup.");
+        return nullptr;
+#else
+        ASSERT_DEBUG(group != nullptr && "Failed to create SPMDGroup");
+#endif
+    }
+
+    SPMDDispatchParameters* dispatchParams = (SPMDDispatchParameters*) arena_push(
+        arena, sizeof(SPMDDispatchParameters) * laneCount, alignof(SPMDDispatchParameters));
+    ASSERT_DEBUG(dispatchParams != nullptr);
+    if (!dispatchParams) {
+#ifdef NDEBUG
+        LOG_ERROR("spmd_dispatch", "Failed to allocate dispatch parameter array.");
+        return nullptr;
+#else
+        ASSERT_DEBUG(dispatchParams != nullptr && "Failed to allocate dispatch parameter array");
+#endif
+    }
+
+    Job rootJob = {};
+    rootJob.remainingJobs = 0;
+
+    for (U32 i = 0; i < laneCount; ++i) {
+        SPMDDispatchParameters* params = &dispatchParams[i];
+        params->group = group;
+        params->laneId = 0;
+        params->kernel = options.kernel;
+        params->kernelParameters = options.kernelParameters;
+
+        job_system_submit((.function = spmd_dispatch_lane_job, .parent = &rootJob), *params);
+    }
+
+    job_system_wait(jobSystem, &rootJob);
+
+    return group;
 }

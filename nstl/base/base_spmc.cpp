@@ -120,3 +120,4 @@ S64 wsdq_count_approx(const WSDeque* dq) {
     U64 cnt = (b >= t) ? (b - t) : 0u;
     return (S64) cnt;
 }
+

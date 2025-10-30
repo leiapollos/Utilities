@@ -3,10 +3,23 @@
 //
 //  Inspired by: Molecular Musings blog post series "Job System 2.0: Lock-Free Work Stealing"
 //  https://blog.molecular-matters.com/2015/08/24/job-system-2-0-lock-free-work-stealing-part-1-basics/
-//
 
 static_assert(is_power_of_two(JOB_SYSTEM_QUEUE_SIZE), "JOB_SYSTEM_QUEUE_SIZE must be a power of two");
 #define JOB_SYSTEM_INVALID_WORKER_INDEX 0xFFFFFFFFu
+
+// ////////////////////////
+// JobSystem struct definition
+
+struct JobSystem {
+    WSDeque** queues;
+    OS_Handle* workers;
+    U32 workerCount;
+    U64 shutdown;
+#ifndef NDEBUG
+    JobSystemStats* workerStats; // length = workerCount + 1 (main + workers)
+    JobSystemStats totals;
+#endif
+};
 
 // ////////////////////////
 // TLS state and helpers
@@ -131,7 +144,6 @@ void job_system_destroy(JobSystem* jobSystem) {
     }
 #endif
 
-    // Clear TLS in this thread (main thread) after shutdown
     g_tlsJobState.workerIndex = JOB_SYSTEM_INVALID_WORKER_INDEX;
     memset(&g_tlsJobState, 0, sizeof(g_tlsJobState));
 }
@@ -301,3 +313,4 @@ static JobSystemStats job_system_get_totals(JobSystem* jobSystem) {
     return jobSystem->totals;
 }
 #endif
+

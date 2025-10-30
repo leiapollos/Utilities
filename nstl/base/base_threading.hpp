@@ -62,6 +62,28 @@ static B32 spmd_is_root(SPMDGroup* group, U64 lane);
 #define SPMD_IS_ROOT(lane) (spmd_is_root(spmd_current_group(), lane))
 #define SPMD_BROADCAST(dst, src, rootLane) spmd_broadcast(spmd_current_group(), dst, src, sizeof(*(dst)), rootLane)
 
+// ////////////////////////
+// SPMD Dispatch via Job System
+
+typedef void SPMDKernel(void* kernelParameters);
+
+struct SPMDDispatchParameters {
+    SPMDGroup* group;
+    U64 laneId;
+    SPMDKernel* kernel;
+    void* kernelParameters;
+};
+
+struct SPMDDispatchOptions {
+    U32 laneCount;
+    SPMDKernel* kernel;
+    void* kernelParameters;
+    SPMDGroupParameters groupParams;
+};
+
+static SPMDGroup* spmd_dispatch_(JobSystem* jobSystem, Arena* arena, const SPMDDispatchOptions& options);
+#define spmd_dispatch(jobSystem, arena, ...) spmd_dispatch_(jobSystem, arena, {__VA_ARGS__})
+
 
 // ////////////////////////
 // Thread Context
