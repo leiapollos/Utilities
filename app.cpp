@@ -411,32 +411,48 @@ void entry_point() {
             return;
         }
         
-        OS_WindowDesc windowDesc = {};
-        windowDesc.title = "Utilities Test Window";
-        windowDesc.width = 800;
-        windowDesc.height = 600;
-        
-        OS_WindowHandle window = OS_window_create(windowDesc);
-        if (!window.handle) {
-            LOG_ERROR("main", "Failed to create window");
+        OS_WindowDesc windowDescA = {};
+        windowDescA.title = "Utilities Window A";
+        windowDescA.width = 800;
+        windowDescA.height = 600;
+
+        OS_WindowDesc windowDescB = {};
+        windowDescB.title = "Utilities Window B";
+        windowDescB.width = 640;
+        windowDescB.height = 480;
+
+        OS_WindowHandle windowA = OS_window_create(windowDescA);
+        if (!windowA.handle) {
+            LOG_ERROR("main", "Failed to create window A");
             OS_graphics_shutdown();
             return;
         }
-        
-        void* nativeHandle = OS_window_get_native_handle(window);
-        LOG_INFO("main", "Window created successfully, native handle: {}", nativeHandle);
-        
-        LOG_INFO("main", "Window is open. Close the window to continue...");
-        
-        while (OS_window_is_open(window)) {
+
+        OS_WindowHandle windowB = OS_window_create(windowDescB);
+        if (!windowB.handle) {
+            LOG_ERROR("main", "Failed to create window B");
+            OS_window_destroy(windowA);
+            OS_graphics_shutdown();
+            return;
+        }
+
+        void* nativeHandleA = OS_window_get_native_handle(windowA);
+        void* nativeHandleB = OS_window_get_native_handle(windowB);
+        LOG_INFO("main", "Window A created, native handle: {}", nativeHandleA);
+        LOG_INFO("main", "Window B created, native handle: {}", nativeHandleB);
+
+        LOG_INFO("main", "Both windows are open. Close them to continue...");
+
+        while (OS_window_is_open(windowA) || OS_window_is_open(windowB)) {
             OS_graphics_pump_events();
-            
+
             OS_sleep_milliseconds(10);
         }
-        
-        LOG_INFO("main", "Window was closed by user");
-        
-        OS_window_destroy(window);
+
+        LOG_INFO("main", "Windows were closed by user");
+
+        OS_window_destroy(windowA);
+        OS_window_destroy(windowB);
         OS_graphics_shutdown();
         LOG_INFO("main", "Window test done!");
     }
