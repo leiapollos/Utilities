@@ -77,11 +77,16 @@ debug_break(); \
 
 #define EXTERN_C extern "C"
 
-#if defined(COMPILER_MSVC) || (defined(COMPILER_CLANG) && defined(OS_WINDOWS))
-# pragma section(".rdata$", read)
-# define READ_ONLY __declspec(allocate(".rdata$"))
-#elif defined(COMPILER_CLANG) && defined(OS_LINUX)
-# define READ_ONLY __attribute__((section(".rodata")))
+#if defined(COMPILER_MSVC) || (defined(COMPILER_CLANG) && defined(PLATFORM_OS_WINDOWS))
+// # pragma section(".rdata$", read)
+// # define READ_ONLY __declspec(allocate(".rdata$"))
+#error check if the above is working correctly
+#elif defined(COMPILER_CLANG) && defined(PLATFORM_OS_MACOS)
+#define READ_ONLY __attribute__((section("__DATA,__const"))) \
+__attribute__((used))
+#elif defined(COMPILER_CLANG) && defined(PLATFORM_OS_LINUX)
+// # define READ_ONLY __attribute__((section(".rodata")))
+#error check if the above is working correctly
 #else
 // GCC read only attributes introduce some issues
 # define READ_ONLY
