@@ -64,6 +64,13 @@ static U64 OS_get_counter_frequency_hz() {
 #endif
 }
 
+static void OS_sleep_milliseconds(U32 milliseconds) {
+    struct timespec req = {0, 0};
+    req.tv_sec = (time_t)(milliseconds / 1000);
+    req.tv_nsec = (long)((milliseconds % 1000) * MILLION(1ULL));
+    nanosleep(&req, 0);
+}
+
 
 // ////////////////////////
 // Aborting

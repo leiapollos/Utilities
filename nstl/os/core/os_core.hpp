@@ -24,6 +24,8 @@ static U64 OS_get_counter_frequency_hz();
 static U64 OS_rdtsc_relaxed();
 static U64 OS_rdtscp_serialized();
 
+static void OS_sleep_milliseconds(U32 milliseconds);
+
 // ////////////////////////
 // Aborting
 
