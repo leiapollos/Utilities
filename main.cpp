@@ -55,7 +55,9 @@ void work(void*arg) {
         temp_end(&a);
     }
     
-    sleep(1);
+    struct timespec req = {0};
+    req.tv_nsec = 10 * 1000 * 1000;
+    nanosleep(&req, 0);
     LOG_INFO("threading", "Thread finished with value: {}", val);
 }
 
@@ -147,7 +149,9 @@ void entry_point() {
         
         OS_Handle cvThread = OS_thread_create(condition_variable_test_thread, cvState);
         
-        sleep(1);
+        struct timespec req = {0};
+        req.tv_nsec = 10 * 1000 * 1000;
+        nanosleep(&req, 0);
         LOG_INFO("main", "Main: Setting flag and signaling...");
         OS_mutex_lock(cvState->mutex);
         cvState->flag = 1;
@@ -232,7 +236,7 @@ void entry_point() {
 
             struct timespec ts;
             ts.tv_sec = 0;
-            ts.tv_nsec = (rand() % 100) * 1000 * 1000;
+            ts.tv_nsec = (rand() % 10) * 1000 * 1000;
             nanosleep(&ts, nullptr);
 
             for (U32 iter = 0; iter < st->iterations; ++iter) {
