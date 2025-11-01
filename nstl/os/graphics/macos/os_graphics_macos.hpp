@@ -28,6 +28,7 @@ struct OS_MACOS_GraphicsEntity {
     union {
         struct {
             NSWindow* window;
+            void* windowDelegate;
         } window;
     };
 };

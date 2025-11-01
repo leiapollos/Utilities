@@ -17,10 +17,58 @@
 }
 @end
 
+@interface OS_MacOS_WindowDelegate : NSObject <NSWindowDelegate>
+{
+@public
+    OS_MACOS_GraphicsEntity* entity;
+}
+- (instancetype)initWithEntity:(OS_MACOS_GraphicsEntity*)entity;
+@end
+
+@implementation OS_MacOS_WindowDelegate
+- (instancetype)initWithEntity:(OS_MACOS_GraphicsEntity*)entityParam {
+    self = [super init];
+    if (self) {
+        entity = entityParam;
+    }
+    return self;
+}
+
+- (void)windowWillClose:(NSNotification*)notification {
+    OS_MACOS_GraphicsEntity* localEntity = entity;
+    if (!localEntity) {
+        return;
+    }
+    if (localEntity->type != OS_MACOS_GraphicsEntityType_Window) {
+        entity = 0;
+        return;
+    }
+
+    if (localEntity->window.window) {
+        NSWindow* window = localEntity->window.window;
+        localEntity->window.window = 0;
+        [window setDelegate:nil];
+        [window orderOut:nil];
+        [window release];
+    }
+
+    if (localEntity->window.windowDelegate) {
+        NSObject* delegateObj = (NSObject*) localEntity->window.windowDelegate;
+        localEntity->window.windowDelegate = 0;
+        entity = 0;
+        [delegateObj release];
+    } else {
+        entity = 0;
+    }
+}
+@end
+
 static OS_MACOS_GraphicsEntity* alloc_OS_graphics_entity() {
     OS_MACOS_GraphicsEntity* entity = g_OS_MacOSGraphicsState.freeEntities;
     if (entity) {
-        g_OS_MacOSGraphicsState.freeEntities = entity->next;
+        OS_MACOS_GraphicsEntity* next = entity->next;
+        memset(entity, 0, sizeof(OS_MACOS_GraphicsEntity));
+        g_OS_MacOSGraphicsState.freeEntities = next;
         return entity;
     }
 
@@ -34,7 +82,10 @@ static void free_OS_graphics_entity(OS_MACOS_GraphicsEntity* entity) {
     if (!entity) {
         return;
     }
-    entity->next = g_OS_MacOSGraphicsState.freeEntities;
+
+    OS_MACOS_GraphicsEntity* next = g_OS_MacOSGraphicsState.freeEntities;
+    memset(entity, 0, sizeof(OS_MACOS_GraphicsEntity));
+    entity->next = next;
     g_OS_MacOSGraphicsState.freeEntities = entity;
 }
 
@@ -120,6 +171,10 @@ static OS_WindowHandle OS_window_create(OS_WindowDesc desc) {
         [window setContentView:contentView];
         [contentView release];
 
+        OS_MacOS_WindowDelegate* windowDelegate = [[OS_MacOS_WindowDelegate alloc] initWithEntity:entity];
+        entity->window.windowDelegate = windowDelegate;
+        [window setDelegate:windowDelegate];
+
         [window makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];
 
@@ -144,11 +199,21 @@ static void OS_window_destroy(OS_WindowHandle windowHandle) {
         if (entity->window.window) {
             NSWindow* window = entity->window.window;
             [window close];
-            [window release];
-            entity->window.window = nil;
+            if (entity->window.window) {
+                [window orderOut:nil];
+                [window release];
+                entity->window.window = 0;
+            }
+        }
+
+        if (entity->window.windowDelegate) {
+            NSObject* delegateObj = (NSObject*) entity->window.windowDelegate;
+            entity->window.windowDelegate = 0;
+            [delegateObj release];
         }
     }
 
+    entity->type = OS_MACOS_GraphicsEntityType_Invalid;
     free_OS_graphics_entity(entity);
 }
 
@@ -191,18 +256,27 @@ static B32 OS_graphics_pump_events() {
         return 0;
     }
 
+    B32 processedEvent = 0;
+
     @autoreleasepool {
-        NSEvent* event = [NSApp nextEventMatchingMask:NSEventMaskAny
-                                            untilDate:[NSDate distantPast]
-                                               inMode:NSDefaultRunLoopMode
-                                              dequeue:YES];
-        if (event) {
+        while (1) {
+            NSEvent* event = [NSApp nextEventMatchingMask:NSEventMaskAny
+                                                untilDate:[NSDate distantPast]
+                                                   inMode:NSDefaultRunLoopMode
+                                                  dequeue:YES];
+            if (!event) {
+                break;
+            }
+
+            processedEvent = 1;
             [NSApp sendEvent:event];
+        }
+
+        if (processedEvent) {
             [NSApp updateWindows];
-            return 1;
         }
     }
 
-    return 0;
+    return processedEvent;
 }
 
