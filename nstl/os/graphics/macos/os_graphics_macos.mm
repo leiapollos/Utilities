@@ -231,6 +231,37 @@ static void* OS_window_get_native_handle(OS_WindowHandle windowHandle) {
     return (__bridge void*) contentView;
 }
 
+static OS_WindowSurfaceInfo OS_window_get_surface_info(OS_WindowHandle windowHandle) {
+    OS_WindowSurfaceInfo info = {};
+
+    if (!windowHandle.handle) {
+        return info;
+    }
+
+    OS_MACOS_GraphicsEntity* entity = (OS_MACOS_GraphicsEntity*) windowHandle.handle;
+    if (entity->type != OS_MACOS_GraphicsEntityType_Window) {
+        return info;
+    }
+
+    if (!entity->window.window) {
+        return info;
+    }
+
+    @autoreleasepool {
+        NSView* contentView = [entity->window.window contentView];
+        if (contentView) {
+            info.viewPtr = (__bridge void*) contentView;
+
+            CALayer* layer = [contentView layer];
+            if (layer && [layer isKindOfClass:[CAMetalLayer class]]) {
+                info.metalLayerPtr = (__bridge void*) ((CAMetalLayer*) layer);
+            }
+        }
+    }
+
+    return info;
+}
+
 static B32 OS_window_is_open(OS_WindowHandle windowHandle) {
     if (!windowHandle.handle) {
         return 0;

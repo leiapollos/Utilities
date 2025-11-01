@@ -441,6 +441,11 @@ void entry_point() {
         LOG_INFO("main", "Window A created, native handle: {}", nativeHandleA);
         LOG_INFO("main", "Window B created, native handle: {}", nativeHandleB);
 
+        OS_WindowSurfaceInfo surfaceInfoA = OS_window_get_surface_info(windowA);
+        OS_WindowSurfaceInfo surfaceInfoB = OS_window_get_surface_info(windowB);
+        LOG_INFO("main", "Window A surface view: {} metal layer: {}", surfaceInfoA.viewPtr, surfaceInfoA.metalLayerPtr);
+        LOG_INFO("main", "Window B surface view: {} metal layer: {}", surfaceInfoB.viewPtr, surfaceInfoB.metalLayerPtr);
+
         LOG_INFO("main", "Both windows are open. Close them to continue...");
 
         while (OS_window_is_open(windowA) || OS_window_is_open(windowB)) {

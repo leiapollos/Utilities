@@ -17,6 +17,11 @@ struct OS_WindowHandle {
     U64* handle;
 };
 
+struct OS_WindowSurfaceInfo {
+    void* viewPtr;
+    void* metalLayerPtr;
+};
+
 static B32 OS_graphics_init();
 static void OS_graphics_shutdown();
 
@@ -24,5 +29,6 @@ static OS_WindowHandle OS_window_create(OS_WindowDesc desc);
 static void OS_window_destroy(OS_WindowHandle window);
 static void* OS_window_get_native_handle(OS_WindowHandle window);
 static B32 OS_window_is_open(OS_WindowHandle window);
+static OS_WindowSurfaceInfo OS_window_get_surface_info(OS_WindowHandle window);
 static B32 OS_graphics_pump_events();
 
