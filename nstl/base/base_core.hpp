@@ -127,6 +127,26 @@ EXTERN_C void __asan_unpoison_memory_region(void const volatile* addr, U32 size)
 
 #define C_STR_LEN(ptr)          strlen(ptr)
 
+
+// //////////////////////////////
+// Free List
+
+#define FREELIST_POP(head, outNode, nextField) \
+do { \
+    (outNode) = (head); \
+    if (outNode) { \
+        (head) = (outNode)->nextField; \
+    } \
+} while (false)
+
+#define FREELIST_PUSH(head, node, nextField) \
+do { \
+    (node)->nextField = (head); \
+    (head) = (node); \
+} while (false)
+
+#define FREELIST_IS_EMPTY(head) ((head) == 0)
+
 // //////////////////////////////
 // Ranges
 

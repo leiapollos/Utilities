@@ -86,12 +86,15 @@ struct OS_GraphicsEvent {
     };
 };
 
-#define OS_GRAPHICS_EVENT_CAPACITY 256
+struct OS_GraphicsEventNode {
+    OS_GraphicsEvent event;
+    struct OS_GraphicsEventNode* next;
+};
 
 struct OS_GraphicsEventQueue {
-    OS_GraphicsEvent events[OS_GRAPHICS_EVENT_CAPACITY];
-    U32 readIndex;
-    U32 writeIndex;
+    struct OS_GraphicsEventNode* head;
+    struct OS_GraphicsEventNode* tail;
+    struct OS_GraphicsEventNode* freeList;
     U32 count;
 };
 

@@ -41,6 +41,7 @@ struct OS_MACOS_GraphicsState {
     NSApplication* application;
     B32 initialized;
     Arena* entityArena;
+    Arena* eventArena;
     OS_MACOS_GraphicsEntity* freeEntities;
     OS_MACOS_GraphicsEntity* activeEntities;
     OS_GraphicsEventQueue eventQueue;

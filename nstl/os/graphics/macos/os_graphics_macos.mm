@@ -72,15 +72,56 @@ static OS_WindowHandle os_make_window_handle_from_nswindow(NSWindow* window) {
     return os_make_window_handle_from_entity(entity);
 }
 
+static OS_GraphicsEventNode* os_acquire_graphics_event_node() {
+    OS_GraphicsEventQueue* queue = &g_OS_MacOSGraphicsState.eventQueue;
+    OS_GraphicsEventNode* node = 0;
+    FREELIST_POP(queue->freeList, node, next);
+    if (node) {
+        node->next = 0;
+        return node;
+    }
+
+    Arena* arena = g_OS_MacOSGraphicsState.eventArena;
+    if (!arena) {
+        return 0;
+    }
+
+    OS_GraphicsEventNode* newNode = (OS_GraphicsEventNode*) arena_push(arena, sizeof(OS_GraphicsEventNode), alignof(OS_GraphicsEventNode));
+    if (!newNode) {
+        return 0;
+    }
+
+    MEMSET(newNode, 0, sizeof(OS_GraphicsEventNode));
+    return newNode;
+}
+
+static void os_release_graphics_event_node(OS_GraphicsEventNode* node) {
+    if (!node) {
+        return;
+    }
+    MEMSET(&node->event, 0, sizeof(OS_GraphicsEvent));
+    FREELIST_PUSH(g_OS_MacOSGraphicsState.eventQueue.freeList, node, next);
+}
+
 static void os_push_graphics_event(OS_GraphicsEvent event) {
     OS_GraphicsEventQueue* queue = &g_OS_MacOSGraphicsState.eventQueue;
 
-    queue->events[queue->writeIndex] = event;
-    queue->writeIndex = (queue->writeIndex + 1u) % OS_GRAPHICS_EVENT_CAPACITY;
+    OS_GraphicsEventNode* node = os_acquire_graphics_event_node();
+    if (!node) {
+        return;
+    }
 
-    if (queue->count == OS_GRAPHICS_EVENT_CAPACITY) {
-        queue->readIndex = queue->writeIndex;
+    node->event = event;
+
+    if (!queue->head) {
+        queue->head = node;
+        queue->tail = node;
     } else {
+        queue->tail->next = node;
+        queue->tail = node;
+    }
+
+    if (queue->count < 0xFFFFFFFFu) {
         queue->count += 1u;
     }
 }
@@ -188,7 +229,6 @@ static void os_push_mouse_event(NSEvent* event, enum OS_GraphicsEventType type) 
     graphicsEvent.mouse.deltaY = (F32) [event deltaY];
     graphicsEvent.mouse.modifiers = os_translate_modifier_flags([event modifierFlags]);
     graphicsEvent.mouse.button = os_translate_mouse_button_from_event(event);
-    graphicsEvent.mouse.clickCount = (U32) [event clickCount];
 
     graphicsEvent.mouse.globalX = (F32) screenPoint.x;
     graphicsEvent.mouse.globalY = (F32) screenPoint.y;
@@ -197,6 +237,9 @@ static void os_push_mouse_event(NSEvent* event, enum OS_GraphicsEventType type) 
     if (type == OS_GraphicsEventType_MouseScroll) {
         graphicsEvent.mouse.deltaX = (F32) [event scrollingDeltaX];
         graphicsEvent.mouse.deltaY = (F32) [event scrollingDeltaY];
+        graphicsEvent.mouse.clickCount = 0;
+    } else if (type == OS_GraphicsEventType_MouseButtonDown || type == OS_GraphicsEventType_MouseButtonUp) {
+        graphicsEvent.mouse.clickCount = (U32) [event clickCount];
     }
 
     os_push_graphics_event(graphicsEvent);
@@ -376,6 +419,8 @@ static B32 OS_graphics_init() {
 
         Arena* entityArena = arena_alloc();
         g_OS_MacOSGraphicsState.entityArena = entityArena;
+        Arena* eventArena = arena_alloc();
+        g_OS_MacOSGraphicsState.eventArena = eventArena;
         g_OS_MacOSGraphicsState.freeEntities = 0;
         g_OS_MacOSGraphicsState.activeEntities = 0;
         MEMSET(&g_OS_MacOSGraphicsState.eventQueue, 0, sizeof(OS_GraphicsEventQueue));
@@ -395,6 +440,10 @@ static void OS_graphics_shutdown() {
         if (g_OS_MacOSGraphicsState.entityArena) {
             arena_release(g_OS_MacOSGraphicsState.entityArena);
             g_OS_MacOSGraphicsState.entityArena = 0;
+        }
+        if (g_OS_MacOSGraphicsState.eventArena) {
+            arena_release(g_OS_MacOSGraphicsState.eventArena);
+            g_OS_MacOSGraphicsState.eventArena = 0;
         }
         g_OS_MacOSGraphicsState.application = 0;
         g_OS_MacOSGraphicsState.initialized = 0;
@@ -579,11 +628,26 @@ static U32 OS_graphics_poll_events(OS_GraphicsEvent* outEvents, U32 maxEvents) {
     OS_GraphicsEventQueue* queue = &g_OS_MacOSGraphicsState.eventQueue;
     U32 count = 0;
 
-    while (count < maxEvents && queue->count > 0) {
-        outEvents[count] = queue->events[queue->readIndex];
-        queue->readIndex = (queue->readIndex + 1u) % OS_GRAPHICS_EVENT_CAPACITY;
-        queue->count -= 1u;
+    while (count < maxEvents) {
+        OS_GraphicsEventNode* node = queue->head;
+        if (!node) {
+            break;
+        }
+
+        queue->head = node->next;
+        if (!queue->head) {
+            queue->tail = 0;
+        }
+
+        if (queue->count > 0) {
+            queue->count -= 1u;
+        }
+
+        outEvents[count] = node->event;
         count += 1u;
+
+        node->next = 0;
+        os_release_graphics_event_node(node);
     }
 
     return count;

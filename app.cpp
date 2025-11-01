@@ -448,6 +448,7 @@ void entry_point() {
         LOG_INFO("main", "Window B surface view: {} metal layer: {}", surfaceInfoB.viewPtr, surfaceInfoB.metalLayerPtr);
 
         LOG_INFO("main", "Both windows are open. Close them to continue...");
+        set_log_domain_level(str8("events"), LogLevel_Debug);
 
         while (OS_window_is_open(windowA) || OS_window_is_open(windowB)) {
             OS_graphics_pump_events();
