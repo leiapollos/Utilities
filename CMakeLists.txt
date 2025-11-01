@@ -20,7 +20,7 @@ mark_as_advanced(
 
 if(APPLE)
     add_executable(utils_app main.mm)
-    target_link_libraries(utils_app PRIVATE "-framework Cocoa")
+    target_link_libraries(utils_app PRIVATE "-framework Cocoa" "-framework QuartzCore" "-framework Metal")
 else()
     add_executable(utils_app main.cpp)
 endif()

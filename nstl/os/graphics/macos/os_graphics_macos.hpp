@@ -8,10 +8,12 @@
 @class NSApplication;
 @class NSWindow;
 @class NSObject;
+@class NSView;
 #else
 typedef void NSApplication;
 typedef void NSWindow;
 typedef void NSObject;
+typedef void NSView;
 #endif
 
 enum OS_MACOS_GraphicsEntityType : U64 {

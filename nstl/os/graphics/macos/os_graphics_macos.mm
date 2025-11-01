@@ -3,6 +3,8 @@
 //
 
 #import <Cocoa/Cocoa.h>
+#import <QuartzCore/CAMetalLayer.h>
+#import <Metal/Metal.h>
 #include "os_graphics_macos.hpp"
 #include "../os_graphics.hpp"
 
@@ -104,6 +106,20 @@ static OS_WindowHandle OS_window_create(OS_WindowDesc desc) {
             [window setTitle:titleString];
         }
 
+        NSView* contentView = [[NSView alloc] initWithFrame:frame];
+        [contentView setWantsLayer:YES];
+
+        CAMetalLayer* metalLayer = [CAMetalLayer layer];
+        [metalLayer setDevice:MTLCreateSystemDefaultDevice()];
+        [metalLayer setPixelFormat:MTLPixelFormatBGRA8Unorm];
+        NSScreen* screen = [window screen];
+        CGFloat scaleFactor = (screen) ? [screen backingScaleFactor] : 1.0;
+        [metalLayer setContentsScale:scaleFactor];
+        [contentView setLayer:metalLayer];
+
+        [window setContentView:contentView];
+        [contentView release];
+
         [window makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];
 
@@ -146,7 +162,8 @@ static void* OS_window_get_native_handle(OS_WindowHandle windowHandle) {
         return 0;
     }
 
-    return (__bridge void*) entity->window.window;
+    NSView* contentView = [entity->window.window contentView];
+    return (__bridge void*) contentView;
 }
 
 static B32 OS_window_is_open(OS_WindowHandle windowHandle) {
