@@ -451,6 +451,58 @@ void entry_point() {
         while (OS_window_is_open(windowA) || OS_window_is_open(windowB)) {
             OS_graphics_pump_events();
 
+            OS_GraphicsEvent events[32];
+            U32 maxEvents = (U32)(sizeof(events) / sizeof(events[0]));
+            U32 eventCount = OS_graphics_poll_events(events, maxEvents);
+            for (U32 eventIndex = 0; eventIndex < eventCount; ++eventIndex) {
+                OS_GraphicsEvent* evt = &events[eventIndex];
+                switch (evt->type) {
+                    case OS_GraphicsEventType_WindowShown: {
+                        LOG_INFO("events", "WindowShown handle={} size={}x{}", (void*) evt->window.handle, evt->windowEvent.width, evt->windowEvent.height);
+                    } break;
+
+                    case OS_GraphicsEventType_WindowClosed: {
+                        LOG_INFO("events", "WindowClosed handle={} size={}x{}", (void*) evt->window.handle, evt->windowEvent.width, evt->windowEvent.height);
+                    } break;
+
+                    case OS_GraphicsEventType_WindowDestroyed: {
+                        LOG_INFO("events", "WindowDestroyed handle={} size={}x{}", (void*) evt->window.handle, evt->windowEvent.width, evt->windowEvent.height);
+                    } break;
+
+                    case OS_GraphicsEventType_KeyDown: {
+                        LOG_INFO("events", "KeyDown handle={} scan={} char={} modifiers=0x{:X} repeat={}", (void*) evt->window.handle, evt->key.scanCode, evt->key.character, evt->key.modifiers, evt->key.isRepeat);
+                    } break;
+
+                    case OS_GraphicsEventType_KeyUp: {
+                        LOG_INFO("events", "KeyUp handle={} scan={} modifiers=0x{:X}", (void*) evt->window.handle, evt->key.scanCode, evt->key.modifiers);
+                    } break;
+
+                    case OS_GraphicsEventType_TextInput: {
+                        LOG_INFO("events", "TextInput handle={} codepoint={} modifiers=0x{:X}", (void*) evt->window.handle, evt->text.codepoint, evt->text.modifiers);
+                    } break;
+
+                    case OS_GraphicsEventType_MouseButtonDown: {
+                        LOG_INFO("events", "MouseButtonDown handle={} button={} pos=({:.2f}, {:.2f}) clicks={} modifiers=0x{:X}", (void*) evt->window.handle, (U32) evt->mouse.button, evt->mouse.x, evt->mouse.y, evt->mouse.clickCount, evt->mouse.modifiers);
+                    } break;
+
+                    case OS_GraphicsEventType_MouseButtonUp: {
+                        LOG_INFO("events", "MouseButtonUp handle={} button={} pos=({:.2f}, {:.2f}) modifiers=0x{:X}", (void*) evt->window.handle, (U32) evt->mouse.button, evt->mouse.x, evt->mouse.y, evt->mouse.modifiers);
+                    } break;
+
+                    case OS_GraphicsEventType_MouseMove: {
+                        LOG_INFO("events", "MouseMove handle={} pos=({:.2f}, {:.2f}) delta=({:.2f}, {:.2f}) modifiers=0x{:X}", (void*) evt->window.handle, evt->mouse.x, evt->mouse.y, evt->mouse.deltaX, evt->mouse.deltaY, evt->mouse.modifiers);
+                    } break;
+
+                    case OS_GraphicsEventType_MouseScroll: {
+                        LOG_INFO("events", "MouseScroll handle={} delta=({:.2f}, {:.2f}) modifiers=0x{:X}", (void*) evt->window.handle, evt->mouse.deltaX, evt->mouse.deltaY, evt->mouse.modifiers);
+                    } break;
+
+                    default: {
+                        LOG_INFO("events", "Unhandled event type {} handle={}", (U32) evt->type, (void*) evt->window.handle);
+                    } break;
+                }
+            }
+
             OS_sleep_milliseconds(10);
         }
 

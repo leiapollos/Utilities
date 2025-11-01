@@ -23,6 +23,7 @@ enum OS_MACOS_GraphicsEntityType : U64 {
 
 struct OS_MACOS_GraphicsEntity {
     OS_MACOS_GraphicsEntity* next;
+    OS_MACOS_GraphicsEntity* activeNext;
     OS_MACOS_GraphicsEntityType type;
 
     union {
@@ -41,6 +42,8 @@ struct OS_MACOS_GraphicsState {
     B32 initialized;
     Arena* entityArena;
     OS_MACOS_GraphicsEntity* freeEntities;
+    OS_MACOS_GraphicsEntity* activeEntities;
+    OS_GraphicsEventQueue eventQueue;
 };
 
 static OS_MACOS_GraphicsState g_OS_MacOSGraphicsState = {};

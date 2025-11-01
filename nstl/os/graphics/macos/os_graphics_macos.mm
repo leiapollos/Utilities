@@ -5,8 +5,7 @@
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <Metal/Metal.h>
-#include "os_graphics_macos.hpp"
-#include "../os_graphics.hpp"
+
 
 @interface OS_MacOS_AppDelegate : NSObject <NSApplicationDelegate>
 @end
@@ -16,6 +15,251 @@
     return NSTerminateCancel;
 }
 @end
+
+static OS_WindowHandle os_make_window_handle_from_entity(OS_MACOS_GraphicsEntity* entity) {
+    OS_WindowHandle handle = {0};
+    if (!entity) {
+        return handle;
+    }
+    handle.handle = (U64*) entity;
+    return handle;
+}
+
+static void os_register_active_graphics_entity(OS_MACOS_GraphicsEntity* entity) {
+    if (!entity) {
+        return;
+    }
+
+    entity->activeNext = g_OS_MacOSGraphicsState.activeEntities;
+    g_OS_MacOSGraphicsState.activeEntities = entity;
+}
+
+static void os_unregister_active_graphics_entity(OS_MACOS_GraphicsEntity* entity) {
+    if (!entity) {
+        return;
+    }
+
+    OS_MACOS_GraphicsEntity** current = &g_OS_MacOSGraphicsState.activeEntities;
+    while (*current) {
+        if (*current == entity) {
+            *current = entity->activeNext;
+            break;
+        }
+        current = &(*current)->activeNext;
+    }
+
+    entity->activeNext = 0;
+}
+
+static OS_MACOS_GraphicsEntity* os_find_graphics_entity_for_window(NSWindow* window) {
+    if (!window) {
+        return 0;
+    }
+
+    OS_MACOS_GraphicsEntity* current = g_OS_MacOSGraphicsState.activeEntities;
+    while (current) {
+        if (current->type == OS_MACOS_GraphicsEntityType_Window && current->window.window == window) {
+            return current;
+        }
+        current = current->activeNext;
+    }
+
+    return 0;
+}
+
+static OS_WindowHandle os_make_window_handle_from_nswindow(NSWindow* window) {
+    OS_MACOS_GraphicsEntity* entity = os_find_graphics_entity_for_window(window);
+    return os_make_window_handle_from_entity(entity);
+}
+
+static void os_push_graphics_event(OS_GraphicsEvent event) {
+    OS_GraphicsEventQueue* queue = &g_OS_MacOSGraphicsState.eventQueue;
+
+    queue->events[queue->writeIndex] = event;
+    queue->writeIndex = (queue->writeIndex + 1u) % OS_GRAPHICS_EVENT_CAPACITY;
+
+    if (queue->count == OS_GRAPHICS_EVENT_CAPACITY) {
+        queue->readIndex = queue->writeIndex;
+    } else {
+        queue->count += 1u;
+    }
+}
+
+static U32 os_translate_modifier_flags(NSEventModifierFlags flags) {
+    U32 result = OS_KeyModifiers_None;
+
+    if (FLAGS_HAS(flags, NSEventModifierFlagShift)) {
+        result |= OS_KeyModifiers_Shift;
+    }
+    if (FLAGS_HAS(flags, NSEventModifierFlagControl)) {
+        result |= OS_KeyModifiers_Control;
+    }
+    if (FLAGS_HAS(flags, NSEventModifierFlagOption)) {
+        result |= OS_KeyModifiers_Alt;
+    }
+    if (FLAGS_HAS(flags, NSEventModifierFlagCommand)) {
+        result |= OS_KeyModifiers_Super;
+    }
+    if (FLAGS_HAS(flags, NSEventModifierFlagFunction)) {
+        result |= OS_KeyModifiers_Function;
+    }
+    if (FLAGS_HAS(flags, NSEventModifierFlagCapsLock)) {
+        result |= OS_KeyModifiers_CapsLock;
+    }
+
+    return result;
+}
+
+static enum OS_MouseButton os_translate_mouse_button_from_event(NSEvent* event) {
+    enum OS_MouseButton button = OS_MouseButton_None;
+    NSInteger buttonNumber = [event buttonNumber];
+    if (buttonNumber == 0) {
+        button = OS_MouseButton_Left;
+    } else if (buttonNumber == 1) {
+        button = OS_MouseButton_Right;
+    } else if (buttonNumber == 2) {
+        button = OS_MouseButton_Middle;
+    } else if (buttonNumber == 3) {
+        button = OS_MouseButton_Button4;
+    } else if (buttonNumber == 4) {
+        button = OS_MouseButton_Button5;
+    }
+    return button;
+}
+
+static OS_WindowHandle os_window_handle_from_event(NSEvent* event) {
+    NSWindow* window = [event window];
+    if (!window) {
+        window = [NSApp keyWindow];
+    }
+    if (!window) {
+        window = [NSApp mainWindow];
+    }
+    return os_make_window_handle_from_nswindow(window);
+}
+
+static void os_push_window_event(OS_MACOS_GraphicsEntity* entity, enum OS_GraphicsEventType type, NSWindow* window) {
+    OS_GraphicsEvent event = {};
+    event.type = type;
+    event.window = os_make_window_handle_from_entity(entity);
+
+    if (window) {
+        NSRect frame = [window frame];
+        event.windowEvent.width = (U32) frame.size.width;
+        event.windowEvent.height = (U32) frame.size.height;
+    }
+
+    os_push_graphics_event(event);
+}
+
+static void os_push_mouse_event(NSEvent* event, enum OS_GraphicsEventType type) {
+    OS_GraphicsEvent graphicsEvent = {};
+    graphicsEvent.type = type;
+    graphicsEvent.window = os_window_handle_from_event(event);
+
+    NSWindow* window = [event window];
+    if (!window && graphicsEvent.window.handle) {
+        OS_MACOS_GraphicsEntity* entity = (OS_MACOS_GraphicsEntity*) graphicsEvent.window.handle;
+        window = entity->window.window;
+    }
+
+    if (!graphicsEvent.window.handle) {
+        return;
+    }
+
+    NSPoint location = [event locationInWindow];
+    graphicsEvent.mouse.x = (F32) location.x;
+    graphicsEvent.mouse.y = (F32) location.y;
+    graphicsEvent.mouse.deltaX = (F32) [event deltaX];
+    graphicsEvent.mouse.deltaY = (F32) [event deltaY];
+    graphicsEvent.mouse.modifiers = os_translate_modifier_flags([event modifierFlags]);
+    graphicsEvent.mouse.button = os_translate_mouse_button_from_event(event);
+    graphicsEvent.mouse.clickCount = (U32) [event clickCount];
+
+    if (type == OS_GraphicsEventType_MouseScroll) {
+        graphicsEvent.mouse.deltaX = (F32) [event scrollingDeltaX];
+        graphicsEvent.mouse.deltaY = (F32) [event scrollingDeltaY];
+    }
+
+    os_push_graphics_event(graphicsEvent);
+}
+
+static void os_push_key_event(NSEvent* event, enum OS_GraphicsEventType type) {
+    OS_GraphicsEvent graphicsEvent = {};
+    graphicsEvent.type = type;
+    graphicsEvent.window = os_window_handle_from_event(event);
+    if (!graphicsEvent.window.handle) {
+        return;
+    }
+    graphicsEvent.key.scanCode = (U32) [event keyCode];
+    graphicsEvent.key.modifiers = os_translate_modifier_flags([event modifierFlags]);
+    graphicsEvent.key.isRepeat = ([event isARepeat] != 0) ? 1 : 0;
+    graphicsEvent.key.character = 0;
+
+    NSString* characters = [event characters];
+    if (characters && [characters length] > 0) {
+        unichar code = [characters characterAtIndex:0];
+        graphicsEvent.key.character = (U32) code;
+    }
+
+    os_push_graphics_event(graphicsEvent);
+
+    if (type == OS_GraphicsEventType_KeyDown && characters && [characters length] > 0) {
+        for (NSUInteger index = 0; index < [characters length]; ++index) {
+            unichar code = [characters characterAtIndex:index];
+            OS_GraphicsEvent textEvent = {};
+            textEvent.type = OS_GraphicsEventType_TextInput;
+            textEvent.window = graphicsEvent.window;
+            textEvent.text.codepoint = (U32) code;
+            textEvent.text.modifiers = graphicsEvent.key.modifiers;
+            os_push_graphics_event(textEvent);
+        }
+    }
+}
+
+static void os_process_nsevent(NSEvent* event) {
+    if (!event) {
+        return;
+    }
+
+    NSEventType type = [event type];
+
+    switch (type) {
+        case NSEventTypeLeftMouseDown:
+        case NSEventTypeRightMouseDown:
+        case NSEventTypeOtherMouseDown:
+            os_push_mouse_event(event, OS_GraphicsEventType_MouseButtonDown);
+            break;
+
+        case NSEventTypeLeftMouseUp:
+        case NSEventTypeRightMouseUp:
+        case NSEventTypeOtherMouseUp:
+            os_push_mouse_event(event, OS_GraphicsEventType_MouseButtonUp);
+            break;
+
+        case NSEventTypeMouseMoved:
+        case NSEventTypeLeftMouseDragged:
+        case NSEventTypeRightMouseDragged:
+        case NSEventTypeOtherMouseDragged:
+            os_push_mouse_event(event, OS_GraphicsEventType_MouseMove);
+            break;
+
+        case NSEventTypeScrollWheel:
+            os_push_mouse_event(event, OS_GraphicsEventType_MouseScroll);
+            break;
+
+        case NSEventTypeKeyDown:
+            os_push_key_event(event, OS_GraphicsEventType_KeyDown);
+            break;
+
+        case NSEventTypeKeyUp:
+            os_push_key_event(event, OS_GraphicsEventType_KeyUp);
+            break;
+
+        default:
+            break;
+    }
+}
 
 @interface OS_MacOS_WindowDelegate : NSObject <NSWindowDelegate>
 {
@@ -44,8 +288,9 @@
         return;
     }
 
-    if (localEntity->window.window) {
-        NSWindow* window = localEntity->window.window;
+    NSWindow* window = localEntity->window.window;
+    if (window) {
+        os_push_window_event(localEntity, OS_GraphicsEventType_WindowClosed, window);
         localEntity->window.window = 0;
         [window setDelegate:nil];
         [window orderOut:nil];
@@ -67,8 +312,8 @@ static OS_MACOS_GraphicsEntity* alloc_OS_graphics_entity() {
     OS_MACOS_GraphicsEntity* entity = g_OS_MacOSGraphicsState.freeEntities;
     if (entity) {
         OS_MACOS_GraphicsEntity* next = entity->next;
-        memset(entity, 0, sizeof(OS_MACOS_GraphicsEntity));
         g_OS_MacOSGraphicsState.freeEntities = next;
+        memset(entity, 0, sizeof(OS_MACOS_GraphicsEntity));
         return entity;
     }
 
@@ -82,6 +327,8 @@ static void free_OS_graphics_entity(OS_MACOS_GraphicsEntity* entity) {
     if (!entity) {
         return;
     }
+
+    os_unregister_active_graphics_entity(entity);
 
     OS_MACOS_GraphicsEntity* next = g_OS_MacOSGraphicsState.freeEntities;
     memset(entity, 0, sizeof(OS_MACOS_GraphicsEntity));
@@ -111,6 +358,9 @@ static B32 OS_graphics_init() {
 
         Arena* entityArena = arena_alloc();
         g_OS_MacOSGraphicsState.entityArena = entityArena;
+        g_OS_MacOSGraphicsState.freeEntities = 0;
+        g_OS_MacOSGraphicsState.activeEntities = 0;
+        MEMSET(&g_OS_MacOSGraphicsState.eventQueue, 0, sizeof(OS_GraphicsEventQueue));
     }
 
     return 1;
@@ -122,12 +372,17 @@ static void OS_graphics_shutdown() {
     }
 
     @autoreleasepool {
+        ASSERT_DEBUG(g_OS_MacOSGraphicsState.activeEntities == 0);
+
         if (g_OS_MacOSGraphicsState.entityArena) {
             arena_release(g_OS_MacOSGraphicsState.entityArena);
             g_OS_MacOSGraphicsState.entityArena = 0;
         }
         g_OS_MacOSGraphicsState.application = 0;
         g_OS_MacOSGraphicsState.initialized = 0;
+        g_OS_MacOSGraphicsState.freeEntities = 0;
+        g_OS_MacOSGraphicsState.activeEntities = 0;
+        MEMSET(&g_OS_MacOSGraphicsState.eventQueue, 0, sizeof(OS_GraphicsEventQueue));
     }
 }
 
@@ -142,6 +397,7 @@ static OS_WindowHandle OS_window_create(OS_WindowDesc desc) {
 
     OS_MACOS_GraphicsEntity* entity = alloc_OS_graphics_entity();
     entity->type = OS_MACOS_GraphicsEntityType_Window;
+    os_register_active_graphics_entity(entity);
 
     @autoreleasepool {
         NSRect frame = NSMakeRect(0, 0, (CGFloat) desc.width, (CGFloat) desc.height);
@@ -179,6 +435,8 @@ static OS_WindowHandle OS_window_create(OS_WindowDesc desc) {
         [NSApp activateIgnoringOtherApps:YES];
 
         entity->window.window = [window retain];
+
+        os_push_window_event(entity, OS_GraphicsEventType_WindowShown, window);
     }
 
     OS_WindowHandle handle = {(U64*) entity};
@@ -195,9 +453,15 @@ static void OS_window_destroy(OS_WindowHandle windowHandle) {
         return;
     }
 
+    U32 windowWidth = 0;
+    U32 windowHeight = 0;
+
     @autoreleasepool {
         if (entity->window.window) {
             NSWindow* window = entity->window.window;
+            NSRect frame = [window frame];
+            windowWidth = (U32) frame.size.width;
+            windowHeight = (U32) frame.size.height;
             [window close];
             if (entity->window.window) {
                 [window orderOut:nil];
@@ -212,6 +476,13 @@ static void OS_window_destroy(OS_WindowHandle windowHandle) {
             [delegateObj release];
         }
     }
+
+    OS_GraphicsEvent destroyEvent = {};
+    destroyEvent.type = OS_GraphicsEventType_WindowDestroyed;
+    destroyEvent.window = os_make_window_handle_from_entity(entity);
+    destroyEvent.windowEvent.width = windowWidth;
+    destroyEvent.windowEvent.height = windowHeight;
+    os_push_graphics_event(destroyEvent);
 
     entity->type = OS_MACOS_GraphicsEntityType_Invalid;
     free_OS_graphics_entity(entity);
@@ -282,6 +553,24 @@ static B32 OS_window_is_open(OS_WindowHandle windowHandle) {
     }
 }
 
+static U32 OS_graphics_poll_events(OS_GraphicsEvent* outEvents, U32 maxEvents) {
+    if (!outEvents || maxEvents == 0) {
+        return 0;
+    }
+
+    OS_GraphicsEventQueue* queue = &g_OS_MacOSGraphicsState.eventQueue;
+    U32 count = 0;
+
+    while (count < maxEvents && queue->count > 0) {
+        outEvents[count] = queue->events[queue->readIndex];
+        queue->readIndex = (queue->readIndex + 1u) % OS_GRAPHICS_EVENT_CAPACITY;
+        queue->count -= 1u;
+        count += 1u;
+    }
+
+    return count;
+}
+
 static B32 OS_graphics_pump_events() {
     if (!g_OS_MacOSGraphicsState.initialized) {
         return 0;
@@ -300,6 +589,7 @@ static B32 OS_graphics_pump_events() {
             }
 
             processedEvent = 1;
+            os_process_nsevent(event);
             [NSApp sendEvent:event];
         }
 
