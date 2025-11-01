@@ -482,19 +482,19 @@ void entry_point() {
                     } break;
 
                     case OS_GraphicsEventType_MouseButtonDown: {
-                        LOG_INFO("events", "MouseButtonDown handle={} button={} pos=({:.2f}, {:.2f}) clicks={} modifiers=0x{:X}", (void*) evt->window.handle, (U32) evt->mouse.button, evt->mouse.x, evt->mouse.y, evt->mouse.clickCount, evt->mouse.modifiers);
+                        LOG_INFO("events", "MouseButtonDown handle={} button={} pos=({:.2f}, {:.2f}) global=({:.2f}, {:.2f}) inside={} clicks={} modifiers=0x{:X}", (void*) evt->window.handle, (U32) evt->mouse.button, evt->mouse.x, evt->mouse.y, evt->mouse.globalX, evt->mouse.globalY, (U32) evt->mouse.isInWindow, evt->mouse.clickCount, evt->mouse.modifiers);
                     } break;
 
                     case OS_GraphicsEventType_MouseButtonUp: {
-                        LOG_INFO("events", "MouseButtonUp handle={} button={} pos=({:.2f}, {:.2f}) modifiers=0x{:X}", (void*) evt->window.handle, (U32) evt->mouse.button, evt->mouse.x, evt->mouse.y, evt->mouse.modifiers);
+                        LOG_INFO("events", "MouseButtonUp handle={} button={} pos=({:.2f}, {:.2f}) global=({:.2f}, {:.2f}) inside={} modifiers=0x{:X}", (void*) evt->window.handle, (U32) evt->mouse.button, evt->mouse.x, evt->mouse.y, evt->mouse.globalX, evt->mouse.globalY, (U32) evt->mouse.isInWindow, evt->mouse.modifiers);
                     } break;
 
                     case OS_GraphicsEventType_MouseMove: {
-                        LOG_INFO("events", "MouseMove handle={} pos=({:.2f}, {:.2f}) delta=({:.2f}, {:.2f}) modifiers=0x{:X}", (void*) evt->window.handle, evt->mouse.x, evt->mouse.y, evt->mouse.deltaX, evt->mouse.deltaY, evt->mouse.modifiers);
+                        LOG_INFO("events", "MouseMove handle={} pos=({:.2f}, {:.2f}) delta=({:.2f}, {:.2f}) global=({:.2f}, {:.2f}) inside={} modifiers=0x{:X}", (void*) evt->window.handle, evt->mouse.x, evt->mouse.y, evt->mouse.deltaX, evt->mouse.deltaY, evt->mouse.globalX, evt->mouse.globalY, (U32) evt->mouse.isInWindow, evt->mouse.modifiers);
                     } break;
 
                     case OS_GraphicsEventType_MouseScroll: {
-                        LOG_INFO("events", "MouseScroll handle={} delta=({:.2f}, {:.2f}) modifiers=0x{:X}", (void*) evt->window.handle, evt->mouse.deltaX, evt->mouse.deltaY, evt->mouse.modifiers);
+                        LOG_INFO("events", "MouseScroll handle={} delta=({:.2f}, {:.2f}) global=({:.2f}, {:.2f}) inside={} modifiers=0x{:X}", (void*) evt->window.handle, evt->mouse.deltaX, evt->mouse.deltaY, evt->mouse.globalX, evt->mouse.globalY, (U32) evt->mouse.isInWindow, evt->mouse.modifiers);
                     } break;
 
                     default: {

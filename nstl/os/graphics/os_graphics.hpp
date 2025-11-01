@@ -66,9 +66,12 @@ struct OS_GraphicsMouseEvent {
     F32 y;
     F32 deltaX;
     F32 deltaY;
+    F32 globalX;
+    F32 globalY;
     U32 modifiers;
     enum OS_MouseButton button;
     U32 clickCount;
+    B32 isInWindow;
 };
 
 struct OS_GraphicsEvent {

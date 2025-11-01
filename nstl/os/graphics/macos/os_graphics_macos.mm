@@ -167,14 +167,32 @@ static void os_push_mouse_event(NSEvent* event, enum OS_GraphicsEventType type) 
         return;
     }
 
-    NSPoint location = [event locationInWindow];
-    graphicsEvent.mouse.x = (F32) location.x;
-    graphicsEvent.mouse.y = (F32) location.y;
+    NSPoint screenPoint = [NSEvent mouseLocation];
+    NSPoint windowPoint = screenPoint;
+    NSPoint localPoint = screenPoint;
+    B32 isInWindow = 0;
+
+    if (window) {
+        windowPoint = [window convertPointFromScreen:screenPoint];
+        NSView* contentView = [window contentView];
+        if (contentView) {
+            localPoint = [contentView convertPoint:windowPoint fromView:nil];
+            NSRect bounds = [contentView bounds];
+            isInWindow = NSPointInRect(localPoint, bounds) ? 1 : 0;
+        }
+    }
+
+    graphicsEvent.mouse.x = (F32) localPoint.x;
+    graphicsEvent.mouse.y = (F32) localPoint.y;
     graphicsEvent.mouse.deltaX = (F32) [event deltaX];
     graphicsEvent.mouse.deltaY = (F32) [event deltaY];
     graphicsEvent.mouse.modifiers = os_translate_modifier_flags([event modifierFlags]);
     graphicsEvent.mouse.button = os_translate_mouse_button_from_event(event);
     graphicsEvent.mouse.clickCount = (U32) [event clickCount];
+
+    graphicsEvent.mouse.globalX = (F32) screenPoint.x;
+    graphicsEvent.mouse.globalY = (F32) screenPoint.y;
+    graphicsEvent.mouse.isInWindow = isInWindow;
 
     if (type == OS_GraphicsEventType_MouseScroll) {
         graphicsEvent.mouse.deltaX = (F32) [event scrollingDeltaX];
