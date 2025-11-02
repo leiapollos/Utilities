@@ -8,6 +8,7 @@
 #include "app_interface.hpp"
 
 #include <dlfcn.h>
+#include <sys/stat.h>
 
 #define APP_MODULE_SOURCE_PATH "hot/utilities_app.dylib"
 
@@ -25,7 +26,28 @@ typedef struct HostState {
     void* permanentStorage;
     U64 permanentStorageSize;
     B32 shouldQuit;
+    U64 moduleTimestamp;
 } HostState;
+
+static U64 host_get_file_timestamp(const char* path) {
+    struct stat fileStat;
+    if (stat(path, &fileStat) != 0) {
+        return 0;
+    }
+
+#if defined(PLATFORM_OS_MACOS)
+    U64 seconds = (U64) fileStat.st_mtimespec.tv_sec;
+    U64 nanos = (U64) fileStat.st_mtimespec.tv_nsec;
+#elif defined(PLATFORM_OS_LINUX)
+    U64 seconds = (U64) fileStat.st_mtim.tv_sec;
+    U64 nanos = (U64) fileStat.st_mtim.tv_nsec;
+#else
+    U64 seconds = (U64) fileStat.st_mtime;
+    U64 nanos = 0;
+#endif
+
+    return seconds * 1000000000ull + nanos;
+}
 
 static B32 host_load_module(HostState* state) {
     if (!state) {
@@ -69,6 +91,7 @@ static B32 host_load_module(HostState* state) {
     state->module.handle = handle;
     state->module.exports = exports;
     state->module.isValid = 1;
+    state->moduleTimestamp = host_get_file_timestamp(sourcePath);
 
     state->memory.isInitialized = 0;
     state->memory.permanentStorage = state->permanentStorage;
@@ -140,6 +163,12 @@ int host_main_loop(int argc, char** argv) {
     U64 lastTickTime = OS_get_time_microseconds();
 
     while (!state.shouldQuit) {
+        U64 currentTimestamp = host_get_file_timestamp(APP_MODULE_SOURCE_PATH);
+        if (currentTimestamp > 0 && currentTimestamp > state.moduleTimestamp) {
+            LOG_INFO("host", "Detected module change ({} -> {}), reloading", state.moduleTimestamp, currentTimestamp);
+            state.moduleTimestamp = currentTimestamp;
+        }
+
         if (state.module.isValid && state.module.exports.tick) {
             U64 now = OS_get_time_microseconds();
             U64 deltaMicro = now - lastTickTime;
