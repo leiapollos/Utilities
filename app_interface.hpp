@@ -4,27 +4,33 @@
 
 #pragma once
 
-#include "nstl/base/base_typedefs.hpp"
+#include "nstl/base/base_include.hpp"
 
 #define APP_INTERFACE_VERSION 2u
 
-typedef struct AppMemory {
+struct AppMemory {
     B32 isInitialized;
     void* permanentStorage;
     U64 permanentStorageSize;
     void* transientStorage;
     U64 transientStorageSize;
-} AppMemory;
+    Arena* programArena;
+};
 
-typedef struct AppModuleExports {
+struct AppRuntime {
+    AppMemory* memory;
+};
+
+struct AppModuleExports {
     U32 interfaceVersion;
     U64 requiredPermanentMemory;
     U64 requiredTransientMemory;
-    B32 (*initialize)(AppMemory* memory);
-    void (*reload)(AppMemory* memory);
-    void (*tick)(AppMemory* memory, F32 deltaSeconds);
-    void (*shutdown)(AppMemory* memory);
-} AppModuleExports;
+    U64 requiredProgramArenaSize;
+    B32 (*initialize)(AppRuntime* runtime);
+    void (*reload)(AppRuntime* runtime);
+    void (*tick)(AppRuntime* runtime, F32 deltaSeconds);
+    void (*shutdown)(AppRuntime* runtime);
+};
 
 #if defined(__clang__) || defined(__GNUC__)
 #define APP_MODULE_EXPORT extern "C" __attribute__((visibility("default")))

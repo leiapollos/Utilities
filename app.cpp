@@ -12,11 +12,12 @@ static U64 app_total_permanent_size(void) {
     return APP_PERMANENT_STORAGE_SIZE;
 }
 
-static B32 app_initialize(AppMemory* memory) {
-    if (!memory || !memory->permanentStorage) {
+static B32 app_initialize(AppRuntime* runtime) {
+    if (!runtime || !runtime->memory || !runtime->memory->permanentStorage) {
         return 0;
     }
 
+    AppMemory* memory = runtime->memory;
     if (!memory->isInitialized) {
         MEMSET(memory->permanentStorage, 0, memory->permanentStorageSize);
         memory->isInitialized = 1;
@@ -26,18 +27,18 @@ static B32 app_initialize(AppMemory* memory) {
     return 1;
 }
 
-static void app_tick(AppMemory* memory, F32 deltaSeconds) {
-    (void)memory;
-    (void)deltaSeconds;
-}
-
-static void app_reload(AppMemory* memory) {
-    (void)memory;
+static void app_reload(AppRuntime* runtime) {
+    (void)runtime;
     LOG_INFO("app", "App reloaded");
 }
 
-static void app_shutdown(AppMemory* memory) {
-    (void)memory;
+static void app_tick(AppRuntime* runtime, F32 deltaSeconds) {
+    (void)runtime;
+    (void)deltaSeconds;
+}
+
+static void app_shutdown(AppRuntime* runtime) {
+    (void)runtime;
     LOG_INFO("app", "App shutdown");
 }
 
@@ -50,6 +51,7 @@ APP_MODULE_EXPORT B32 app_get_entry_points(AppModuleExports* outExports) {
     outExports->interfaceVersion = APP_INTERFACE_VERSION;
     outExports->requiredPermanentMemory = app_total_permanent_size();
     outExports->requiredTransientMemory = 0;
+    outExports->requiredProgramArenaSize = 0;
     outExports->initialize = app_initialize;
     outExports->reload = app_reload;
     outExports->tick = app_tick;

@@ -19,22 +19,30 @@
 
 typedef B32 (*AppGetEntryPointsProc)(AppModuleExports* outExports);
 
-typedef struct LoadedModule {
+struct LoadedModule {
     void* handle;
     AppModuleExports exports;
     B32 isValid;
-} LoadedModule;
+};
 
-typedef struct HostState {
+struct ProgramMemory {
+    void* permanentBase;
+    U64 permanentSize;
+    void* transientBase;
+    U64 transientSize;
+};
+
+struct HostState {
     LoadedModule module;
     AppMemory memory;
-    void* permanentStorage;
-    U64 permanentStorageSize;
+    ProgramMemory storage;
+    Arena* programArena;
+    AppRuntime runtime;
     B32 shouldQuit;
     U64 moduleTimestamp;
     U64 moduleGeneration;
     char currentModulePath[HOT_MODULE_PATH_MAX];
-} HostState;
+};
 
 static U64 host_get_file_timestamp(const char* path) {
     struct stat fileStat;
@@ -54,6 +62,76 @@ static U64 host_get_file_timestamp(const char* path) {
 #endif
 
     return seconds * 1000000000ull + nanos;
+}
+
+static void host_release_memory(HostState* state) {
+    if (state->programArena) {
+        arena_release(state->programArena);
+        state->programArena = 0;
+    }
+
+    if (state->storage.permanentBase) {
+        OS_release(state->storage.permanentBase, state->storage.permanentSize);
+        state->storage.permanentBase = 0;
+    }
+
+    if (state->storage.transientBase) {
+        OS_release(state->storage.transientBase, state->storage.transientSize);
+        state->storage.transientBase = 0;
+    }
+}
+
+static B32 host_allocate_memory(HostState* state) {
+    state->storage.permanentSize = MB(64);
+    state->storage.transientSize = MB(16);
+
+    state->storage.permanentBase = OS_reserve(state->storage.permanentSize);
+    if (!state->storage.permanentBase) {
+        LOG_ERROR("host", "Failed to reserve permanent storage ({} bytes)", state->storage.permanentSize);
+        return 0;
+    }
+    if (!OS_commit(state->storage.permanentBase, state->storage.permanentSize)) {
+        LOG_ERROR("host", "Failed to commit permanent storage");
+        host_release_memory(state);
+        return 0;
+    }
+
+    state->storage.transientBase = OS_reserve(state->storage.transientSize);
+    if (!state->storage.transientBase) {
+        LOG_ERROR("host", "Failed to reserve transient storage ({} bytes)", state->storage.transientSize);
+        host_release_memory(state);
+        return 0;
+    }
+    if (!OS_commit(state->storage.transientBase, state->storage.transientSize)) {
+        LOG_ERROR("host", "Failed to commit transient storage");
+        host_release_memory(state);
+        return 0;
+    }
+
+    MEMSET(state->storage.permanentBase, 0, state->storage.permanentSize);
+    MEMSET(state->storage.transientBase, 0, state->storage.transientSize);
+
+    state->programArena = arena_alloc(
+        .arenaSize = MB(256),
+        .committedSize = MB(256),
+        .flags = ArenaFlags_DoChain
+    );
+    if (!state->programArena) {
+        LOG_ERROR("host", "Failed to allocate program arena ({} bytes)", MB(256));
+        host_release_memory(state);
+        return 0;
+    }
+
+    state->memory.isInitialized = 0;
+    state->memory.permanentStorage = state->storage.permanentBase;
+    state->memory.permanentStorageSize = state->storage.permanentSize;
+    state->memory.transientStorage = state->storage.transientBase;
+    state->memory.transientStorageSize = state->storage.transientSize;
+    state->memory.programArena = state->programArena;
+
+    state->runtime.memory = &state->memory;
+
+    return 1;
 }
 
 static B32 host_copy_file(const char* srcPath, const char* dstPath) {
@@ -170,8 +248,20 @@ static B32 host_load_module(HostState* state, B32 isReload) {
         return 0;
     }
 
-    if (exports.requiredPermanentMemory > state->permanentStorageSize) {
-        LOG_ERROR("host", "Module permanent memory requirement too large ({} > {})", exports.requiredPermanentMemory, state->permanentStorageSize);
+    if (exports.requiredPermanentMemory > state->memory.permanentStorageSize) {
+        LOG_ERROR("host", "Module permanent memory requirement too large ({} > {})", exports.requiredPermanentMemory, state->memory.permanentStorageSize);
+        dlclose(handle);
+        return 0;
+    }
+
+    if (exports.requiredTransientMemory > state->memory.transientStorageSize) {
+        LOG_ERROR("host", "Module transient memory requirement too large ({} > {})", exports.requiredTransientMemory, state->memory.transientStorageSize);
+        dlclose(handle);
+        return 0;
+    }
+
+    if (exports.requiredProgramArenaSize > MB(256)) {
+        LOG_ERROR("host", "Module program arena requirement too large ({} > {})", exports.requiredProgramArenaSize, MB(256));
         dlclose(handle);
         return 0;
     }
@@ -188,15 +278,9 @@ static B32 host_load_module(HostState* state, B32 isReload) {
     MEMMOVE(state->currentModulePath, loadPath, pathLen);
     state->currentModulePath[pathLen] = '\0';
 
-    state->memory.isInitialized = 0;
-    state->memory.permanentStorage = state->permanentStorage;
-    state->memory.permanentStorageSize = state->permanentStorageSize;
-    state->memory.transientStorage = 0;
-    state->memory.transientStorageSize = 0;
-
     if (!isReload) {
         if (state->module.exports.initialize) {
-            B32 initOk = state->module.exports.initialize(&state->memory);
+            B32 initOk = state->module.exports.initialize(&state->runtime);
             if (!initOk) {
                 LOG_ERROR("host", "Module initialize() reported failure");
                 state->module.isValid = 0;
@@ -206,7 +290,7 @@ static B32 host_load_module(HostState* state, B32 isReload) {
         }
     } else {
         if (state->module.exports.reload) {
-            state->module.exports.reload(&state->memory);
+            state->module.exports.reload(&state->runtime);
         }
     }
 
@@ -220,7 +304,7 @@ static void host_unload_module(HostState* state, B32 callShutdown, B32 retainHan
     }
 
     if (callShutdown && state->module.isValid && state->module.exports.shutdown) {
-        state->module.exports.shutdown(&state->memory);
+        state->module.exports.shutdown(&state->runtime);
     }
 
     if (retainHandle) {
@@ -262,29 +346,19 @@ int host_main_loop(int argc, char** argv) {
     set_log_level(LogLevel_Info);
 
     HostState state = {};
-    state.permanentStorageSize = MB(64);
-    state.permanentStorage = OS_reserve(state.permanentStorageSize);
-    if (!state.permanentStorage) {
-        LOG_ERROR("host", "Failed to reserve permanent storage");
+    if (!host_allocate_memory(&state)) {
+        LOG_ERROR("host", "Failed to allocate app memory");
         thread_context_release();
         return 1;
     }
-    if (!OS_commit(state.permanentStorage, state.permanentStorageSize)) {
-        LOG_ERROR("host", "Failed to commit permanent storage");
-        OS_release(state.permanentStorage, state.permanentStorageSize);
-        thread_context_release();
-        return 1;
-    }
-    MEMSET(state.permanentStorage, 0, state.permanentStorageSize);
+    LOG_INFO("host", "Allocated program memory (perm={} bytes, trans={} bytes)",
+             state.storage.permanentSize, state.storage.transientSize);
 
     state.moduleGeneration = 0;
     state.currentModulePath[0] = '\0';
 
     if (!host_load_module(&state, 0)) {
         LOG_ERROR("host", "Initial module load failed");
-        OS_release(state.permanentStorage, state.permanentStorageSize);
-        thread_context_release();
-        return 1;
     }
 
     LOG_INFO("host", "Entering main loop");
@@ -299,7 +373,7 @@ int host_main_loop(int argc, char** argv) {
             U64 deltaMicro = now - lastTickTime;
             lastTickTime = now;
             F32 deltaSeconds = (F32)((F64) deltaMicro / (F64)MILLION(1ULL));
-            state.module.exports.tick(&state.memory, deltaSeconds);
+            state.module.exports.tick(&state.runtime, deltaSeconds);
         } else {
             OS_sleep_milliseconds(100);
         }
@@ -308,7 +382,7 @@ int host_main_loop(int argc, char** argv) {
     }
 
     host_unload_module(&state, 1, 0);
-    OS_release(state.permanentStorage, state.permanentStorageSize);
+    host_release_memory(&state);
 
     thread_context_release();
     return 0;
