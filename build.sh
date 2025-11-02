@@ -2,7 +2,8 @@
 
 # --- Configuration ---
 BUILD_DIR="build"
-FLAVOR=${1:-release} # Default to "release" if no argument is given
+FLAVOR=${1:-release}
+REQUESTED_TARGET=${2:-all}
 CMAKE_ARGS=()
 
 # --- Build Flavors ---
@@ -54,9 +55,30 @@ if [ ! -d "${BUILD_DIR}" ]; then
   exit 2
 fi
 
-echo "==> Building..."
+case "${REQUESTED_TARGET}" in
+  all)
+    BUILD_CMD=(cmake --build "${BUILD_DIR}" -- -j$(sysctl -n hw.ncpu 2>/dev/null || echo 4))
+    ;;
+  host)
+    BUILD_CMD=(cmake --build "${BUILD_DIR}" --target utilities_host -- -j$(sysctl -n hw.ncpu 2>/dev/null || echo 4))
+    ;;
+  module)
+    BUILD_CMD=(cmake --build "${BUILD_DIR}" --target utilities_app -- -j$(sysctl -n hw.ncpu 2>/dev/null || echo 4))
+    ;;
+  *)
+    echo "Error: Unknown build target '${REQUESTED_TARGET}'" >&2
+    echo "Available targets: all, host, module" >&2
+    exit 3
+    ;;
+esac
+
+echo "==> Building (${REQUESTED_TARGET})..."
 BUILD_START=$(date +%s.%N)
-cmake --build "${BUILD_DIR}" -- -j$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
+"${BUILD_CMD[@]}"
+BUILD_STATUS=$?
+if [ ${BUILD_STATUS} -ne 0 ]; then
+  exit ${BUILD_STATUS}
+fi
 BUILD_END=$(date +%s.%N)
 BUILD_TIME=$(awk "BEGIN {printf \"%.2f\", $BUILD_END - $BUILD_START}")
 echo "==> Compilation time: ${BUILD_TIME}s"

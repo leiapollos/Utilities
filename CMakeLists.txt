@@ -18,11 +18,34 @@ mark_as_advanced(
     CMAKE_EXE_LINKER_FLAGS
 )
 
+set(SRC_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
+
+set(HOST_SOURCES
+    ${SRC_ROOT}/main.mm
+)
+
+add_executable(utilities_host ${HOST_SOURCES})
+target_include_directories(utilities_host PRIVATE ${SRC_ROOT})
+
 if(APPLE)
-    add_executable(utils_app main.mm)
-    target_link_libraries(utils_app PRIVATE "-framework Cocoa" "-framework QuartzCore" "-framework Metal")
-else()
-    add_executable(utils_app main.cpp)
+    target_link_libraries(utilities_host PRIVATE "-framework Cocoa" "-framework QuartzCore" "-framework Metal")
 endif()
 
-install(TARGETS utils_app DESTINATION bin)
+set_target_properties(utilities_host PROPERTIES OUTPUT_NAME "utilities_host")
+
+add_library(utilities_app MODULE ${SRC_ROOT}/app.cpp)
+target_include_directories(utilities_app PRIVATE ${SRC_ROOT})
+
+if(APPLE)
+    set_target_properties(utilities_app PROPERTIES SUFFIX ".dylib")
+    target_link_options(utilities_app PRIVATE "-undefined" "dynamic_lookup")
+endif()
+
+set_target_properties(utilities_app PROPERTIES
+    OUTPUT_NAME "utilities_app"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/hot"
+    PREFIX ""
+)
+
+install(TARGETS utilities_host DESTINATION bin)
+install(TARGETS utilities_app DESTINATION bin)
