@@ -31,6 +31,11 @@ static void app_tick(AppMemory* memory, F32 deltaSeconds) {
     (void)deltaSeconds;
 }
 
+static void app_reload(AppMemory* memory) {
+    (void)memory;
+    LOG_INFO("app", "App reloaded");
+}
+
 static void app_shutdown(AppMemory* memory) {
     (void)memory;
     LOG_INFO("app", "App shutdown");
@@ -46,8 +51,8 @@ APP_MODULE_EXPORT B32 app_get_entry_points(AppModuleExports* outExports) {
     outExports->requiredPermanentMemory = app_total_permanent_size();
     outExports->requiredTransientMemory = 0;
     outExports->initialize = app_initialize;
+    outExports->reload = app_reload;
     outExports->tick = app_tick;
     outExports->shutdown = app_shutdown;
     return 1;
 }
-

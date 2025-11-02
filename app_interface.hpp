@@ -6,7 +6,7 @@
 
 #include "nstl/base/base_typedefs.hpp"
 
-#define APP_INTERFACE_VERSION 1u
+#define APP_INTERFACE_VERSION 2u
 
 typedef struct AppMemory {
     B32 isInitialized;
@@ -21,6 +21,7 @@ typedef struct AppModuleExports {
     U64 requiredPermanentMemory;
     U64 requiredTransientMemory;
     B32 (*initialize)(AppMemory* memory);
+    void (*reload)(AppMemory* memory);
     void (*tick)(AppMemory* memory, F32 deltaSeconds);
     void (*shutdown)(AppMemory* memory);
 } AppModuleExports;
