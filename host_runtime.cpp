@@ -32,13 +32,23 @@ struct ProgramMemory {
     U64 transientSize;
 };
 
+#define HOST_WINDOW_TITLE_MAX 128
+
 struct HostState {
     LoadedModule module;
     AppMemory memory;
     ProgramMemory storage;
     Arena* programArena;
+    AppHostContext hostContext;
+    AppPlatform platformAPI;
+    AppFrameInput frameInput;
+    AppWindowState windowState;
+    AppWindowCommand pendingWindowCommand;
     AppRuntime runtime;
-    B32 shouldQuit;
+    OS_WindowHandle window;
+    char windowTitle[HOST_WINDOW_TITLE_MAX];
+    OS_WindowDesc windowDesc;
+    B32 graphicsInitialized;
     U64 moduleTimestamp;
     U64 moduleGeneration;
     char currentModulePath[HOT_MODULE_PATH_MAX];
@@ -62,6 +72,241 @@ static U64 host_get_file_timestamp(const char* path) {
 #endif
 
     return seconds * 1000000000ull + nanos;
+}
+
+static B32 host_ensure_graphics_initialized(HostState* state) {
+    if (!state) {
+        return 0;
+    }
+
+    if (state->graphicsInitialized) {
+        return 1;
+    }
+
+    if (!OS_graphics_init()) {
+        LOG_ERROR("host", "Failed to initialize graphics subsystem");
+        return 0;
+    }
+
+    state->graphicsInitialized = 1;
+    return 1;
+}
+
+static void host_destroy_window(HostState* state) {
+    if (!state) {
+        return;
+    }
+
+    if (state->window.handle) {
+        OS_window_destroy(state->window);
+        state->window.handle = 0;
+    }
+
+    state->windowState.isOpen = 0;
+    state->windowState.width = 0;
+    state->windowState.height = 0;
+    state->hostContext.windowIsOpen = 0;
+}
+
+static void host_reset_window_command(AppWindowCommand* command) {
+    if (!command) {
+        return;
+    }
+    MEMSET(command, 0, sizeof(AppWindowCommand));
+}
+
+static void host_platform_request_quit_(void* userData) {
+    if (!userData) {
+        return;
+    }
+
+    HostState* state = (HostState*) userData;
+    state->hostContext.shouldQuit = 1;
+}
+
+static void host_platform_issue_window_command_(void* userData, const AppWindowCommand* command) {
+    if (!userData || !command) {
+        return;
+    }
+
+    HostState* state = (HostState*) userData;
+    AppWindowCommand* pending = &state->pendingWindowCommand;
+
+    if (command->requestOpen) {
+        pending->requestOpen = 1;
+    }
+    if (command->requestClose) {
+        pending->requestClose = 1;
+    }
+    if (command->requestFocus) {
+        pending->requestFocus = 1;
+    }
+    if (command->requestSize) {
+        pending->requestSize = 1;
+        pending->desc.width = command->desc.width;
+        pending->desc.height = command->desc.height;
+    }
+    if (command->requestTitle) {
+        pending->requestTitle = 1;
+        pending->desc.title = command->desc.title;
+    }
+}
+
+static void host_apply_window_command(HostState* state, AppWindowCommand* command) {
+    if (!state || !command) {
+        return;
+    }
+
+    if (command->requestSize) {
+        state->windowDesc.width = command->desc.width;
+        state->windowDesc.height = command->desc.height;
+        state->windowState.width = command->desc.width;
+        state->windowState.height = command->desc.height;
+    }
+
+    if (command->requestTitle) {
+        if (command->desc.title) {
+            U64 length = C_STR_LEN(command->desc.title);
+            if (length >= HOST_WINDOW_TITLE_MAX) {
+                length = HOST_WINDOW_TITLE_MAX - 1;
+            }
+            MEMMOVE(state->windowTitle, command->desc.title, length);
+            state->windowTitle[length] = '\0';
+        } else {
+            state->windowTitle[0] = '\0';
+        }
+        state->windowDesc.title = state->windowTitle;
+    }
+
+    if (command->requestClose) {
+        host_destroy_window(state);
+    }
+
+    if (command->requestOpen) {
+        if (!state->windowState.isOpen) {
+            if (!host_ensure_graphics_initialized(state)) {
+                LOG_ERROR("host", "Unable to open window: graphics initialization failed");
+            } else {
+                OS_WindowDesc desc = state->windowDesc;
+                if (!desc.title || desc.title[0] == '\0') {
+                    desc.title = "Utilities";
+                }
+                if (desc.width == 0u) {
+                    desc.width = 1280u;
+                }
+                if (desc.height == 0u) {
+                    desc.height = 720u;
+                }
+
+                state->window = OS_window_create(desc);
+                if (!state->window.handle) {
+                    LOG_ERROR("host", "Failed to create window {}x{}", desc.width, desc.height);
+                } else {
+                    if (desc.title != state->windowTitle) {
+                        U64 length = C_STR_LEN(desc.title);
+                        if (length >= HOST_WINDOW_TITLE_MAX) {
+                            length = HOST_WINDOW_TITLE_MAX - 1;
+                        }
+                        MEMMOVE(state->windowTitle, desc.title, length);
+                        state->windowTitle[length] = '\0';
+                    }
+                    state->windowDesc.title = state->windowTitle;
+                    state->windowDesc.width = desc.width;
+                    state->windowDesc.height = desc.height;
+                    state->windowState.isOpen = 1;
+                    state->windowState.width = desc.width;
+                    state->windowState.height = desc.height;
+                    state->hostContext.windowIsOpen = 1;
+                    LOG_INFO("host", "Window opened ({}x{})", desc.width, desc.height);
+                }
+            }
+        }
+    }
+
+    if (!state->windowState.isOpen) {
+        state->hostContext.windowIsOpen = 0;
+    }
+
+    host_reset_window_command(command);
+}
+
+static void host_flush_window_command(HostState* state) {
+    if (!state) {
+        return;
+    }
+
+    AppWindowCommand* command = &state->pendingWindowCommand;
+    if (!command->requestOpen && !command->requestClose &&
+        !command->requestSize && !command->requestTitle && !command->requestFocus) {
+        return;
+    }
+
+    host_apply_window_command(state, command);
+}
+
+static void host_update_frame_input(HostState* state) {
+    if (!state) {
+        return;
+    }
+
+    MEMSET(&state->frameInput, 0, sizeof(state->frameInput));
+
+    if (!state->graphicsInitialized) {
+        state->windowState.isOpen = 0;
+        state->hostContext.windowIsOpen = 0;
+        return;
+    }
+
+    OS_graphics_pump_events();
+
+    OS_GraphicsEvent events[32];
+    U32 eventCount = OS_graphics_poll_events(events, ARRAY_COUNT(events));
+    for (U32 index = 0; index < eventCount; ++index) {
+        OS_GraphicsEvent* evt = &events[index];
+        if (state->window.handle && evt->window.handle != state->window.handle) {
+            continue;
+        }
+
+        switch (evt->type) {
+            case OS_GraphicsEventType_WindowShown: {
+                state->windowState.isOpen = 1;
+                state->hostContext.windowIsOpen = 1;
+                state->frameInput.windowResized = 1;
+                state->frameInput.newWidth = evt->windowEvent.width;
+                state->frameInput.newHeight = evt->windowEvent.height;
+            } break;
+
+            case OS_GraphicsEventType_WindowClosed:
+            case OS_GraphicsEventType_WindowDestroyed: {
+                state->frameInput.windowCloseRequested = 1;
+                host_destroy_window(state);
+            } break;
+
+            case OS_GraphicsEventType_MouseMove: {
+                state->frameInput.mouseMoved = 1;
+                state->frameInput.mouseX = evt->mouse.x;
+                state->frameInput.mouseY = evt->mouse.y;
+            } break;
+
+            default: {
+            } break;
+        }
+    }
+
+    if (state->window.handle) {
+        if (!OS_window_is_open(state->window)) {
+            host_destroy_window(state);
+        } else {
+            state->windowState.isOpen = 1;
+            state->hostContext.windowIsOpen = 1;
+            if (state->windowDesc.width != 0u) {
+                state->windowState.width = state->windowDesc.width;
+            }
+            if (state->windowDesc.height != 0u) {
+                state->windowState.height = state->windowDesc.height;
+            }
+        }
+    }
 }
 
 static void host_release_memory(HostState* state) {
@@ -128,8 +373,36 @@ static B32 host_allocate_memory(HostState* state) {
     state->memory.transientStorage = state->storage.transientBase;
     state->memory.transientStorageSize = state->storage.transientSize;
     state->memory.programArena = state->programArena;
+    state->memory.platform = &state->platformAPI;
+    state->memory.hostContext = &state->hostContext;
+    state->memory.frameInput = &state->frameInput;
+    state->memory.windowState = &state->windowState;
+
+    MEMSET(&state->hostContext, 0, sizeof(state->hostContext));
+    state->hostContext.userData = state;
+    OS_SystemInfo* sysInfo = OS_get_system_info();
+    state->hostContext.logicalCoreCount = sysInfo ? sysInfo->logicalCores : 1u;
+
+    state->platformAPI.userData = state;
+    state->platformAPI.issue_window_command = host_platform_issue_window_command_;
+    state->platformAPI.request_quit = host_platform_request_quit_;
+
+    MEMSET(&state->frameInput, 0, sizeof(state->frameInput));
+    MEMSET(&state->windowState, 0, sizeof(state->windowState));
+    host_reset_window_command(&state->pendingWindowCommand);
+
+    state->window.handle = 0;
+    MEMSET(state->windowTitle, 0, sizeof(state->windowTitle));
+    state->windowDesc.title = state->windowTitle;
+    state->windowDesc.width = 0;
+    state->windowDesc.height = 0;
+    state->graphicsInitialized = 0;
 
     state->runtime.memory = &state->memory;
+    state->runtime.platform = &state->platformAPI;
+    state->runtime.host = &state->hostContext;
+    state->runtime.input = &state->frameInput;
+    state->runtime.window = &state->windowState;
 
     return 1;
 }
@@ -361,12 +634,16 @@ int host_main_loop(int argc, char** argv) {
         LOG_ERROR("host", "Initial module load failed");
     }
 
+    host_flush_window_command(&state);
+
     LOG_INFO("host", "Entering main loop");
 
     U64 lastTickTime = OS_get_time_microseconds();
 
-    while (!state.shouldQuit) {
+    while (!state.hostContext.shouldQuit) {
         host_try_reload_module(&state);
+        host_flush_window_command(&state);
+        host_update_frame_input(&state);
 
         if (state.module.isValid && state.module.exports.tick) {
             U64 now = OS_get_time_microseconds();
@@ -378,10 +655,19 @@ int host_main_loop(int argc, char** argv) {
             OS_sleep_milliseconds(100);
         }
 
+        host_flush_window_command(&state);
         OS_sleep_milliseconds(16);
     }
 
     host_unload_module(&state, 1, 0);
+    host_flush_window_command(&state);
+    host_destroy_window(&state);
+
+    if (state.graphicsInitialized) {
+        OS_graphics_shutdown();
+        state.graphicsInitialized = 0;
+    }
+
     host_release_memory(&state);
 
     thread_context_release();

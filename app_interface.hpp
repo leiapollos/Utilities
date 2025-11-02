@@ -8,6 +8,51 @@
 
 #define APP_INTERFACE_VERSION 2u
 
+struct AppHostContext {
+    B32 shouldQuit;
+    U32 reloadCount;
+    B32 windowIsOpen;
+    void* userData;
+    U32 logicalCoreCount;
+};
+
+struct AppFrameInput {
+    B32 windowCloseRequested;
+    B32 windowResized;
+    U32 newWidth;
+    U32 newHeight;
+    B32 mouseMoved;
+    F32 mouseX;
+    F32 mouseY;
+};
+
+struct AppWindowDesc {
+    U32 width;
+    U32 height;
+    const char* title;
+};
+
+struct AppWindowState {
+    B32 isOpen;
+    U32 width;
+    U32 height;
+};
+
+struct AppWindowCommand {
+    B32 requestOpen;
+    B32 requestClose;
+    B32 requestFocus;
+    B32 requestSize;
+    B32 requestTitle;
+    AppWindowDesc desc;
+};
+
+struct AppPlatform {
+    void* userData;
+    void (*issue_window_command)(void* userData, const AppWindowCommand* command);
+    void (*request_quit)(void* userData);
+};
+
 struct AppMemory {
     B32 isInitialized;
     void* permanentStorage;
@@ -15,10 +60,18 @@ struct AppMemory {
     void* transientStorage;
     U64 transientStorageSize;
     Arena* programArena;
+    AppPlatform* platform;
+    AppHostContext* hostContext;
+    const AppFrameInput* frameInput;
+    AppWindowState* windowState;
 };
 
 struct AppRuntime {
     AppMemory* memory;
+    AppPlatform* platform;
+    AppHostContext* host;
+    const AppFrameInput* input;
+    AppWindowState* window;
 };
 
 struct AppModuleExports {
