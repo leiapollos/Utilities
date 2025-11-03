@@ -185,9 +185,9 @@ static B32 vulkan_create_instance(Arena* arena, RendererVulkan* vulkan) {
     const char* DESIRED_EXTENSIONS[] = {
 #if defined(PLATFORM_OS_MACOS)
         "VK_KHR_portability_enumeration",
+        "VK_EXT_metal_surface",
 #endif
         "VK_KHR_surface",
-        "VK_MVK_macos_surface",
         "VK_EXT_debug_utils",
     };
     const U32 DESIRED_EXTENSION_COUNT = sizeof(DESIRED_EXTENSIONS) / sizeof(DESIRED_EXTENSIONS[0]);
@@ -587,27 +587,26 @@ static B32 vulkan_create_surface(OS_WindowHandle window, RendererVulkan* vulkan)
     }
 
     OS_WindowSurfaceInfo surfaceInfo = OS_window_get_surface_info(window);
-    void* surfacePointer = surfaceInfo.metalLayerPtr ? surfaceInfo.metalLayerPtr : surfaceInfo.viewPtr;
-    if (!surfacePointer) {
-        LOG_ERROR(VULKAN_LOG_DOMAIN, "Window does not expose a Metal layer/view for surface creation");
+    if (!surfaceInfo.metalLayerPtr) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Window does not expose a Metal layer for surface creation");
         return 0;
     }
 
 #if defined(PLATFORM_OS_MACOS)
-    PFN_vkCreateMacOSSurfaceMVK createSurface =
-        (PFN_vkCreateMacOSSurfaceMVK) vkGetInstanceProcAddr(vulkan->instance, "vkCreateMacOSSurfaceMVK");
+    PFN_vkCreateMetalSurfaceEXT createSurface =
+        (PFN_vkCreateMetalSurfaceEXT) vkGetInstanceProcAddr(vulkan->instance, "vkCreateMetalSurfaceEXT");
 
     if (!createSurface) {
-        LOG_ERROR(VULKAN_LOG_DOMAIN, "vkCreateMacOSSurfaceMVK is not available");
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "vkCreateMetalSurfaceEXT is not available");
         return 0;
     }
 
-    VkMacOSSurfaceCreateInfoMVK createInfo = {};
-    createInfo.sType = VK_STRUCTURE_TYPE_MACOS_SURFACE_CREATE_INFO_MVK;
-    createInfo.pView = surfacePointer;
+    VkMetalSurfaceCreateInfoEXT createInfo = {};
+    createInfo.sType = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT;
+    createInfo.pLayer = (const CAMetalLayer*) surfaceInfo.metalLayerPtr;
 
     VK_CHECK(createSurface(vulkan->instance, &createInfo, 0, &vulkan->surface));
-    LOG_DEBUG(VULKAN_LOG_DOMAIN, "Created macOS surface");
+    LOG_DEBUG(VULKAN_LOG_DOMAIN, "Created Metal surface");
     return 1;
 #else
     (void) surfaceInfo;
@@ -808,7 +807,7 @@ static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle windo
     createInfo.imageColorSpace = surfaceFormat.colorSpace;
     createInfo.imageExtent = extent;
     createInfo.imageArrayLayers = 1;
-    createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     createInfo.queueFamilyIndexCount = 0;
     createInfo.pQueueFamilyIndices = 0;
@@ -1110,6 +1109,8 @@ void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, 
     } else if (presentResult != VK_SUCCESS) {
         LOG_ERROR(VULKAN_LOG_DOMAIN, "vkQueuePresentKHR failed: {}", presentResult);
     }
+
+    VK_CHECK(vkQueueWaitIdle(vulkan->graphicsQueue));
 
     vulkan->currentFrameIndex = (vulkan->currentFrameIndex + 1u) % VULKAN_FRAME_OVERLAP;
 }
