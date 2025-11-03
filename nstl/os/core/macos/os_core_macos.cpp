@@ -11,6 +11,64 @@ OS_SystemInfo* OS_get_system_info() {
 
 
 // ////////////////////////
+// Executable Path
+
+StringU8 OS_get_executable_directory(Arena* arena) {
+    if (!arena) {
+        return STR8_NIL;
+    }
+
+    Arena* excludes[] = {arena};
+    Temp scratch = get_scratch(excludes, ARRAY_COUNT(excludes));
+    if (!scratch.arena) {
+        return STR8_NIL;
+    }
+
+    DEFER_REF(temp_end(&scratch));
+
+    U32 bufferCapacity = PATH_MAX;
+    char* pathBuffer = 0;
+
+    for (;;) {
+        arena_pop_to(scratch.arena, scratch.pos);
+        pathBuffer = ARENA_PUSH_ARRAY(scratch.arena, char, (U64) bufferCapacity);
+
+        U32 apiCapacity = bufferCapacity;
+        int status = _NSGetExecutablePath(pathBuffer, &apiCapacity);
+        if (status == 0) {
+            bufferCapacity = apiCapacity;
+            break;
+        }
+
+        if (status != 0) {
+            if (apiCapacity <= bufferCapacity) {
+                return STR8_NIL;
+            }
+            bufferCapacity = apiCapacity;
+        }
+    }
+
+    U64 pathLength = (U64) C_STR_LEN(pathBuffer);
+    S64 slashIndex = (S64) pathLength - 1;
+    while (slashIndex >= 0 && pathBuffer[slashIndex] != '/') {
+        slashIndex -= 1;
+    }
+
+    U64 directoryLength = 0;
+    if (slashIndex >= 0) {
+        pathBuffer[slashIndex] = '\0';
+        directoryLength = (U64) slashIndex;
+    } else {
+        pathBuffer[0] = '\0';
+        directoryLength = 0;
+    }
+
+    StringU8 directory = str8((U8*) pathBuffer, directoryLength);
+    return str8_cpy(arena, directory);
+}
+
+
+// ////////////////////////
 // Time
 
 U64 OS_get_time_microseconds() {
@@ -495,6 +553,104 @@ bool OS_terminal_supports_color() {
     }
 
     return true;
+}
+
+
+// ////////////////////////
+// File Metadata / Copy
+
+OS_FileInfo OS_get_file_info(const char* path) {
+    OS_FileInfo info = {};
+    if (!path) {
+        return info;
+    }
+
+    struct stat fileStat;
+    if (stat(path, &fileStat) != 0) {
+        return info;
+    }
+
+    info.exists = 1;
+    info.size = (U64) fileStat.st_size;
+    info.lastWriteTimestampNs = ((U64) fileStat.st_mtimespec.tv_sec * BILLION(1ULL)) + (U64) fileStat.st_mtimespec.tv_nsec;
+    return info;
+}
+
+B32 OS_file_copy_contents(const char* srcPath, const char* dstPath) {
+    if (!srcPath || !dstPath) {
+        return 0;
+    }
+
+    OS_FileInfo sourceInfo = OS_get_file_info(srcPath);
+    if (!sourceInfo.exists) {
+        errno = ENOENT;
+        return 0;
+    }
+
+    Temp scratch = get_scratch(0, 0);
+    if (!scratch.arena) {
+        return 0;
+    }
+    DEFER_REF(temp_end(&scratch));
+
+    Arena* scratchArena = scratch.arena;
+
+    const U64 chunkSize = 64u * 1024u;
+    U8* buffer = ARENA_PUSH_ARRAY(scratchArena, U8, chunkSize);
+    if (!buffer) {
+        return 0;
+    }
+
+    OS_Handle source = OS_file_open(srcPath, OS_FileOpenMode_Read);
+    if (!source.handle) {
+        return 0;
+    }
+
+    OS_Handle destination = OS_file_open(dstPath, OS_FileOpenMode_Create);
+    if (!destination.handle) {
+        int openErrno = errno;
+        OS_file_close(source);
+        errno = openErrno;
+        return 0;
+    }
+
+    U64 offset = 0;
+    B32 ok = 1;
+    int savedErrno = 0;
+
+    while (offset < sourceInfo.size && ok) {
+        U64 remaining = sourceInfo.size - offset;
+        U64 toTransfer = (remaining > chunkSize) ? chunkSize : remaining;
+
+        RangeU64 range = {offset, offset + toTransfer};
+
+        U64 readBytes = OS_file_read(source, range, buffer);
+        if (readBytes != toTransfer) {
+            ok = 0;
+            savedErrno = errno;
+            break;
+        }
+
+        U64 writtenBytes = OS_file_write(destination, range, buffer);
+        if (writtenBytes != toTransfer) {
+            ok = 0;
+            savedErrno = errno;
+            break;
+        }
+
+        offset += toTransfer;
+    }
+
+    OS_file_close(destination);
+    OS_file_close(source);
+
+    if (!ok) {
+        unlink(dstPath);
+        errno = savedErrno;
+        return 0;
+    }
+
+    return 1;
 }
 
 

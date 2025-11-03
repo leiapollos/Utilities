@@ -16,6 +16,12 @@ OS_SystemInfo* OS_get_system_info();
 
 
 // ////////////////////////
+// Executable Path
+
+StringU8 OS_get_executable_directory(Arena* arena);
+
+
+// ////////////////////////
 // Time
 U64 OS_get_time_microseconds();
 U64 OS_get_time_nanoseconds();
@@ -87,6 +93,12 @@ struct OS_FileMapping {
     U64 length;
 };
 
+struct OS_FileInfo {
+    B32 exists;
+    U64 size;
+    U64 lastWriteTimestampNs;
+};
+
 OS_Handle OS_file_open(const char* path, OS_FileOpenMode mode);
 void OS_file_close(OS_Handle h);
 U64 OS_file_read(OS_Handle h, RangeU64 range, void* dst);
@@ -96,6 +108,8 @@ U64 OS_file_write(OS_Handle h, U64 size, const void* src);
 U64 OS_file_size(OS_Handle h);
 OS_FileMapping OS_file_map_ro(OS_Handle h);
 void OS_file_unmap(OS_FileMapping m);
+OS_FileInfo OS_get_file_info(const char* path);
+B32 OS_file_copy_contents(const char* srcPath, const char* dstPath);
 OS_Handle OS_get_log_handle();
 
 bool OS_terminal_supports_color();

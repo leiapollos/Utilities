@@ -14,6 +14,8 @@
 #include <time.h>
 #include <pthread.h>
 #include <sched.h>
+#include <mach-o/dyld.h>
+#include <errno.h>
 
 
 // ////////////////////////

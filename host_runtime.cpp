@@ -8,14 +8,9 @@
 #include "app_interface.hpp"
 
 #include <dlfcn.h>
-#include <sys/stat.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <libgen.h>
-#if defined(PLATFORM_OS_MACOS)
-#include <mach-o/dyld.h>
-#endif
 
 #define APP_MODULE_SOURCE_RELATIVE "hot/utilities_app.dylib"
 #define APP_SOURCE_PATH "app.cpp"
@@ -71,52 +66,25 @@ struct HostState {
     B32 buildFailed;
 };
 
-static void host_get_executable_dir(char* outPath, U64 maxLen) {
-    char path[1024];
-    U32 size = sizeof(path);
-    
-#if defined(PLATFORM_OS_MACOS)
-    if (_NSGetExecutablePath(path, &size) == 0) {
-        char dirBuffer[1024];
-        MEMMOVE(dirBuffer, path, sizeof(path));
-        char* dir = dirname(dirBuffer);
-        U64 len = 0;
-        while (dir[len] != '\0' && len < maxLen - 1 && len < sizeof(dirBuffer) - 1) {
-            len++;
-        }
-        MEMMOVE(outPath, dir, len);
-        outPath[len] = '\0';
-    } else {
-        outPath[0] = '\0';
-    }
-#else
-    ssize_t len = readlink("/proc/self/exe", path, sizeof(path) - 1);
-    if (len != -1) {
-        path[len] = '\0';
-        char dirBuffer[1024];
-        MEMMOVE(dirBuffer, path, sizeof(path));
-        char* dir = dirname(dirBuffer);
-        U64 dirLen = 0;
-        while (dir[dirLen] != '\0' && dirLen < maxLen - 1 && dirLen < sizeof(dirBuffer) - 1) {
-            dirLen++;
-        }
-        MEMMOVE(outPath, dir, dirLen);
-        outPath[dirLen] = '\0';
-    } else {
-        outPath[0] = '\0';
-    }
-#endif
-}
-
 static void host_build_module_path(HostState* state, const char* relativePath, char* outPath, U64 maxLen) {
-    if (state->moduleBasePath[0] == '\0') {
-        host_get_executable_dir(state->moduleBasePath, sizeof(state->moduleBasePath));
-    }
-    
     Temp scratch = get_scratch(0, 0);
     DEFER_REF(temp_end(&scratch));
     Arena* arena = scratch.arena;
-    
+
+    if (state->moduleBasePath[0] == '\0') {
+        StringU8 execDir = OS_get_executable_directory(arena);
+        if (!str8_is_nil(execDir) && execDir.size > 0) {
+            U64 baseLen = execDir.size;
+            if (baseLen >= sizeof(state->moduleBasePath)) {
+                baseLen = sizeof(state->moduleBasePath) - 1u;
+            }
+            MEMMOVE(state->moduleBasePath, execDir.data, baseLen);
+            state->moduleBasePath[baseLen] = '\0';
+        } else {
+            state->moduleBasePath[0] = '\0';
+        }
+    }
+
     StringU8 relativeStr = str8(relativePath);
     StringU8 result;
     
@@ -135,26 +103,6 @@ static void host_build_module_path(HostState* state, const char* relativePath, c
     }
     MEMMOVE(outPath, result.data, len);
     outPath[len] = '\0';
-}
-
-static U64 host_get_file_timestamp(const char* path) {
-    struct stat fileStat;
-    if (stat(path, &fileStat) != 0) {
-        return 0;
-    }
-
-#if defined(PLATFORM_OS_MACOS)
-    U64 seconds = (U64) fileStat.st_mtimespec.tv_sec;
-    U64 nanos = (U64) fileStat.st_mtimespec.tv_nsec;
-#elif defined(PLATFORM_OS_LINUX)
-    U64 seconds = (U64) fileStat.st_mtim.tv_sec;
-    U64 nanos = (U64) fileStat.st_mtim.tv_nsec;
-#else
-    U64 seconds = (U64) fileStat.st_mtime;
-    U64 nanos = 0;
-#endif
-
-    return seconds * 1000000000ull + nanos;
 }
 
 static void host_record_retired_module(HostState* state, void* handle, const char* path) {
@@ -262,54 +210,14 @@ static void host_release_memory(HostState* state) {
 }
 
 static B32 host_copy_file(const char* srcPath, const char* dstPath) {
-    const U64 chunkSize = KB(64);
-    U8 buffer[KB(64)];
-
-    OS_Handle src = OS_file_open(srcPath, OS_FileOpenMode_Read);
-    if (!src.handle) {
-        LOG_ERROR("host", "Failed to open module '{}' for reading", srcPath);
-        return 0;
+    if (OS_file_copy_contents(srcPath, dstPath)) {
+        return 1;
     }
 
-    OS_Handle dst = OS_file_open(dstPath, OS_FileOpenMode_Create);
-    if (!dst.handle) {
-        LOG_ERROR("host", "Failed to open module copy '{}' for writing", dstPath);
-        OS_file_close(src);
-        return 0;
-    }
-
-    U64 size = OS_file_size(src);
-    U64 offset = 0;
-    B32 ok = 1;
-
-    while (offset < size) {
-        U64 remaining = size - offset;
-        U64 toTransfer = (remaining > chunkSize) ? chunkSize : remaining;
-
-        RangeU64 range;
-        range.min = offset;
-        range.max = offset + toTransfer;
-
-        U64 readBytes = OS_file_read(src, range, buffer);
-        if (readBytes != toTransfer) {
-            LOG_ERROR("host", "Short read when copying module ({} vs {})", readBytes, toTransfer);
-            ok = 0;
-            break;
-        }
-
-        U64 written = OS_file_write(dst, range, buffer);
-        if (written != toTransfer) {
-            LOG_ERROR("host", "Short write when copying module ({} vs {})", written, toTransfer);
-            ok = 0;
-            break;
-        }
-
-        offset += toTransfer;
-    }
-
-    OS_file_close(dst);
-    OS_file_close(src);
-    return ok;
+    int errorCode = errno;
+    const char* errorText = strerror(errorCode);
+    LOG_ERROR("host", "Failed to copy module from '{}' to '{}' (errno={} '{}')", srcPath, dstPath, errorCode, errorText ? errorText : "<unknown>");
+    return 0;
 }
 
 static B32 host_allocate_memory(HostState* state) {
@@ -470,7 +378,8 @@ static B32 host_load_module(HostState* state, B32 isReload) {
     state->module.handle = handle;
     state->module.exports = exports;
     state->module.isValid = 1;
-    state->moduleTimestamp = host_get_file_timestamp(sourcePath);
+    OS_FileInfo moduleInfo = OS_get_file_info(sourcePath);
+    state->moduleTimestamp = moduleInfo.exists ? moduleInfo.lastWriteTimestampNs : 0;
 
     StringU8 loadPathStr = str8(loadPath);
     U64 pathLen = loadPathStr.size;
@@ -522,11 +431,12 @@ static void host_unload_module(HostState* state, B32 callShutdown, B32 retainHan
 }
 
 static void host_try_build_module(HostState* state) {
-    U64 sourceTimestamp = host_get_file_timestamp(APP_SOURCE_PATH);
-    if (sourceTimestamp == 0) {
+    OS_FileInfo sourceInfo = OS_get_file_info(APP_SOURCE_PATH);
+    if (!sourceInfo.exists) {
         return;
     }
 
+    U64 sourceTimestamp = sourceInfo.lastWriteTimestampNs;
     if (sourceTimestamp <= state->sourceTimestamp) {
         return;
     }
@@ -553,11 +463,12 @@ static void host_try_reload_module(HostState* state) {
 
     char moduleSourcePath[HOT_MODULE_PATH_MAX];
     host_build_module_path(state, APP_MODULE_SOURCE_RELATIVE, moduleSourcePath, sizeof(moduleSourcePath));
-    U64 timestamp = host_get_file_timestamp(moduleSourcePath);
-    if (timestamp == 0) {
+    OS_FileInfo moduleInfo = OS_get_file_info(moduleSourcePath);
+    if (!moduleInfo.exists) {
         return;
     }
 
+    U64 timestamp = moduleInfo.lastWriteTimestampNs;
     if (timestamp <= state->moduleTimestamp) {
         return;
     }
@@ -588,7 +499,8 @@ int host_main_loop(int argc, char** argv) {
     state.moduleGeneration = 0;
     state.currentModulePath[0] = '\0';
     state.moduleBasePath[0] = '\0';
-    state.sourceTimestamp = host_get_file_timestamp(APP_SOURCE_PATH);
+    OS_FileInfo initialSourceInfo = OS_get_file_info(APP_SOURCE_PATH);
+    state.sourceTimestamp = initialSourceInfo.exists ? initialSourceInfo.lastWriteTimestampNs : 0;
     state.buildFailed = 0;
 
     if (!host_ensure_graphics_initialized(&state)) {
