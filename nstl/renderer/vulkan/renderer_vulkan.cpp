@@ -13,7 +13,7 @@ B32 renderer_init(Arena* arena, Renderer* renderer) {
 
     RendererVulkan* vulkan = ARENA_PUSH_STRUCT(arena, RendererVulkan);
     if (!vulkan) {
-        LOG_ERROR("vulkan", "Failed to allocate RendererVulkan");
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to allocate RendererVulkan");
         return 0;
     }
 
@@ -24,6 +24,12 @@ B32 renderer_init(Arena* arena, Renderer* renderer) {
     vulkan->graphicsQueue = VK_NULL_HANDLE;
     vulkan->graphicsQueueFamilyIndex = 0u;
     vulkan->validationLayersEnabled = 0;
+    vulkan->currentFrameIndex = 0u;
+    
+    for (U32 i = 0; i < VULKAN_FRAME_OVERLAP; ++i) {
+        vulkan->frames[i].commandPool = VK_NULL_HANDLE;
+        vulkan->frames[i].mainCommandBuffer = VK_NULL_HANDLE;
+    }
 
     if (!vulkan_create_instance(arena, vulkan)) {
         ASSERT_ALWAYS(false && "Failed to create Vulkan instance");
@@ -37,6 +43,12 @@ B32 renderer_init(Arena* arena, Renderer* renderer) {
         ASSERT_ALWAYS(false && "Failed to initialize Vulkan queues");
     }
 
+    if (!vulkan_create_frames(vulkan)) {
+        ASSERT_ALWAYS(false && "Failed to create Vulkan frames");
+    }
+
+    LOG_INFO(VULKAN_LOG_DOMAIN, "Vulkan renderer initialized successfully");
+
     renderer->backendData = vulkan;
     return 1;
 }
@@ -48,6 +60,7 @@ void renderer_shutdown(Renderer* renderer) {
 
     RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
     
+    vulkan_destroy_frames(vulkan);
     vulkan_destroy_device(vulkan);
     vulkan_destroy_debug_messenger(vulkan);
     vulkan_destroy_instance(vulkan);
@@ -136,7 +149,7 @@ static B32 vulkan_check_extension_support(Arena* arena, const char* extensionNam
 
 static B32 vulkan_create_instance(Arena* arena, RendererVulkan* vulkan) {
     if (ENABLE_VALIDATION_LAYERS && !vulkan_check_validation_layer_support(arena)) {
-        LOG_WARNING("vulkan", "Validation layers requested but not available");
+        LOG_WARNING(VULKAN_LOG_DOMAIN, "Validation layers requested but not available");
         vulkan->validationLayersEnabled = 0;
     } else {
         vulkan->validationLayersEnabled = ENABLE_VALIDATION_LAYERS ? 1 : 0;
@@ -165,15 +178,15 @@ static B32 vulkan_create_instance(Arena* arena, RendererVulkan* vulkan) {
 
     U32 availableExtensionCount = 0;
     vkEnumerateInstanceExtensionProperties(0, &availableExtensionCount, 0);
-    LOG_INFO("vulkan", "Found {} available instance extensions", availableExtensionCount);
+    LOG_DEBUG(VULKAN_LOG_DOMAIN, "Found {} available instance extensions", availableExtensionCount);
 
     for (U32 i = 0; i < DESIRED_EXTENSION_COUNT; ++i) {
         if (vulkan_check_extension_support(arena, DESIRED_EXTENSIONS[i])) {
             enabledExtensions[enabledExtensionCount] = DESIRED_EXTENSIONS[i];
             enabledExtensionCount += 1;
-            LOG_INFO("vulkan", "Extension '{}' is available", DESIRED_EXTENSIONS[i]);
+            LOG_DEBUG(VULKAN_LOG_DOMAIN, "Extension '{}' is available", DESIRED_EXTENSIONS[i]);
         } else {
-            LOG_WARNING("vulkan", "Extension '{}' is not available", DESIRED_EXTENSIONS[i]);
+            LOG_WARNING(VULKAN_LOG_DOMAIN, "Extension '{}' is not available", DESIRED_EXTENSIONS[i]);
         }
     }
 
@@ -197,10 +210,10 @@ static B32 vulkan_create_instance(Arena* arena, RendererVulkan* vulkan) {
 
     VK_CHECK(vkCreateInstance(&createInfo, 0, &vulkan->instance));
     
-    LOG_INFO("vulkan", "Vulkan instance created successfully");
+    LOG_DEBUG(VULKAN_LOG_DOMAIN, "Vulkan instance created successfully");
     
     if (!vulkan_create_debug_messenger(arena, vulkan)) {
-        LOG_WARNING("vulkan", "Failed to create debug messenger, continuing without validation logging");
+        LOG_WARNING(VULKAN_LOG_DOMAIN, "Failed to create debug messenger, continuing without validation logging");
     }
     
     return 1;
@@ -209,7 +222,7 @@ static B32 vulkan_create_instance(Arena* arena, RendererVulkan* vulkan) {
 static void vulkan_destroy_instance(RendererVulkan* vulkan) {
     if (vulkan->instance != VK_NULL_HANDLE) {
         vkDestroyInstance(vulkan->instance, 0);
-        LOG_INFO("vulkan", "Vulkan instance destroyed");
+        LOG_DEBUG(VULKAN_LOG_DOMAIN, "Vulkan instance destroyed");
     }
 }
 
@@ -248,7 +261,7 @@ static B32 vulkan_create_debug_messenger(Arena* arena, RendererVulkan* vulkan) {
         (PFN_vkCreateDebugUtilsMessengerEXT) vkGetInstanceProcAddr(vulkan->instance, "vkCreateDebugUtilsMessengerEXT");
     
     if (!createDebugMessenger) {
-        LOG_WARNING("vulkan", "Debug utils messenger extension not available");
+        LOG_WARNING(VULKAN_LOG_DOMAIN, "Debug utils messenger extension not available");
         return 0;
     }
     
@@ -265,7 +278,7 @@ static B32 vulkan_create_debug_messenger(Arena* arena, RendererVulkan* vulkan) {
     
     VK_CHECK(createDebugMessenger(vulkan->instance, &createInfo, 0, &vulkan->debugMessenger));
     
-    LOG_INFO("vulkan", "Debug messenger created successfully");
+    LOG_DEBUG(VULKAN_LOG_DOMAIN, "Debug messenger created successfully");
     return 1;
 }
 
@@ -279,7 +292,7 @@ static void vulkan_destroy_debug_messenger(RendererVulkan* vulkan) {
     
     if (destroyDebugMessenger) {
         destroyDebugMessenger(vulkan->instance, vulkan->debugMessenger, 0);
-        LOG_INFO("vulkan", "Debug messenger destroyed");
+        LOG_DEBUG(VULKAN_LOG_DOMAIN, "Debug messenger destroyed");
     }
     
     vulkan->debugMessenger = VK_NULL_HANDLE;
@@ -293,7 +306,7 @@ static VkPhysicalDevice vulkan_select_physical_device(Arena* arena, VkInstance i
     vkEnumeratePhysicalDevices(instance, &deviceCount, 0);
     
     if (deviceCount == 0) {
-        LOG_ERROR("vulkan", "No physical devices found");
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "No physical devices found");
         return VK_NULL_HANDLE;
     }
     
@@ -316,7 +329,7 @@ static VkPhysicalDevice vulkan_select_physical_device(Arena* arena, VkInstance i
         
         if (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
             selectedDevice = devices[i];
-            LOG_INFO("vulkan", "Selected discrete GPU: {}", properties.deviceName);
+            LOG_DEBUG(VULKAN_LOG_DOMAIN, "Selected discrete GPU: {}", properties.deviceName);
             break;
         }
     }
@@ -325,7 +338,7 @@ static VkPhysicalDevice vulkan_select_physical_device(Arena* arena, VkInstance i
         selectedDevice = fallbackDevice;
         VkPhysicalDeviceProperties properties = {};
         vkGetPhysicalDeviceProperties(selectedDevice, &properties);
-        LOG_INFO("vulkan", "Selected device: {}", properties.deviceName);
+        LOG_DEBUG(VULKAN_LOG_DOMAIN, "Selected device: {}", properties.deviceName);
     }
     
     return selectedDevice;
@@ -411,11 +424,11 @@ static B32 vulkan_create_device(Arena* arena, RendererVulkan* vulkan) {
     
     U32 graphicsQueueFamilyIndex = 0u;
     if (!vulkan_find_graphics_queue_family(arena, vulkan->physicalDevice, &graphicsQueueFamilyIndex)) {
-        LOG_ERROR("vulkan", "No graphics queue family found");
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "No graphics queue family found");
         return 0;
     }
     
-    LOG_INFO("vulkan", "Using graphics queue family {}", graphicsQueueFamilyIndex);
+    LOG_DEBUG(VULKAN_LOG_DOMAIN, "Using graphics queue family {}", graphicsQueueFamilyIndex);
 
     vulkan->graphicsQueueFamilyIndex = graphicsQueueFamilyIndex;
     
@@ -433,9 +446,9 @@ static B32 vulkan_create_device(Arena* arena, RendererVulkan* vulkan) {
         if (vulkan_check_device_extension_support(arena, vulkan->physicalDevice, DESIRED_DEVICE_EXTENSIONS[i])) {
             enabledDeviceExtensions[enabledDeviceExtensionCount] = DESIRED_DEVICE_EXTENSIONS[i];
             enabledDeviceExtensionCount += 1;
-            LOG_INFO("vulkan", "Device extension '{}' is available", DESIRED_DEVICE_EXTENSIONS[i]);
+            LOG_DEBUG(VULKAN_LOG_DOMAIN, "Device extension '{}' is available", DESIRED_DEVICE_EXTENSIONS[i]);
         } else {
-            LOG_WARNING("vulkan", "Device extension '{}' is not available", DESIRED_DEVICE_EXTENSIONS[i]);
+            LOG_WARNING(VULKAN_LOG_DOMAIN, "Device extension '{}' is not available", DESIRED_DEVICE_EXTENSIONS[i]);
         }
     }
     
@@ -465,7 +478,7 @@ static B32 vulkan_create_device(Arena* arena, RendererVulkan* vulkan) {
     
     VK_CHECK(vkCreateDevice(vulkan->physicalDevice, &createInfo, 0, &vulkan->device));
 
-    LOG_INFO("vulkan", "Vulkan device created successfully");
+    LOG_DEBUG(VULKAN_LOG_DOMAIN, "Vulkan device created successfully");
     return 1;
 }
 
@@ -475,7 +488,7 @@ static B32 vulkan_init_device_queues(RendererVulkan* vulkan) {
     }
 
     if (vulkan->device == VK_NULL_HANDLE) {
-        LOG_ERROR("vulkan", "Cannot initialize queues without a logical device");
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Cannot initialize queues without a logical device");
         return 0;
     }
 
@@ -483,22 +496,74 @@ static B32 vulkan_init_device_queues(RendererVulkan* vulkan) {
     vkGetDeviceQueue(vulkan->device, vulkan->graphicsQueueFamilyIndex, queueIndex, &vulkan->graphicsQueue);
 
     if (vulkan->graphicsQueue == VK_NULL_HANDLE) {
-        LOG_ERROR("vulkan", "Failed to retrieve graphics queue (family {}, index {})", vulkan->graphicsQueueFamilyIndex, queueIndex);
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to retrieve graphics queue (family {}, index {})", vulkan->graphicsQueueFamilyIndex, queueIndex);
         return 0;
     }
 
-    LOG_INFO("vulkan", "Graphics queue initialized (family {}, index {})", vulkan->graphicsQueueFamilyIndex, queueIndex);
+    LOG_DEBUG(VULKAN_LOG_DOMAIN, "Graphics queue initialized (family {}, index {})", vulkan->graphicsQueueFamilyIndex, queueIndex);
     return 1;
 }
 
 static void vulkan_destroy_device(RendererVulkan* vulkan) {
     if (vulkan->device != VK_NULL_HANDLE) {
         vkDestroyDevice(vulkan->device, 0);
-        LOG_INFO("vulkan", "Vulkan device destroyed");
+        LOG_DEBUG(VULKAN_LOG_DOMAIN, "Vulkan device destroyed");
         vulkan->device = VK_NULL_HANDLE;
     }
     vulkan->graphicsQueue = VK_NULL_HANDLE;
     vulkan->graphicsQueueFamilyIndex = 0u;
     vulkan->physicalDevice = VK_NULL_HANDLE;
+}
+
+// ////////////////////////
+// Frames
+
+static B32 vulkan_create_frames(RendererVulkan* vulkan) {
+    if (!vulkan || vulkan->device == VK_NULL_HANDLE) {
+        return 0;
+    }
+
+    for (U32 i = 0; i < VULKAN_FRAME_OVERLAP; ++i) {
+        RendererVulkanFrame* frame = &vulkan->frames[i];
+
+        VkCommandPoolCreateInfo poolInfo = {};
+        poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        poolInfo.queueFamilyIndex = vulkan->graphicsQueueFamilyIndex;
+
+        VK_CHECK(vkCreateCommandPool(vulkan->device, &poolInfo, 0, &frame->commandPool));
+
+        VkCommandBufferAllocateInfo allocInfo = {};
+        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocInfo.commandPool = frame->commandPool;
+        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandBufferCount = 1;
+
+        VK_CHECK(vkAllocateCommandBuffers(vulkan->device, &allocInfo, &frame->mainCommandBuffer));
+
+        LOG_DEBUG(VULKAN_LOG_DOMAIN, "Created frame {} command pool and command buffer", i);
+    }
+
+    LOG_DEBUG(VULKAN_LOG_DOMAIN, "Created {} frames for frame overlap", VULKAN_FRAME_OVERLAP);
+    return 1;
+}
+
+static void vulkan_destroy_frames(RendererVulkan* vulkan) {
+    if (!vulkan || vulkan->device == VK_NULL_HANDLE) {
+        return;
+    }
+
+    for (U32 i = 0; i < VULKAN_FRAME_OVERLAP; ++i) {
+        RendererVulkanFrame* frame = &vulkan->frames[i];
+
+        if (frame->commandPool != VK_NULL_HANDLE) {
+            vkDestroyCommandPool(vulkan->device, frame->commandPool, 0);
+            frame->commandPool = VK_NULL_HANDLE;
+            frame->mainCommandBuffer = VK_NULL_HANDLE;
+        }
+    }
+
+    vulkan->currentFrameIndex = 0u;
+    LOG_DEBUG(VULKAN_LOG_DOMAIN, "Destroyed all frame command pools and buffers");
 }
 
