@@ -12,8 +12,12 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <libgen.h>
+#if defined(PLATFORM_OS_MACOS)
+#include <mach-o/dyld.h>
+#endif
 
-#define APP_MODULE_SOURCE_PATH "hot/utilities_app.dylib"
+#define APP_MODULE_SOURCE_RELATIVE "hot/utilities_app.dylib"
 #define APP_SOURCE_PATH "app.cpp"
 #define HOT_MODULE_NAME_PATTERN "hot/utilities_app_loaded_%llu.dylib"
 #define HOT_MODULE_PATH_MAX 256
@@ -55,11 +59,78 @@ struct HostState {
     U64 sourceTimestamp;
     U64 moduleGeneration;
     char currentModulePath[HOT_MODULE_PATH_MAX];
+    char moduleBasePath[HOT_MODULE_PATH_MAX];
     void* retiredModuleHandles[HOT_MODULE_HISTORY_MAX];
     char retiredModulePaths[HOT_MODULE_HISTORY_MAX][HOT_MODULE_PATH_MAX];
     U32 retiredModuleCount;
     B32 buildFailed;
 };
+
+static void host_get_executable_dir(char* outPath, U64 maxLen) {
+    char path[1024];
+    U32 size = sizeof(path);
+    
+#if defined(PLATFORM_OS_MACOS)
+    if (_NSGetExecutablePath(path, &size) == 0) {
+        char dirBuffer[1024];
+        MEMMOVE(dirBuffer, path, sizeof(path));
+        char* dir = dirname(dirBuffer);
+        U64 len = 0;
+        while (dir[len] != '\0' && len < maxLen - 1 && len < sizeof(dirBuffer) - 1) {
+            len++;
+        }
+        MEMMOVE(outPath, dir, len);
+        outPath[len] = '\0';
+    } else {
+        outPath[0] = '\0';
+    }
+#else
+    ssize_t len = readlink("/proc/self/exe", path, sizeof(path) - 1);
+    if (len != -1) {
+        path[len] = '\0';
+        char dirBuffer[1024];
+        MEMMOVE(dirBuffer, path, sizeof(path));
+        char* dir = dirname(dirBuffer);
+        U64 dirLen = 0;
+        while (dir[dirLen] != '\0' && dirLen < maxLen - 1 && dirLen < sizeof(dirBuffer) - 1) {
+            dirLen++;
+        }
+        MEMMOVE(outPath, dir, dirLen);
+        outPath[dirLen] = '\0';
+    } else {
+        outPath[0] = '\0';
+    }
+#endif
+}
+
+static void host_build_module_path(HostState* state, const char* relativePath, char* outPath, U64 maxLen) {
+    if (state->moduleBasePath[0] == '\0') {
+        host_get_executable_dir(state->moduleBasePath, sizeof(state->moduleBasePath));
+    }
+    
+    Temp scratch = get_scratch(0, 0);
+    DEFER_REF(temp_end(&scratch));
+    Arena* arena = scratch.arena;
+    
+    StringU8 relativeStr = str8(relativePath);
+    StringU8 result;
+    
+    if (state->moduleBasePath[0] == '\0') {
+        result = relativeStr;
+    } else {
+        StringU8 baseStr = str8(state->moduleBasePath);
+        StringU8 separator = str8("/");
+        StringU8 pieces[] = {baseStr, separator, relativeStr};
+        result = str8_concat_n(arena, pieces, ARRAY_COUNT(pieces));
+    }
+    
+    U64 len = result.size;
+    if (len >= maxLen) {
+        len = maxLen - 1;
+    }
+    MEMMOVE(outPath, result.data, len);
+    outPath[len] = '\0';
+}
 
 static U64 host_get_file_timestamp(const char* path) {
     struct stat fileStat;
@@ -103,11 +174,12 @@ static void host_record_retired_module(HostState* state, void* handle, const cha
 
     state->retiredModuleHandles[state->retiredModuleCount] = handle;
     if (path && path[0] != '\0') {
-        U64 len = C_STR_LEN(path);
+        StringU8 pathStr = str8(path);
+        U64 len = pathStr.size;
         if (len >= HOT_MODULE_PATH_MAX) {
             len = HOT_MODULE_PATH_MAX - 1;
         }
-        MEMMOVE(state->retiredModulePaths[state->retiredModuleCount], path, len);
+        MEMMOVE(state->retiredModulePaths[state->retiredModuleCount], pathStr.data, len);
         state->retiredModulePaths[state->retiredModuleCount][len] = '\0';
     } else {
         state->retiredModulePaths[state->retiredModuleCount][0] = '\0';
@@ -207,11 +279,12 @@ static void host_apply_window_command(HostState* state, AppWindowCommand* comman
 
     if (command->requestTitle) {
         if (command->desc.title) {
-            U64 length = C_STR_LEN(command->desc.title);
+            StringU8 titleStr = str8(command->desc.title);
+            U64 length = titleStr.size;
             if (length >= HOST_WINDOW_TITLE_MAX) {
                 length = HOST_WINDOW_TITLE_MAX - 1;
             }
-            MEMMOVE(state->windowTitle, command->desc.title, length);
+            MEMMOVE(state->windowTitle, titleStr.data, length);
             state->windowTitle[length] = '\0';
         } else {
             state->windowTitle[0] = '\0';
@@ -244,11 +317,12 @@ static void host_apply_window_command(HostState* state, AppWindowCommand* comman
                     LOG_ERROR("host", "Failed to create window {}x{}", desc.width, desc.height);
                 } else {
                     if (desc.title != state->windowTitle) {
-                        U64 length = C_STR_LEN(desc.title);
+                        StringU8 titleStr = str8(desc.title);
+                        U64 length = titleStr.size;
                         if (length >= HOST_WINDOW_TITLE_MAX) {
                             length = HOST_WINDOW_TITLE_MAX - 1;
                         }
-                        MEMMOVE(state->windowTitle, desc.title, length);
+                        MEMMOVE(state->windowTitle, titleStr.data, length);
                         state->windowTitle[length] = '\0';
                     }
                     state->windowDesc.title = state->windowTitle;
@@ -504,7 +578,8 @@ static B32 host_load_module(HostState* state, B32 isReload) {
         return 0;
     }
 
-    const char* sourcePath = APP_MODULE_SOURCE_PATH;
+    char sourcePath[HOT_MODULE_PATH_MAX];
+    host_build_module_path(state, APP_MODULE_SOURCE_RELATIVE, sourcePath, sizeof(sourcePath));
     const U32 maxAttempts = 100;
     B32 sourceReady = 0;
     for (U32 attempt = 0; attempt < maxAttempts; ++attempt) {
@@ -524,13 +599,26 @@ static B32 host_load_module(HostState* state, B32 isReload) {
 
     state->moduleGeneration += 1;
     char loadPath[HOT_MODULE_PATH_MAX];
-    MEMSET(loadPath, 0, sizeof(loadPath));
-    int written = snprintf(loadPath, sizeof(loadPath), HOT_MODULE_NAME_PATTERN, (unsigned long long) state->moduleGeneration);
-    if (written < 0 || written >= (int) sizeof(loadPath)) {
-        LOG_ERROR("host", "Failed to build module load path (%d)", written);
-        return 0;
+    
+    Temp scratch = get_scratch(0, 0);
+    DEFER_REF(temp_end(&scratch));
+    Arena* arena = scratch.arena;
+    
+    StringU8 baseName = str8("hot/utilities_app_loaded_");
+    StringU8 generationStr = str8_from_U64(arena, state->moduleGeneration, 10);
+    StringU8 suffix = str8(".dylib");
+    StringU8 pieces[] = {baseName, generationStr, suffix};
+    StringU8 loadPathRelativeStr = str8_concat_n(arena, pieces, ARRAY_COUNT(pieces));
+    
+    char loadPathRelative[HOT_MODULE_PATH_MAX];
+    U64 len = loadPathRelativeStr.size;
+    if (len >= sizeof(loadPathRelative)) {
+        len = sizeof(loadPathRelative) - 1;
     }
-
+    MEMMOVE(loadPathRelative, loadPathRelativeStr.data, len);
+    loadPathRelative[len] = '\0';
+    
+    host_build_module_path(state, loadPathRelative, loadPath, sizeof(loadPath));
     if (!host_copy_file(sourcePath, loadPath)) {
         return 0;
     }
@@ -585,11 +673,12 @@ static B32 host_load_module(HostState* state, B32 isReload) {
     state->module.isValid = 1;
     state->moduleTimestamp = host_get_file_timestamp(sourcePath);
 
-    U64 pathLen = C_STR_LEN(loadPath);
+    StringU8 loadPathStr = str8(loadPath);
+    U64 pathLen = loadPathStr.size;
     if (pathLen >= HOT_MODULE_PATH_MAX) {
         pathLen = HOT_MODULE_PATH_MAX - 1;
     }
-    MEMMOVE(state->currentModulePath, loadPath, pathLen);
+    MEMMOVE(state->currentModulePath, loadPathStr.data, pathLen);
     state->currentModulePath[pathLen] = '\0';
 
     if (!isReload) {
@@ -664,7 +753,9 @@ static void host_try_reload_module(HostState* state) {
         return;
     }
 
-    U64 timestamp = host_get_file_timestamp(APP_MODULE_SOURCE_PATH);
+    char moduleSourcePath[HOT_MODULE_PATH_MAX];
+    host_build_module_path(state, APP_MODULE_SOURCE_RELATIVE, moduleSourcePath, sizeof(moduleSourcePath));
+    U64 timestamp = host_get_file_timestamp(moduleSourcePath);
     if (timestamp == 0) {
         return;
     }
@@ -700,6 +791,7 @@ int host_main_loop(int argc, char** argv) {
 
     state.moduleGeneration = 0;
     state.currentModulePath[0] = '\0';
+    state.moduleBasePath[0] = '\0';
     state.sourceTimestamp = host_get_file_timestamp(APP_SOURCE_PATH);
     state.buildFailed = 0;
 

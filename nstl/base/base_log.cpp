@@ -16,7 +16,7 @@ static bool g_useColor = false;
 static const StringU8 g_defaultTerminalColor = str8("\033[0m");
 static LogDomainEntry* g_logDomainList = nullptr;
 static Arena* g_logDomainArena = nullptr;
-static OS_Handle g_logDomainMutex = {0};
+static OS_Handle g_logDomainMutex = {};
 
 static const LogLevelInfo g_logLevelInfo[] = {
     [LogLevel_Debug] = {
@@ -42,6 +42,9 @@ static const LogLevelInfo* log_get_level_info(LogLevel level) {
 }
 
 static LogLevel log_get_domain_level(StringU8 domain) {
+    if (g_logDomainMutex.handle == 0) {
+        log_init();
+    }
     OS_mutex_lock(g_logDomainMutex);
     DEFER_REF(OS_mutex_unlock(g_logDomainMutex));
     
@@ -57,7 +60,7 @@ static LogLevel log_get_domain_level(StringU8 domain) {
 
 void log_init() {
     g_useColor = OS_terminal_supports_color();
-    if (g_logDomainMutex.handle == nullptr) {
+    if (g_logDomainMutex.handle == 0) {
         g_logDomainMutex = OS_mutex_create();
     }
     if (g_logDomainArena == nullptr) {
@@ -70,6 +73,9 @@ void set_log_level(LogLevel level) {
 }
 
 void set_log_domain_level(StringU8 domain, LogLevel level) {
+    if (g_logDomainMutex.handle == 0) {
+        log_init();
+    }
     OS_mutex_lock(g_logDomainMutex);
     DEFER_REF(OS_mutex_unlock(g_logDomainMutex));
     

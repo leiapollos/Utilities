@@ -238,6 +238,7 @@ void job_system_worker_entry(void* params) {
 #endif
 
     memset(&g_tlsJobState, 0, sizeof(g_tlsJobState));
+    
 }
 
 // ////////////////////////

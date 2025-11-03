@@ -4,8 +4,6 @@
 
 #include "nstl/base/base_include.hpp"
 #include "nstl/os/os_include.hpp"
-#include "nstl/base/base_include.cpp"
-// #include "nstl/os/os_include.cpp"
 
 #include "app_interface.hpp"
 #include "app_tests.hpp"
@@ -67,6 +65,8 @@ static B32 app_initialize(AppRuntime* runtime) {
     app_assign_tests_state(state);
     AppTestsState* tests = app_get_tests(state);
 
+    thread_context_alloc();
+    log_init();
     if (needsReset) {
         state->version = APP_CORE_STATE_VERSION;
         state->desiredWindow.title = "Utilities Hot Reload";
@@ -76,7 +76,8 @@ static B32 app_initialize(AppRuntime* runtime) {
         state->frameCounter = 0;
         state->reloadCount = 0;
         set_log_level(LogLevel_Info);
-        set_log_domain_level(str8("events"), LogLevel_Debug);
+        StringU8 eventsDomain = str8((const char*)"events", 6);
+        set_log_domain_level(eventsDomain, LogLevel_Debug);
     }
 
     if (!state->jobSystem) {
@@ -154,6 +155,11 @@ static void app_tick(AppRuntime* runtime, F32 deltaSeconds) {
     AppTestsState* tests = app_get_tests(state);
 
     state->frameCounter += 1ull;
+    
+    if (runtime->input && runtime->input->mouseMoved) {
+        LOG_INFO("app", "Mouse moved to ({}, {})", runtime->input->mouseX, runtime->input->mouseY);
+    }
+    
     app_tests_tick(runtime, state, tests, deltaSeconds);
 }
 

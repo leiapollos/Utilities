@@ -2,8 +2,18 @@
 
 # --- Configuration ---
 BUILD_DIR="build"
+
+# Handle clean-only case
+if [ "${1}" = "clean" ]; then
+    echo "==> Cleaning build directory..."
+    rm -rf "${BUILD_DIR}"
+    echo "==> Build directory cleaned."
+    exit 0
+fi
+
 FLAVOR=${1:-release}
 REQUESTED_TARGET=${2:-all}
+CLEAN_BUILD=${3:-false}
 CMAKE_ARGS=()
 
 # --- Build Flavors ---
@@ -42,8 +52,11 @@ if [[ -n "${LD_FLAGS}" ]]; then
 fi
 
 # --- Execution ---
-echo "==> Cleaning build directory..."
-rm -rf "${BUILD_DIR}"
+if [ "${CLEAN_BUILD}" = "clean" ] || [ "${CLEAN_BUILD}" = "true" ]; then
+    echo "==> Cleaning build directory..."
+    rm -rf "${BUILD_DIR}"
+fi
+echo "==> Ensuring build directory exists..."
 mkdir -p "${BUILD_DIR}"
 
 echo "==> Configuring CMake..."
