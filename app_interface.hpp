@@ -7,8 +7,9 @@
 #include "nstl/base/base_include.hpp"
 #include "nstl/os/core/os_core.hpp"
 #include "nstl/os/graphics/os_graphics.hpp"
+#include "nstl/renderer/renderer.hpp"
 
-#define APP_INTERFACE_VERSION 3u
+#define APP_INTERFACE_VERSION 4u
 
 #define PLATFORM_OS_FUNCTIONS(X) \
     X(OS_graphics_init) \
@@ -61,6 +62,7 @@ struct AppHostContext {
     U32 reloadCount;
     void* userData;
     U32 logicalCoreCount;
+    Renderer* renderer;
 };
 
 struct AppInput {

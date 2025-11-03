@@ -165,6 +165,7 @@ static B32 host_ensure_graphics_initialized(HostState* state) {
         return 0;
     }
 
+    state->hostContext.renderer = &state->renderer;
     state->graphicsInitialized = 1;
     return 1;
 }
@@ -546,6 +547,7 @@ int host_main_loop(int argc, char** argv) {
     host_unload_module(&state, 1, 0);
     if (state.graphicsInitialized) {
         renderer_shutdown(&state.renderer);
+        state.hostContext.renderer = 0;
         OS_graphics_shutdown();
         state.graphicsInitialized = 0;
     }

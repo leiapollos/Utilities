@@ -2,9 +2,6 @@
 // Created by André Leite on 31/10/2025.
 //
 
-#include "nstl/base/base_include.hpp"
-#include "nstl/os/os_include.hpp"
-
 #include "app_interface.hpp"
 #include "app_tests.hpp"
 #include "app_state.hpp"
@@ -196,6 +193,14 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
     }
 
     app_tests_tick(memory, state, tests, deltaSeconds);
+
+    if (host && host->renderer && state->windowHandle.handle) {
+        Vec3F32 color = {};
+        color.r = 0.1f;
+        color.g = 0.2f;
+        color.b = 0.3f;
+        renderer_draw_color(host->renderer, state->windowHandle, color);
+    }
 }
 
 static void app_shutdown(AppPlatform* platform, AppMemory* memory, AppHostContext* host) {
