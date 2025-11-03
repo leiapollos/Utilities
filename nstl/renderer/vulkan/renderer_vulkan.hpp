@@ -23,7 +23,11 @@ do { \
 
 struct RendererVulkan {
     VkInstance instance;
+    VkPhysicalDevice physicalDevice;
+    VkDevice device;
     VkDebugUtilsMessengerEXT debugMessenger;
+    VkQueue graphicsQueue;
+    U32 graphicsQueueFamilyIndex;
     B32 validationLayersEnabled;
 };
 
@@ -37,7 +41,16 @@ static const char* VALIDATION_LAYERS[] = {
     "VK_LAYER_KHRONOS_validation",
 };
 
+
 static B32 vulkan_check_validation_layer_support(Arena* arena);
 static B32 vulkan_check_extension_support(Arena* arena, const char* extensionName);
+
 static B32 vulkan_create_instance(Arena* arena, RendererVulkan* vulkan);
 static void vulkan_destroy_instance(RendererVulkan* vulkan);
+
+static B32 vulkan_create_device(Arena* arena, RendererVulkan* vulkan);
+static B32 vulkan_init_device_queues(RendererVulkan* vulkan);
+static void vulkan_destroy_device(RendererVulkan* vulkan);
+
+static B32 vulkan_create_debug_messenger(Arena* arena, RendererVulkan* vulkan);
+static void vulkan_destroy_debug_messenger(RendererVulkan* vulkan);

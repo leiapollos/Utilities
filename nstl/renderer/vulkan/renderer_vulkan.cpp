@@ -18,11 +18,23 @@ B32 renderer_init(Arena* arena, Renderer* renderer) {
     }
 
     vulkan->instance = VK_NULL_HANDLE;
+    vulkan->physicalDevice = VK_NULL_HANDLE;
+    vulkan->device = VK_NULL_HANDLE;
     vulkan->debugMessenger = VK_NULL_HANDLE;
+    vulkan->graphicsQueue = VK_NULL_HANDLE;
+    vulkan->graphicsQueueFamilyIndex = 0u;
     vulkan->validationLayersEnabled = 0;
 
     if (!vulkan_create_instance(arena, vulkan)) {
-        return 0;
+        ASSERT_ALWAYS(false && "Failed to create Vulkan instance");
+    }
+
+    if (!vulkan_create_device(arena, vulkan)) {
+        ASSERT_ALWAYS(false && "Failed to create Vulkan device");
+    }
+
+    if (!vulkan_init_device_queues(vulkan)) {
+        ASSERT_ALWAYS(false && "Failed to initialize Vulkan queues");
     }
 
     renderer->backendData = vulkan;
@@ -36,6 +48,8 @@ void renderer_shutdown(Renderer* renderer) {
 
     RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
     
+    vulkan_destroy_device(vulkan);
+    vulkan_destroy_debug_messenger(vulkan);
     vulkan_destroy_instance(vulkan);
 
     renderer->backendData = 0;
@@ -118,79 +132,7 @@ static B32 vulkan_check_extension_support(Arena* arena, const char* extensionNam
 }
 
 // ////////////////////////
-// Debug Messenger Callback
-
-static VKAPI_ATTR VkBool32 VKAPI_CALL vulkan_debug_callback(
-    VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-    VkDebugUtilsMessageTypeFlagsEXT messageType,
-    const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
-    void* pUserData) {
-    
-    (void) pUserData;
-    
-    StringU8 message = str8(pCallbackData->pMessage);
-    
-    if (FLAGS_HAS(messageSeverity, VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)) {
-        LOG_ERROR("vulkan_validation", "{}", message);
-    } else if (FLAGS_HAS(messageSeverity, VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)) {
-        LOG_WARNING("vulkan_validation", "{}", message);
-    } else if (FLAGS_HAS(messageSeverity, VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT)) {
-        LOG_INFO("vulkan_validation", "{}", message);
-    } else {
-        LOG_DEBUG("vulkan_validation", "{}", message);
-    }
-    
-    return VK_FALSE;
-}
-
-static B32 vulkan_create_debug_messenger(Arena* arena, RendererVulkan* vulkan) {
-    if (!vulkan->validationLayersEnabled) {
-        return 1;
-    }
-    
-    PFN_vkCreateDebugUtilsMessengerEXT createDebugMessenger = 
-        (PFN_vkCreateDebugUtilsMessengerEXT) vkGetInstanceProcAddr(vulkan->instance, "vkCreateDebugUtilsMessengerEXT");
-    
-    if (!createDebugMessenger) {
-        LOG_WARNING("vulkan", "Debug utils messenger extension not available");
-        return 0;
-    }
-    
-    VkDebugUtilsMessengerCreateInfoEXT createInfo = {};
-    createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-    createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
-                                  VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
-                                  VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-    createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-                             VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-                             VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-    createInfo.pfnUserCallback = vulkan_debug_callback;
-    createInfo.pUserData = 0;
-    
-    VK_CHECK(createDebugMessenger(vulkan->instance, &createInfo, 0, &vulkan->debugMessenger));
-    
-    LOG_INFO("vulkan", "Debug messenger created successfully");
-    return 1;
-}
-
-static void vulkan_destroy_debug_messenger(RendererVulkan* vulkan) {
-    if (vulkan->debugMessenger == VK_NULL_HANDLE) {
-        return;
-    }
-    
-    PFN_vkDestroyDebugUtilsMessengerEXT destroyDebugMessenger = 
-        (PFN_vkDestroyDebugUtilsMessengerEXT) vkGetInstanceProcAddr(vulkan->instance, "vkDestroyDebugUtilsMessengerEXT");
-    
-    if (destroyDebugMessenger) {
-        destroyDebugMessenger(vulkan->instance, vulkan->debugMessenger, 0);
-        LOG_INFO("vulkan", "Debug messenger destroyed");
-    }
-    
-    vulkan->debugMessenger = VK_NULL_HANDLE;
-}
-
-// ////////////////////////
-// Instance Creation
+// Instance
 
 static B32 vulkan_create_instance(Arena* arena, RendererVulkan* vulkan) {
     if (ENABLE_VALIDATION_LAYERS && !vulkan_check_validation_layer_support(arena)) {
@@ -265,10 +207,298 @@ static B32 vulkan_create_instance(Arena* arena, RendererVulkan* vulkan) {
 }
 
 static void vulkan_destroy_instance(RendererVulkan* vulkan) {
-    vulkan_destroy_debug_messenger(vulkan);
-    
     if (vulkan->instance != VK_NULL_HANDLE) {
         vkDestroyInstance(vulkan->instance, 0);
         LOG_INFO("vulkan", "Vulkan instance destroyed");
     }
 }
+
+// ////////////////////////
+// Debug Messenger
+
+static VKAPI_ATTR VkBool32 VKAPI_CALL vulkan_debug_callback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+    VkDebugUtilsMessageTypeFlagsEXT messageType,
+    const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+    void* pUserData) {
+    
+    (void) pUserData;
+    
+    StringU8 message = str8(pCallbackData->pMessage);
+    
+    if (FLAGS_HAS(messageSeverity, VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)) {
+        LOG_ERROR("vulkan_validation", "{}", message);
+    } else if (FLAGS_HAS(messageSeverity, VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)) {
+        LOG_WARNING("vulkan_validation", "{}", message);
+    } else if (FLAGS_HAS(messageSeverity, VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT)) {
+        LOG_INFO("vulkan_validation", "{}", message);
+    } else {
+        LOG_DEBUG("vulkan_validation", "{}", message);
+    }
+    
+    return VK_FALSE;
+}
+
+static B32 vulkan_create_debug_messenger(Arena* arena, RendererVulkan* vulkan) {
+    if (!vulkan->validationLayersEnabled) {
+        return 1;
+    }
+    
+    PFN_vkCreateDebugUtilsMessengerEXT createDebugMessenger = 
+        (PFN_vkCreateDebugUtilsMessengerEXT) vkGetInstanceProcAddr(vulkan->instance, "vkCreateDebugUtilsMessengerEXT");
+    
+    if (!createDebugMessenger) {
+        LOG_WARNING("vulkan", "Debug utils messenger extension not available");
+        return 0;
+    }
+    
+    VkDebugUtilsMessengerCreateInfoEXT createInfo = {};
+    createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+    createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
+                                  VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                                  VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+    createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                             VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                             VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+    createInfo.pfnUserCallback = vulkan_debug_callback;
+    createInfo.pUserData = 0;
+    
+    VK_CHECK(createDebugMessenger(vulkan->instance, &createInfo, 0, &vulkan->debugMessenger));
+    
+    LOG_INFO("vulkan", "Debug messenger created successfully");
+    return 1;
+}
+
+static void vulkan_destroy_debug_messenger(RendererVulkan* vulkan) {
+    if (vulkan->debugMessenger == VK_NULL_HANDLE) {
+        return;
+    }
+    
+    PFN_vkDestroyDebugUtilsMessengerEXT destroyDebugMessenger = 
+        (PFN_vkDestroyDebugUtilsMessengerEXT) vkGetInstanceProcAddr(vulkan->instance, "vkDestroyDebugUtilsMessengerEXT");
+    
+    if (destroyDebugMessenger) {
+        destroyDebugMessenger(vulkan->instance, vulkan->debugMessenger, 0);
+        LOG_INFO("vulkan", "Debug messenger destroyed");
+    }
+    
+    vulkan->debugMessenger = VK_NULL_HANDLE;
+}
+
+// ////////////////////////
+// Physical Device
+
+static VkPhysicalDevice vulkan_select_physical_device(Arena* arena, VkInstance instance) {
+    U32 deviceCount = 0;
+    vkEnumeratePhysicalDevices(instance, &deviceCount, 0);
+    
+    if (deviceCount == 0) {
+        LOG_ERROR("vulkan", "No physical devices found");
+        return VK_NULL_HANDLE;
+    }
+    
+    Temp temp = temp_begin(arena);
+    DEFER_REF(temp_end(&temp));
+    
+    VkPhysicalDevice* devices = ARENA_PUSH_ARRAY(arena, VkPhysicalDevice, deviceCount);
+    if (!devices) {
+        return VK_NULL_HANDLE;
+    }
+    
+    VK_CHECK(vkEnumeratePhysicalDevices(instance, &deviceCount, devices));
+    
+    VkPhysicalDevice selectedDevice = VK_NULL_HANDLE;
+    VkPhysicalDevice fallbackDevice = devices[0];
+    
+    for (U32 i = 0; i < deviceCount; ++i) {
+        VkPhysicalDeviceProperties properties = {};
+        vkGetPhysicalDeviceProperties(devices[i], &properties);
+        
+        if (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+            selectedDevice = devices[i];
+            LOG_INFO("vulkan", "Selected discrete GPU: {}", properties.deviceName);
+            break;
+        }
+    }
+    
+    if (selectedDevice == VK_NULL_HANDLE) {
+        selectedDevice = fallbackDevice;
+        VkPhysicalDeviceProperties properties = {};
+        vkGetPhysicalDeviceProperties(selectedDevice, &properties);
+        LOG_INFO("vulkan", "Selected device: {}", properties.deviceName);
+    }
+    
+    return selectedDevice;
+}
+
+// ////////////////////////
+// Queue
+
+static B32 vulkan_find_graphics_queue_family(Arena* arena, VkPhysicalDevice physicalDevice, U32* outIndex) {
+    if (!outIndex) {
+        return 0;
+    }
+
+    U32 queueFamilyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, 0);
+    
+    if (queueFamilyCount == 0) {
+        return 0;
+    }
+    
+    Temp temp = temp_begin(arena);
+    DEFER_REF(temp_end(&temp));
+    
+    VkQueueFamilyProperties* queueFamilies = ARENA_PUSH_ARRAY(arena, VkQueueFamilyProperties, queueFamilyCount);
+    if (!queueFamilies) {
+        return 0;
+    }
+    
+    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, queueFamilies);
+    
+    for (U32 i = 0; i < queueFamilyCount; ++i) {
+        if (FLAGS_HAS(queueFamilies[i].queueFlags, VK_QUEUE_GRAPHICS_BIT)) {
+            *outIndex = i;
+            return 1;
+        }
+    }
+    
+    return 0;
+}
+
+// ////////////////////////
+// Device Extension Support
+
+static B32 vulkan_check_device_extension_support(Arena* arena, VkPhysicalDevice physicalDevice, const char* extensionName) {
+    U32 extensionCount = 0;
+    vkEnumerateDeviceExtensionProperties(physicalDevice, 0, &extensionCount, 0);
+    
+    if (extensionCount == 0) {
+        return 0;
+    }
+    
+    Temp temp = temp_begin(arena);
+    DEFER_REF(temp_end(&temp));
+    
+    VkExtensionProperties* extensions = ARENA_PUSH_ARRAY(arena, VkExtensionProperties, extensionCount);
+    if (!extensions) {
+        return 0;
+    }
+    
+    vkEnumerateDeviceExtensionProperties(physicalDevice, 0, &extensionCount, extensions);
+    
+    StringU8 desiredExtension = str8(extensionName);
+    B32 found = 0;
+    for (U32 i = 0; i < extensionCount; ++i) {
+        StringU8 availableExtension = str8(extensions[i].extensionName);
+        if (str8_equal(desiredExtension, availableExtension)) {
+            found = 1;
+            break;
+        }
+    }
+    
+    return found;
+}
+
+// ////////////////////////
+// Device
+
+static B32 vulkan_create_device(Arena* arena, RendererVulkan* vulkan) {
+    vulkan->physicalDevice = vulkan_select_physical_device(arena, vulkan->instance);
+    if (vulkan->physicalDevice == VK_NULL_HANDLE) {
+        return 0;
+    }
+    
+    U32 graphicsQueueFamilyIndex = 0u;
+    if (!vulkan_find_graphics_queue_family(arena, vulkan->physicalDevice, &graphicsQueueFamilyIndex)) {
+        LOG_ERROR("vulkan", "No graphics queue family found");
+        return 0;
+    }
+    
+    LOG_INFO("vulkan", "Using graphics queue family {}", graphicsQueueFamilyIndex);
+
+    vulkan->graphicsQueueFamilyIndex = graphicsQueueFamilyIndex;
+    
+    const char* DESIRED_DEVICE_EXTENSIONS[] = {
+#if defined(PLATFORM_OS_MACOS)
+        "VK_KHR_portability_subset",  // Required for MoltenVK
+#endif
+    };
+    const U32 DESIRED_DEVICE_EXTENSION_COUNT = sizeof(DESIRED_DEVICE_EXTENSIONS) / sizeof(DESIRED_DEVICE_EXTENSIONS[0]);
+    
+    const char* enabledDeviceExtensions[16] = {};
+    U32 enabledDeviceExtensionCount = 0;
+    
+    for (U32 i = 0; i < DESIRED_DEVICE_EXTENSION_COUNT; ++i) {
+        if (vulkan_check_device_extension_support(arena, vulkan->physicalDevice, DESIRED_DEVICE_EXTENSIONS[i])) {
+            enabledDeviceExtensions[enabledDeviceExtensionCount] = DESIRED_DEVICE_EXTENSIONS[i];
+            enabledDeviceExtensionCount += 1;
+            LOG_INFO("vulkan", "Device extension '{}' is available", DESIRED_DEVICE_EXTENSIONS[i]);
+        } else {
+            LOG_WARNING("vulkan", "Device extension '{}' is not available", DESIRED_DEVICE_EXTENSIONS[i]);
+        }
+    }
+    
+    F32 queuePriority = 1.0f;
+    VkDeviceQueueCreateInfo queueCreateInfo = {};
+    queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    queueCreateInfo.queueFamilyIndex = vulkan->graphicsQueueFamilyIndex;
+    queueCreateInfo.queueCount = 1;
+    queueCreateInfo.pQueuePriorities = &queuePriority;
+    
+    VkPhysicalDeviceFeatures deviceFeatures = {};
+    
+    VkDeviceCreateInfo createInfo = {};
+    createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    createInfo.pQueueCreateInfos = &queueCreateInfo;
+    createInfo.queueCreateInfoCount = 1;
+    createInfo.pEnabledFeatures = &deviceFeatures;
+    createInfo.enabledExtensionCount = enabledDeviceExtensionCount;
+    createInfo.ppEnabledExtensionNames = (enabledDeviceExtensionCount > 0) ? enabledDeviceExtensions : 0;
+    
+    if (vulkan->validationLayersEnabled) {
+        createInfo.enabledLayerCount = sizeof(VALIDATION_LAYERS) / sizeof(VALIDATION_LAYERS[0]);
+        createInfo.ppEnabledLayerNames = VALIDATION_LAYERS;
+    } else {
+        createInfo.enabledLayerCount = 0;
+    }
+    
+    VK_CHECK(vkCreateDevice(vulkan->physicalDevice, &createInfo, 0, &vulkan->device));
+
+    LOG_INFO("vulkan", "Vulkan device created successfully");
+    return 1;
+}
+
+static B32 vulkan_init_device_queues(RendererVulkan* vulkan) {
+    if (!vulkan) {
+        return 0;
+    }
+
+    if (vulkan->device == VK_NULL_HANDLE) {
+        LOG_ERROR("vulkan", "Cannot initialize queues without a logical device");
+        return 0;
+    }
+
+    const U32 queueIndex = 0u;
+    vkGetDeviceQueue(vulkan->device, vulkan->graphicsQueueFamilyIndex, queueIndex, &vulkan->graphicsQueue);
+
+    if (vulkan->graphicsQueue == VK_NULL_HANDLE) {
+        LOG_ERROR("vulkan", "Failed to retrieve graphics queue (family {}, index {})", vulkan->graphicsQueueFamilyIndex, queueIndex);
+        return 0;
+    }
+
+    LOG_INFO("vulkan", "Graphics queue initialized (family {}, index {})", vulkan->graphicsQueueFamilyIndex, queueIndex);
+    return 1;
+}
+
+static void vulkan_destroy_device(RendererVulkan* vulkan) {
+    if (vulkan->device != VK_NULL_HANDLE) {
+        vkDestroyDevice(vulkan->device, 0);
+        LOG_INFO("vulkan", "Vulkan device destroyed");
+        vulkan->device = VK_NULL_HANDLE;
+    }
+    vulkan->graphicsQueue = VK_NULL_HANDLE;
+    vulkan->graphicsQueueFamilyIndex = 0u;
+    vulkan->physicalDevice = VK_NULL_HANDLE;
+}
+
