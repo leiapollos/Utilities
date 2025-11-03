@@ -60,6 +60,10 @@ void renderer_shutdown(Renderer* renderer) {
 
     RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
     
+    if (vulkan->device != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(vulkan->device);
+    }
+    
     vulkan_destroy_frames(vulkan);
     vulkan_destroy_device(vulkan);
     vulkan_destroy_debug_messenger(vulkan);
