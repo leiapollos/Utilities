@@ -30,13 +30,13 @@ struct Arena {
 
 #define ARENA_HEADER_SIZE sizeof(Arena)
 
-static Arena* arena_alloc_(const ArenaParameters& parameters);
+Arena* arena_alloc_(const ArenaParameters& parameters);
 #define arena_alloc(...) arena_alloc_({__VA_ARGS__})
-static void arena_release(Arena* arena);
+void arena_release(Arena* arena);
 
-static void* arena_push(Arena* arena, U64 size, U64 alignment = sizeof(void*));
-static void arena_pop_to(Arena* arena, U64 pos);
-static U64 arena_get_pos(Arena* arena);
+void* arena_push(Arena* arena, U64 size, U64 alignment = sizeof(void*));
+void arena_pop_to(Arena* arena, U64 pos);
+U64 arena_get_pos(Arena* arena);
 
 #define ARENA_PUSH_ARRAY_ALIGNED(arena, T, count, alignment) (T*)arena_push(arena, sizeof(T)*count, alignment)
 #define ARENA_PUSH_ARRAY(arena, T, count) ARENA_PUSH_ARRAY_ALIGNED(arena, T, count, alignof(T))
@@ -52,8 +52,8 @@ struct Temp {
     B32 isTemporary; // if true, release arena on temp_end
 };
 
-static Temp temp_begin(Arena* arena);
-static void temp_end(Temp* t);
+Temp temp_begin(Arena* arena);
+void temp_end(Temp* t);
 
 
 // ////////////////////////
@@ -68,4 +68,4 @@ struct ScratchArenas {
 };
 static_assert(is_power_of_two(SCRATCH_TLS_ARENA_COUNT), "SCRATCH_TLS_ARENA_COUNT must be a power of two");
 
-static Temp get_scratch(Arena* const* excludes, U32 count);
+Temp get_scratch(Arena* const* excludes, U32 count);

@@ -76,7 +76,6 @@ static void job_system_worker_entry(void* params);
 // ////////////////////////
 // Lifecycle
 
-static
 JobSystem* job_system_create(Arena* arena, U32 workerCount) {
     ASSERT_DEBUG(workerCount >= 1);
     ASSERT_DEBUG(g_tlsJobState.jobSystem == nullptr && "JobSystem already initialized on this thread");
@@ -120,7 +119,6 @@ JobSystem* job_system_create(Arena* arena, U32 workerCount) {
     return jobSystem;
 }
 
-static
 void job_system_destroy(JobSystem* jobSystem) {
     if (!jobSystem) {
         return;
@@ -151,7 +149,6 @@ void job_system_destroy(JobSystem* jobSystem) {
 // ////////////////////////
 // Submission
 
-static
 B32 job_system_submit_(const Job& job) {
     ASSERT_DEBUG(g_tlsJobState.queue);
     if (job.parent) {
@@ -246,7 +243,6 @@ void job_system_worker_entry(void* params) {
 // ////////////////////////
 // Waiting
 
-static
 void job_system_wait(JobSystem* jobSystem, Job* root) {
     ASSERT_DEBUG(jobSystem && root);
     WSDeque* localQueue = g_tlsJobState.queue;
@@ -309,7 +305,7 @@ void job_system_wait(JobSystem* jobSystem, Job* root) {
 }
 
 #ifndef NDEBUG
-static JobSystemStats job_system_get_totals(JobSystem* jobSystem) {
+JobSystemStats job_system_get_totals(JobSystem* jobSystem) {
     return jobSystem->totals;
 }
 #endif

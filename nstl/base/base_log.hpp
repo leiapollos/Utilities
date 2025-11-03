@@ -19,11 +19,11 @@ struct LogLevelInfo {
     StringU8 colorCode; // ANSI color escape
 };
 
-static void log_init();
-static void set_log_level(LogLevel level);
-static void set_log_domain_level(StringU8 domain, LogLevel level);
+void log_init();
+void set_log_level(LogLevel level);
+void set_log_domain_level(StringU8 domain, LogLevel level);
 
-static void log(LogLevel level, StringU8 domain, StringU8 str);
+void log(LogLevel level, StringU8 domain, StringU8 str);
 
 
 // ////////////////////////
@@ -135,14 +135,14 @@ struct LogFmtArg {
     }
 };
 
-static LogFmtSpec log_fmt_parse_spec(StringU8 specStr);
-static StringU8 arg_to_string(Arena* arena, const LogFmtArg& arg, LogFmtSpec spec);
-static void log_fmt_(LogLevel level,
-                     StringU8 domain,
-                     B32 addNewline,
-                     StringU8 fmt,
-                     const LogFmtArg* args,
-                     U64 argCount);
+LogFmtSpec log_fmt_parse_spec(StringU8 specStr);
+StringU8 arg_to_string(Arena* arena, const LogFmtArg& arg, LogFmtSpec spec);
+void log_fmt_(LogLevel level,
+              StringU8 domain,
+              B32 addNewline,
+              StringU8 fmt,
+              const LogFmtArg* args,
+              U64 argCount);
 
 static inline StringU8 log_domain_wrap(const char* domain) {
     return str8(domain);

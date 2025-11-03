@@ -15,14 +15,14 @@ struct StringU8 {
 static const StringU8 STR8_NIL = {(U8*)0, 0};
 static const StringU8 STR8_EMPTY = {(U8*)"", 0};
 
-static StringU8 str8(U8* source, U64 size);
-static StringU8 str8(const char* source, U64 size);
-static StringU8 str8(const char* source);
-static StringU8 str8_cpy(Arena* arena, const char* source, U64 size);
-static StringU8 str8_cpy(Arena* arena, const char* source);
-static StringU8 str8_cpy(Arena* arena, StringU8 src);
+StringU8 str8(U8* source, U64 size);
+StringU8 str8(const char* source, U64 size);
+StringU8 str8(const char* source);
+StringU8 str8_cpy(Arena* arena, const char* source, U64 size);
+StringU8 str8_cpy(Arena* arena, const char* source);
+StringU8 str8_cpy(Arena* arena, StringU8 src);
 
-static StringU8 str8_concat_n(Arena* arena, const StringU8* pieces, U64 count);
+StringU8 str8_concat_n(Arena* arena, const StringU8* pieces, U64 count);
 #ifdef CPP_LANG
 
 /* C++ (requires C++11) */
@@ -44,16 +44,16 @@ static StringU8 str8_concat_n(Arena* arena, const StringU8* pieces, U64 count);
 
 #endif
 
-static B8 str8_is_nil(StringU8 s);
-static B8 str8_is_empty(StringU8 s);
-static B8 str8_equal(StringU8 a, StringU8 b);
+B8 str8_is_nil(StringU8 s);
+B8 str8_is_empty(StringU8 s);
+B8 str8_equal(StringU8 a, StringU8 b);
 
-static StringU8 str8_from_U64(Arena* arena, U64 value, U64 base);
-static StringU8 str8_from_S64(Arena* arena, S64 value);
-static StringU8 str8_from_F64(Arena* arena, F64 value, int precision);
-static StringU8 str8_from_ptr(Arena* arena, const void* ptr);
-static StringU8 str8_from_char(Arena* arena, U8 c);
-static StringU8 str8_to_uppercase(Arena* arena, StringU8 s);
+StringU8 str8_from_U64(Arena* arena, U64 value, U64 base);
+StringU8 str8_from_S64(Arena* arena, S64 value);
+StringU8 str8_from_F64(Arena* arena, F64 value, int precision);
+StringU8 str8_from_ptr(Arena* arena, const void* ptr);
+StringU8 str8_from_char(Arena* arena, U8 c);
+StringU8 str8_to_uppercase(Arena* arena, StringU8 s);
 
 struct Str8List {
     StringU8* items;
@@ -62,5 +62,5 @@ struct Str8List {
     Arena* arena;
 };
 
-static void str8list_init(Str8List* l, Arena* arena, U64 initialCap);
-static void str8list_push(Str8List* l, StringU8 s);
+void str8list_init(Str8List* l, Arena* arena, U64 initialCap);
+void str8list_push(Str8List* l, StringU8 s);

@@ -5,7 +5,7 @@
 // ////////////////////////
 // System Info
 
-static OS_SystemInfo* OS_get_system_info() {
+OS_SystemInfo* OS_get_system_info() {
     return &g_OS_MacOSState.systemInfo;
 }
 
@@ -13,14 +13,14 @@ static OS_SystemInfo* OS_get_system_info() {
 // ////////////////////////
 // Time
 
-static U64 OS_get_time_microseconds() {
+U64 OS_get_time_microseconds() {
     timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
     U64 result = ((U64) t.tv_nsec / THOUSAND(1ULL)) + ((U64) t.tv_sec * MILLION(1ULL));
     return result;
 }
 
-static U64 OS_get_time_nanoseconds() {
+U64 OS_get_time_nanoseconds() {
     timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
     U64 result = (U64) t.tv_sec * BILLION(1ULL) + (U64) t.tv_nsec;
@@ -28,7 +28,7 @@ static U64 OS_get_time_nanoseconds() {
 }
 
 #if defined(PLATFORM_ARCH_ARM64)
-static U64 OS_rdtsc_relaxed() {
+U64 OS_rdtsc_relaxed() {
     U64 value = 0;
 #if defined(COMPILER_CLANG) || defined(COMPILER_GCC)
     __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(value));
@@ -39,7 +39,7 @@ static U64 OS_rdtsc_relaxed() {
     return value;
 }
 
-static U64 OS_rdtscp_serialized() {
+U64 OS_rdtscp_serialized() {
     U64 value = 0;
 #if defined(COMPILER_CLANG) || defined(COMPILER_GCC)
     __asm__ __volatile__("isb");
@@ -52,7 +52,7 @@ static U64 OS_rdtscp_serialized() {
 }
 #endif
 
-static U64 OS_get_counter_frequency_hz() {
+U64 OS_get_counter_frequency_hz() {
 #if defined(PLATFORM_ARCH_ARM64)
     U64 freq = 0;
 #if defined(COMPILER_CLANG) || defined(COMPILER_GCC)
@@ -64,7 +64,7 @@ static U64 OS_get_counter_frequency_hz() {
 #endif
 }
 
-static void OS_sleep_milliseconds(U32 milliseconds) {
+void OS_sleep_milliseconds(U32 milliseconds) {
     struct timespec req = {0, 0};
     req.tv_sec = (time_t)(milliseconds / 1000);
     req.tv_nsec = (long)((milliseconds % 1000) * MILLION(1ULL));
@@ -75,7 +75,7 @@ static void OS_sleep_milliseconds(U32 milliseconds) {
 // ////////////////////////
 // Aborting
 
-static void OS_abort(S32 exit_code) {
+void OS_abort(S32 exit_code) {
     exit(exit_code);
 }
 
@@ -83,7 +83,7 @@ static void OS_abort(S32 exit_code) {
 // ////////////////////////
 // Memory allocation
 
-static void* OS_reserve(U64 size) {
+void* OS_reserve(U64 size) {
     void* result = mmap(0, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (result == MAP_FAILED) {
         result = 0;
@@ -91,17 +91,17 @@ static void* OS_reserve(U64 size) {
     return result;
 }
 
-static B32 OS_commit(void* ptr, U64 size) {
+B32 OS_commit(void* ptr, U64 size) {
     mprotect(ptr, size, PROT_READ | PROT_WRITE);
     return 1;
 }
 
-static void OS_decommit(void* ptr, U64 size) {
+void OS_decommit(void* ptr, U64 size) {
     madvise(ptr, size, MADV_DONTNEED);
     mprotect(ptr, size, PROT_NONE);
 }
 
-static void OS_release(void* ptr, U64 size) {
+void OS_release(void* ptr, U64 size) {
     munmap(ptr, size);
 }
 
@@ -116,7 +116,7 @@ static void* _OS_thread_entry_point(void* arg) {
     return 0;
 }
 
-static OS_Handle OS_thread_create(OS_ThreadFunc* func, void* arg) {
+OS_Handle OS_thread_create(OS_ThreadFunc* func, void* arg) {
     OS_MACOS_Entity* entity = alloc_OS_entity();
     entity->type = OS_MACOS_EntityType_Thread;
     entity->thread.func = func;
@@ -132,7 +132,7 @@ static OS_Handle OS_thread_create(OS_ThreadFunc* func, void* arg) {
     return handle;
 }
 
-static B32 OS_thread_join(OS_Handle thread) {
+B32 OS_thread_join(OS_Handle thread) {
     ASSERT_DEBUG(thread.handle != 0);
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*) (thread.handle);
     ASSERT_DEBUG(entity->type == OS_MACOS_EntityType_Thread);
@@ -141,7 +141,7 @@ static B32 OS_thread_join(OS_Handle thread) {
     return ret == 0;
 }
 
-static void OS_thread_detach(OS_Handle thread) {
+void OS_thread_detach(OS_Handle thread) {
     ASSERT_DEBUG(thread.handle != 0);
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*) (thread.handle);
     ASSERT_DEBUG(entity->type == OS_MACOS_EntityType_Thread);
@@ -149,11 +149,11 @@ static void OS_thread_detach(OS_Handle thread) {
     free_OS_entity(entity);
 }
 
-static void OS_thread_yield() {
+void OS_thread_yield() {
     sched_yield();
 }
 
-static void OS_cpu_pause() {
+void OS_cpu_pause() {
 #if defined(PLATFORM_ARCH_ARM64)
     __builtin_arm_yield();
 #elif defined(PLATFORM_ARCH_X64)
@@ -163,13 +163,13 @@ static void OS_cpu_pause() {
 #endif
 }
 
-static U32 OS_get_thread_id_u32() {
+U32 OS_get_thread_id_u32() {
     U64 threadId64 = 0;
     pthread_threadid_np(0, &threadId64);
     return (U32) threadId64;
 }
 
-static OS_Handle OS_mutex_create() {
+OS_Handle OS_mutex_create() {
     OS_MACOS_Entity* entity = alloc_OS_entity();
     entity->type = OS_MACOS_EntityType_Mutex;
     pthread_mutex_init(&entity->mutex, 0);
@@ -177,7 +177,7 @@ static OS_Handle OS_mutex_create() {
     return handle;
 }
 
-static void OS_mutex_destroy(OS_Handle mutex) {
+void OS_mutex_destroy(OS_Handle mutex) {
     ASSERT_DEBUG(mutex.handle != 0);
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*) (mutex.handle);
     ASSERT_DEBUG(entity->type == OS_MACOS_EntityType_Mutex);
@@ -185,21 +185,21 @@ static void OS_mutex_destroy(OS_Handle mutex) {
     free_OS_entity(entity);
 }
 
-static void OS_mutex_lock(OS_Handle mutex) {
+void OS_mutex_lock(OS_Handle mutex) {
     ASSERT_DEBUG(mutex.handle != 0);
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*) (mutex.handle);
     ASSERT_DEBUG(entity->type == OS_MACOS_EntityType_Mutex);
     pthread_mutex_lock(&entity->mutex);
 }
 
-static void OS_mutex_unlock(OS_Handle mutex) {
+void OS_mutex_unlock(OS_Handle mutex) {
     ASSERT_DEBUG(mutex.handle != 0);
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*) (mutex.handle);
     ASSERT_DEBUG(entity->type == OS_MACOS_EntityType_Mutex);
     pthread_mutex_unlock(&entity->mutex);
 }
 
-static OS_Handle OS_condition_variable_create() {
+OS_Handle OS_condition_variable_create() {
     OS_MACOS_Entity* entity = alloc_OS_entity();
     entity->type = OS_MACOS_EntityType_ConditionVariable;
     pthread_cond_init(&entity->conditionVariable.cond, 0);
@@ -208,7 +208,7 @@ static OS_Handle OS_condition_variable_create() {
     return handle;
 }
 
-static void OS_condition_variable_destroy(OS_Handle conditionVariable) {
+void OS_condition_variable_destroy(OS_Handle conditionVariable) {
     ASSERT_DEBUG(conditionVariable.handle != 0);
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*) conditionVariable.handle;
     ASSERT_DEBUG(entity->type == OS_MACOS_EntityType_ConditionVariable);
@@ -216,7 +216,7 @@ static void OS_condition_variable_destroy(OS_Handle conditionVariable) {
     free_OS_entity(entity);
 }
 
-static void OS_condition_variable_wait(OS_Handle conditionVariable, OS_Handle mutex) {
+void OS_condition_variable_wait(OS_Handle conditionVariable, OS_Handle mutex) {
     ASSERT_DEBUG(conditionVariable.handle != 0);
     ASSERT_DEBUG(mutex.handle != 0);
 
@@ -229,21 +229,21 @@ static void OS_condition_variable_wait(OS_Handle conditionVariable, OS_Handle mu
     pthread_cond_wait(&conditionEntity->conditionVariable.cond, &mutexEntity->mutex);
 }
 
-static void OS_condition_variable_signal(OS_Handle conditionVariable) {
+void OS_condition_variable_signal(OS_Handle conditionVariable) {
     ASSERT_DEBUG(conditionVariable.handle != 0);
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*) conditionVariable.handle;
     ASSERT_DEBUG(entity->type == OS_MACOS_EntityType_ConditionVariable);
     pthread_cond_signal(&entity->conditionVariable.cond);
 }
 
-static void OS_condition_variable_broadcast(OS_Handle conditionVariable) {
+void OS_condition_variable_broadcast(OS_Handle conditionVariable) {
     ASSERT_DEBUG(conditionVariable.handle != 0);
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*) conditionVariable.handle;
     ASSERT_DEBUG(entity->type == OS_MACOS_EntityType_ConditionVariable);
     pthread_cond_broadcast(&entity->conditionVariable.cond);
 }
 
-static OS_Handle OS_barrier_create(U32 threadCount) {
+OS_Handle OS_barrier_create(U32 threadCount) {
     OS_MACOS_Entity* entity = alloc_OS_entity();
     entity->type = OS_MACOS_EntityType_Barrier;
 
@@ -260,7 +260,7 @@ static OS_Handle OS_barrier_create(U32 threadCount) {
     return handle;
 }
 
-static void OS_barrier_destroy(OS_Handle barrierHandle) {
+void OS_barrier_destroy(OS_Handle barrierHandle) {
     ASSERT_DEBUG(barrierHandle.handle != 0);
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*) barrierHandle.handle;
     ASSERT_DEBUG(entity->type == OS_MACOS_EntityType_Barrier);
@@ -270,7 +270,7 @@ static void OS_barrier_destroy(OS_Handle barrierHandle) {
     free_OS_entity(entity);
 }
 
-static void OS_barrier_wait(OS_Handle barrierHandle) {
+void OS_barrier_wait(OS_Handle barrierHandle) {
     ASSERT_DEBUG(barrierHandle.handle != 0);
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*) barrierHandle.handle;
     ASSERT_DEBUG(entity->type == OS_MACOS_EntityType_Barrier);
@@ -297,7 +297,7 @@ static void OS_barrier_wait(OS_Handle barrierHandle) {
 // ////////////////////////
 // File I/O
 
-static OS_Handle OS_file_open(const char* path, OS_FileOpenMode mode) {
+OS_Handle OS_file_open(const char* path, OS_FileOpenMode mode) {
     int flags = 0;
     // Permission bits for newly created files: 0666 = rw-rw-rw-.
     int modeBits = 0666;
@@ -326,7 +326,7 @@ static OS_Handle OS_file_open(const char* path, OS_FileOpenMode mode) {
     return handle;
 }
 
-static void OS_file_close(OS_Handle fileHandle) {
+void OS_file_close(OS_Handle fileHandle) {
     if (!fileHandle.handle) {
         return;
     }
@@ -339,7 +339,7 @@ static void OS_file_close(OS_Handle fileHandle) {
     free_OS_entity(entity);
 }
 
-static U64 OS_file_size(OS_Handle fileHandle) {
+U64 OS_file_size(OS_Handle fileHandle) {
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*) fileHandle.handle;
     ASSERT_DEBUG(entity && entity->type == OS_MACOS_EntityType_File);
     struct stat fileStat;
@@ -349,7 +349,7 @@ static U64 OS_file_size(OS_Handle fileHandle) {
     return (U64) fileStat.st_size;
 }
 
-static void OS_file_set_hints(OS_Handle fileHandle, U64 hints) {
+void OS_file_set_hints(OS_Handle fileHandle, U64 hints) {
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*) fileHandle.handle;
     ASSERT_DEBUG(entity && entity->type == OS_MACOS_EntityType_File);
     int enableValue = 1, disableValue = 0;
@@ -357,7 +357,7 @@ static void OS_file_set_hints(OS_Handle fileHandle, U64 hints) {
     fcntl(entity->file.fd, F_RDAHEAD, FLAGS_HAS(hints, OS_FileHint_Sequential) ? enableValue : disableValue);
 }
 
-static OS_FileMapping OS_file_map_ro(OS_Handle fileHandle) {
+OS_FileMapping OS_file_map_ro(OS_Handle fileHandle) {
     OS_FileMapping mapping = {0, 0};
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*) fileHandle.handle;
     ASSERT_DEBUG(entity && entity->type == OS_MACOS_EntityType_File);
@@ -374,7 +374,7 @@ static OS_FileMapping OS_file_map_ro(OS_Handle fileHandle) {
     return mapping;
 }
 
-static void OS_file_unmap(OS_FileMapping mapping) {
+void OS_file_unmap(OS_FileMapping mapping) {
     if (mapping.ptr && mapping.length) {
         munmap(mapping.ptr, mapping.length);
     }
@@ -384,7 +384,7 @@ static bool OS_is_seekable(int fd) {
     return lseek(fd, 0, SEEK_CUR) != -1;
 }
 
-static U64 OS_file_read(OS_Handle fileHandle, RangeU64 range, void* dst) {
+U64 OS_file_read(OS_Handle fileHandle, RangeU64 range, void* dst) {
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*) fileHandle.handle;
     ASSERT_DEBUG(entity && entity->type == OS_MACOS_EntityType_File);
     ASSERT_DEBUG(OS_is_seekable(entity->file.fd));
@@ -406,7 +406,7 @@ static U64 OS_file_read(OS_Handle fileHandle, RangeU64 range, void* dst) {
     return totalTransferred;
 }
 
-static U64 OS_file_read(OS_Handle fileHandle, U64 size, void* dst) {
+U64 OS_file_read(OS_Handle fileHandle, U64 size, void* dst) {
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*) fileHandle.handle;
     ASSERT_DEBUG(entity && entity->type == OS_MACOS_EntityType_File);
     ASSERT_DEBUG(!OS_is_seekable(entity->file.fd));
@@ -426,7 +426,7 @@ static U64 OS_file_read(OS_Handle fileHandle, U64 size, void* dst) {
     return totalTransferred;
 }
 
-static U64 OS_file_write(OS_Handle fileHandle, RangeU64 range, const void* src) {
+U64 OS_file_write(OS_Handle fileHandle, RangeU64 range, const void* src) {
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*) fileHandle.handle;
     ASSERT_DEBUG(entity && entity->type == OS_MACOS_EntityType_File);
     ASSERT_DEBUG(OS_is_seekable(entity->file.fd));
@@ -448,7 +448,7 @@ static U64 OS_file_write(OS_Handle fileHandle, RangeU64 range, const void* src) 
     return totalTransferred;
 }
 
-static U64 OS_file_write(OS_Handle fileHandle, U64 size, const void* src) {
+U64 OS_file_write(OS_Handle fileHandle, U64 size, const void* src) {
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*) fileHandle.handle;
     ASSERT_DEBUG(entity && entity->type == OS_MACOS_EntityType_File);
     ASSERT_DEBUG(!OS_is_seekable(entity->file.fd));
@@ -468,7 +468,7 @@ static U64 OS_file_write(OS_Handle fileHandle, U64 size, const void* src) {
     return totalTransferred;
 }
 
-static OS_Handle OS_get_log_handle() {
+OS_Handle OS_get_log_handle() {
     static OS_MACOS_Entity entity{
         .type = OS_MACOS_EntityType_File,
         .file{

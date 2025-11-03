@@ -12,33 +12,33 @@ struct OS_SystemInfo {
     U64 pageSize;
 };
 
-static OS_SystemInfo* OS_get_system_info();
+OS_SystemInfo* OS_get_system_info();
 
 
 // ////////////////////////
 // Time
-static U64 OS_get_time_microseconds();
-static U64 OS_get_time_nanoseconds();
-static U64 OS_get_counter_frequency_hz();
+U64 OS_get_time_microseconds();
+U64 OS_get_time_nanoseconds();
+U64 OS_get_counter_frequency_hz();
 
-static U64 OS_rdtsc_relaxed();
-static U64 OS_rdtscp_serialized();
+U64 OS_rdtsc_relaxed();
+U64 OS_rdtscp_serialized();
 
-static void OS_sleep_milliseconds(U32 milliseconds);
+void OS_sleep_milliseconds(U32 milliseconds);
 
 // ////////////////////////
 // Aborting
 
-static void OS_abort(S32 exit_code);
+void OS_abort(S32 exit_code);
 
 
 // ////////////////////////
 // Memory allocation
 
-static void* OS_reserve(U64 size);
-static B32 OS_commit(void* addr, U64 size);
-static void OS_decommit(void* addr, U64 size);
-static void OS_release(void* addr, U64 size);
+void* OS_reserve(U64 size);
+B32 OS_commit(void* addr, U64 size);
+void OS_decommit(void* addr, U64 size);
+void OS_release(void* addr, U64 size);
 
 
 // ////////////////////////
@@ -50,27 +50,27 @@ struct OS_Handle {
 
 typedef void OS_ThreadFunc(void* ptr);
 
-static OS_Handle OS_thread_create(OS_ThreadFunc* func, void* arg);
-static B32 OS_thread_join(OS_Handle thread);
-static void OS_thread_detach(OS_Handle thread);
-static void OS_thread_yield();
-static void OS_cpu_pause();
+OS_Handle OS_thread_create(OS_ThreadFunc* func, void* arg);
+B32 OS_thread_join(OS_Handle thread);
+void OS_thread_detach(OS_Handle thread);
+void OS_thread_yield();
+void OS_cpu_pause();
 
-static U32 OS_get_thread_id_u32();
-static OS_Handle OS_mutex_create();
-static void OS_mutex_destroy(OS_Handle mutex);
-static void OS_mutex_lock(OS_Handle mutex);
-static void OS_mutex_unlock(OS_Handle mutex);
+U32 OS_get_thread_id_u32();
+OS_Handle OS_mutex_create();
+void OS_mutex_destroy(OS_Handle mutex);
+void OS_mutex_lock(OS_Handle mutex);
+void OS_mutex_unlock(OS_Handle mutex);
 
-static OS_Handle OS_condition_variable_create();
-static void OS_condition_variable_destroy(OS_Handle conditionVariable);
-static void OS_condition_variable_wait(OS_Handle conditionVariable, OS_Handle mutex);
-static void OS_condition_variable_signal(OS_Handle conditionVariable);
-static void OS_condition_variable_broadcast(OS_Handle conditionVariable);
+OS_Handle OS_condition_variable_create();
+void OS_condition_variable_destroy(OS_Handle conditionVariable);
+void OS_condition_variable_wait(OS_Handle conditionVariable, OS_Handle mutex);
+void OS_condition_variable_signal(OS_Handle conditionVariable);
+void OS_condition_variable_broadcast(OS_Handle conditionVariable);
 
-static OS_Handle OS_barrier_create(U32 threadCount);
-static void OS_barrier_destroy(OS_Handle barrier);
-static void OS_barrier_wait(OS_Handle barrier);
+OS_Handle OS_barrier_create(U32 threadCount);
+void OS_barrier_destroy(OS_Handle barrier);
+void OS_barrier_wait(OS_Handle barrier);
 
 
 // ////////////////////////
@@ -87,16 +87,16 @@ struct OS_FileMapping {
     U64 length;
 };
 
-static OS_Handle OS_file_open(const char* path, OS_FileOpenMode mode);
-static void OS_file_close(OS_Handle h);
-static U64 OS_file_read(OS_Handle h, RangeU64 range, void* dst);
-static U64 OS_file_read(OS_Handle fileHandle, U64 size, void* dst);
-static U64 OS_file_write(OS_Handle h, RangeU64 range, const void* src);
-static U64 OS_file_write(OS_Handle h, U64 size, const void* src);
-static U64 OS_file_size(OS_Handle h);
-static OS_FileMapping OS_file_map_ro(OS_Handle h);
-static void OS_file_unmap(OS_FileMapping m);
-static OS_Handle OS_get_log_handle();
+OS_Handle OS_file_open(const char* path, OS_FileOpenMode mode);
+void OS_file_close(OS_Handle h);
+U64 OS_file_read(OS_Handle h, RangeU64 range, void* dst);
+U64 OS_file_read(OS_Handle fileHandle, U64 size, void* dst);
+U64 OS_file_write(OS_Handle h, RangeU64 range, const void* src);
+U64 OS_file_write(OS_Handle h, U64 size, const void* src);
+U64 OS_file_size(OS_Handle h);
+OS_FileMapping OS_file_map_ro(OS_Handle h);
+void OS_file_unmap(OS_FileMapping m);
+OS_Handle OS_get_log_handle();
 
 bool OS_terminal_supports_color();
 
@@ -106,10 +106,10 @@ enum OS_FileHintFlags {
     OS_FileHint_Sequential = (1ull << 1),
 };
 
-static void OS_file_set_hints(OS_Handle h, U64 hints);
+void OS_file_set_hints(OS_Handle h, U64 hints);
 
 
 // ////////////////////////
 // Entry Point
 
-static void entry_point();
+void entry_point();

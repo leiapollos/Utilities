@@ -148,12 +148,12 @@ static B32 scratch_collides_many(Arena* cand,
     return 0;
 }
 
-static Temp temp_begin(Arena* arena) {
+Temp temp_begin(Arena* arena) {
     Temp t = {arena, arena_get_pos(arena), 0};
     return t;
 }
 
-static void temp_end(Temp* t) {
+void temp_end(Temp* t) {
     if (!t || !t->arena) {
         return;
     }
@@ -167,7 +167,7 @@ static void temp_end(Temp* t) {
     t->isTemporary = 0;
 }
 
-static Temp get_scratch(Arena* const* excludes, U32 count) {
+Temp get_scratch(Arena* const* excludes, U32 count) {
 
     U32 mask = SCRATCH_TLS_ARENA_COUNT - 1u;
 

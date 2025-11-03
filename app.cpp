@@ -7,9 +7,6 @@
 #include "nstl/base/base_include.cpp"
 // #include "nstl/os/os_include.cpp"
 
-static void entry_point(void) {
-}
-
 #include "app_interface.hpp"
 #include "app_tests.hpp"
 #include "app_state.hpp"

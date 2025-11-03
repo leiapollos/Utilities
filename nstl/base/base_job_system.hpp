@@ -51,15 +51,15 @@ static_assert(sizeof(Job) == CACHE_LINE_SIZE, "Job struct must exactly fill cach
 
 struct JobSystem;
 
-static JobSystem* job_system_create(Arena* arena, U32 workerCount);
-static void job_system_destroy(JobSystem* jobSystem);
+JobSystem* job_system_create(Arena* arena, U32 workerCount);
+void job_system_destroy(JobSystem* jobSystem);
 
-static B32 job_system_submit_(const Job& job);
+B32 job_system_submit_(const Job& job);
 
-static void job_system_wait(JobSystem* jobSystem, Job* root);
+void job_system_wait(JobSystem* jobSystem, Job* root);
 
 #ifndef NDEBUG
-static JobSystemStats job_system_get_totals(JobSystem* jobSystem);
+JobSystemStats job_system_get_totals(JobSystem* jobSystem);
 #endif
 
 // ////////////////////////

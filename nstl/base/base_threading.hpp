@@ -93,6 +93,6 @@ struct ThreadContext {
     SPMDMembership* membership;
 };
 
-static ThreadContext* thread_context_alloc();
-static void thread_context_release();
-static ThreadContext* thread_context();
+ThreadContext* thread_context_alloc();
+void thread_context_release();
+ThreadContext* thread_context();

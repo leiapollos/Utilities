@@ -55,7 +55,7 @@ static LogLevel log_get_domain_level(StringU8 domain) {
     return result;
 }
 
-static void log_init() {
+void log_init() {
     g_useColor = OS_terminal_supports_color();
     if (g_logDomainMutex.handle == nullptr) {
         g_logDomainMutex = OS_mutex_create();
@@ -65,11 +65,11 @@ static void log_init() {
     }
 }
 
-static void set_log_level(LogLevel level) {
+void set_log_level(LogLevel level) {
     g_logLevel = level;
 }
 
-static void set_log_domain_level(StringU8 domain, LogLevel level) {
+void set_log_domain_level(StringU8 domain, LogLevel level) {
     OS_mutex_lock(g_logDomainMutex);
     DEFER_REF(OS_mutex_unlock(g_logDomainMutex));
     
@@ -87,7 +87,7 @@ static void set_log_domain_level(StringU8 domain, LogLevel level) {
     g_logDomainList = newEntry;
 }
 
-static void log(LogLevel level, StringU8 domain, StringU8 str) {
+void log(LogLevel level, StringU8 domain, StringU8 str) {
     LogLevel domainLevel = log_get_domain_level(domain);
     if (level < domainLevel) {
         return;
@@ -113,7 +113,7 @@ static void log(LogLevel level, StringU8 domain, StringU8 str) {
     OS_file_write(OS_get_log_handle(), res.size, res.data);
 }
 
-static LogFmtSpec log_fmt_parse_spec(StringU8 specStr) {
+LogFmtSpec log_fmt_parse_spec(StringU8 specStr) {
     LogFmtSpec spec;
     spec.hasSpec = 0;
     spec.floatPrecision = 5;
@@ -172,7 +172,7 @@ static LogFmtSpec log_fmt_parse_spec(StringU8 specStr) {
     return spec;
 }
 
-static StringU8 arg_to_string(Arena* arena, const LogFmtArg& arg, LogFmtSpec spec) {
+StringU8 arg_to_string(Arena* arena, const LogFmtArg& arg, LogFmtSpec spec) {
     switch (arg.kind) {
         case LogFmtKind_S64: {
             if (spec.hasSpec && spec.intBase != 10) {
@@ -214,12 +214,12 @@ static StringU8 arg_to_string(Arena* arena, const LogFmtArg& arg, LogFmtSpec spe
     return STR8_EMPTY;
 }
 
-static void log_fmt_(LogLevel level,
-                     StringU8 domain,
-                     B32 addNewline,
-                     StringU8 fmt,
-                     const LogFmtArg* args,
-                     U64 argCount) {
+void log_fmt_(LogLevel level,
+              StringU8 domain,
+              B32 addNewline,
+              StringU8 fmt,
+              const LogFmtArg* args,
+              U64 argCount) {
     LogLevel domainLevel = log_get_domain_level(domain);
     if (level < domainLevel) {
         return;

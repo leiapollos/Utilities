@@ -5,22 +5,22 @@
 // ////////////////////////
 // String
 
-static StringU8 str8(U8* source, U64 size) {
+StringU8 str8(U8* source, U64 size) {
     return StringU8{source, size};
 }
 
-static StringU8 str8(const char* source, U64 size) {
+StringU8 str8(const char* source, U64 size) {
     return StringU8{(U8*) source, size};
 }
 
-static StringU8 str8(const char* source) {
+StringU8 str8(const char* source) {
     if (source == 0) {
         return STR8_EMPTY;
     }
     return StringU8{(U8*) source, C_STR_LEN(source)};
 }
 
-static StringU8 str8_cpy(Arena* arena, StringU8 src) {
+StringU8 str8_cpy(Arena* arena, StringU8 src) {
     StringU8 dst;
     dst.size = src.size;
     dst.data = ARENA_PUSH_ARRAY(arena, U8, dst.size + 1);
@@ -36,9 +36,9 @@ static StringU8 str8_cstring_cpy(Arena* arena, const char* source) {
 }
 
 
-static StringU8 str8_concat_n(Arena* arena,
-                              const StringU8* pieces,
-                              U64 count) {
+StringU8 str8_concat_n(Arena* arena,
+                       const StringU8* pieces,
+                       U64 count) {
     U64 total = 0;
     for (U64 i = 0; i < count; ++i)
         total += pieces[i].size;
@@ -55,15 +55,15 @@ static StringU8 str8_concat_n(Arena* arena,
     return str8(out, total);
 }
 
-static B8 str8_is_nil(StringU8 s) {
+B8 str8_is_nil(StringU8 s) {
     return (B8) (s.data == 0);
 }
 
-static B8 str8_is_empty(StringU8 s) {
+B8 str8_is_empty(StringU8 s) {
     return (s.size == 0 && s.data != 0);
 }
 
-static B8 str8_equal(StringU8 a, StringU8 b) {
+B8 str8_equal(StringU8 a, StringU8 b) {
     if (a.size != b.size) {
         return 0;
     }
@@ -73,7 +73,7 @@ static B8 str8_equal(StringU8 a, StringU8 b) {
     return (MEMCMP(a.data, b.data, a.size) == 0);
 }
 
-static StringU8 str8_from_U64(Arena* arena, U64 value, U64 base) {
+StringU8 str8_from_U64(Arena* arena, U64 value, U64 base) {
     if (base < 2 || base > 16) {
         base = 10;
     }
@@ -103,35 +103,35 @@ static StringU8 str8_from_U64(Arena* arena, U64 value, U64 base) {
     return out;
 }
 
-static StringU8 str8_from_S64(Arena* arena, S64 value) {
+StringU8 str8_from_S64(Arena* arena, S64 value) {
     char buffer[64];
     int len = snprintf(buffer, sizeof(buffer), "%lld", value);
     ASSERT_DEBUG(len >= 0);
     return str8_cpy(arena, str8((U8*) buffer, (U64) len));
 }
 
-static StringU8 str8_from_F64(Arena* arena, F64 value, int precision) {
+StringU8 str8_from_F64(Arena* arena, F64 value, int precision) {
     char buffer[64];
     int len = snprintf(buffer, sizeof(buffer), "%.*f", precision, value);
     ASSERT_DEBUG(len >= 0);
     return str8_cpy(arena, str8((U8*) buffer, (U64) len));
 }
 
-static StringU8 str8_from_ptr(Arena* arena, const void* ptr) {
+StringU8 str8_from_ptr(Arena* arena, const void* ptr) {
     char buffer[32];
     int len = snprintf(buffer, sizeof(buffer), "%p", ptr);
     ASSERT_DEBUG(len >= 0);
     return str8_cpy(arena, str8((U8*) buffer, (U64) len));
 }
 
-static StringU8 str8_from_char(Arena* arena, U8 c) {
+StringU8 str8_from_char(Arena* arena, U8 c) {
     U8* data = ARENA_PUSH_ARRAY(arena, U8, 2);
     data[0] = c;
     data[1] = '\0';
     return str8(data, 1);
 }
 
-static StringU8 str8_to_uppercase(Arena* arena, StringU8 s) {
+StringU8 str8_to_uppercase(Arena* arena, StringU8 s) {
     StringU8 result;
     result.size = s.size;
     result.data = ARENA_PUSH_ARRAY(arena, U8, s.size + 1);
@@ -147,14 +147,14 @@ static StringU8 str8_to_uppercase(Arena* arena, StringU8 s) {
     return result;
 }
 
-static void str8list_init(Str8List* l, Arena* arena, U64 initialCap) {
+void str8list_init(Str8List* l, Arena* arena, U64 initialCap) {
     l->arena = arena;
     l->count = 0;
     l->cap = initialCap ? initialCap : 8;
     l->items = ARENA_PUSH_ARRAY(arena, StringU8, l->cap);
 }
 
-static void str8list_push(Str8List* l, StringU8 s) {
+void str8list_push(Str8List* l, StringU8 s) {
     if (l->count >= l->cap) {
         U64 newCap = l->cap * 2;
         StringU8* n = ARENA_PUSH_ARRAY(l->arena, StringU8, newCap);
