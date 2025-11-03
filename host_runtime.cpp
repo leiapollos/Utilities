@@ -8,6 +8,7 @@
 #include "app_interface.hpp"
 
 #include <dlfcn.h>
+#include <vulkan/vulkan.h>
 
 #define APP_MODULE_SOURCE_RELATIVE "hot/utilities_app.dylib"
 #define APP_SOURCE_PATH "app.cpp"
@@ -149,6 +150,17 @@ static B32 host_ensure_graphics_initialized(HostState* state) {
     if (!OS_graphics_init()) {
         LOG_ERROR("host", "Failed to initialize graphics subsystem");
         return 0;
+    }
+
+    U32 vulkanVersion = 0;
+    VkResult result = vkEnumerateInstanceVersion(&vulkanVersion);
+    if (result == VK_SUCCESS) {
+        U32 major = VK_VERSION_MAJOR(vulkanVersion);
+        U32 minor = VK_VERSION_MINOR(vulkanVersion);
+        U32 patch = VK_VERSION_PATCH(vulkanVersion);
+        LOG_INFO("host", "Vulkan API version: {}.{}.{}", major, minor, patch);
+    } else {
+        LOG_ERROR("host", "Failed to enumerate Vulkan version: {}", result);
     }
 
     state->graphicsInitialized = 1;

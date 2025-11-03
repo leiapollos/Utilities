@@ -20,6 +20,9 @@ mark_as_advanced(
 
 set(SRC_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 
+set(VULKAN_SDK_ROOT "${SRC_ROOT}/third_party/vulkan")
+set(VULKAN_SDK_INCLUDE_DIR "${VULKAN_SDK_ROOT}/include")
+
 set(HOST_SOURCES
     ${SRC_ROOT}/main.mm
 )
@@ -28,7 +31,41 @@ add_executable(utilities_host ${HOST_SOURCES})
 target_include_directories(utilities_host PRIVATE ${SRC_ROOT})
 
 if(APPLE)
+    set(VULKAN_SDK_LIB_DIR "${VULKAN_SDK_ROOT}/macos/lib")
+
+    add_library(VulkanSDK::Vulkan SHARED IMPORTED)
+    set_target_properties(VulkanSDK::Vulkan PROPERTIES
+        IMPORTED_LOCATION "${VULKAN_SDK_LIB_DIR}/libvulkan.dylib"
+        IMPORTED_SONAME "libvulkan.1.dylib"
+        INTERFACE_INCLUDE_DIRECTORIES "${VULKAN_SDK_INCLUDE_DIR}"
+    )
+
+    set(VULKAN_SDK_RUNTIME_LIBS
+        "${VULKAN_SDK_LIB_DIR}/libvulkan.dylib"
+        "${VULKAN_SDK_LIB_DIR}/libvulkan.1.dylib"
+        "${VULKAN_SDK_LIB_DIR}/libMoltenVK.dylib"
+    )
+
     target_link_libraries(utilities_host PRIVATE "-framework Cocoa" "-framework QuartzCore" "-framework Metal")
+    target_link_libraries(utilities_host PRIVATE VulkanSDK::Vulkan)
+    
+    set_target_properties(utilities_host PROPERTIES
+        BUILD_RPATH "@loader_path"
+    )
+
+    add_custom_command(TARGET utilities_host POST_BUILD
+        COMMAND install_name_tool -delete_rpath "${VULKAN_SDK_LIB_DIR}" "$<TARGET_FILE:utilities_host>" 2>/dev/null || true
+    )
+
+    foreach(vulkanBinary IN LISTS VULKAN_SDK_RUNTIME_LIBS)
+        add_custom_command(TARGET utilities_host POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${vulkanBinary}"
+                "$<TARGET_FILE_DIR:utilities_host>"
+        )
+    endforeach()
+
+    install(FILES ${VULKAN_SDK_RUNTIME_LIBS} DESTINATION bin)
 endif()
 
 set_target_properties(utilities_host PROPERTIES OUTPUT_NAME "utilities_host")
