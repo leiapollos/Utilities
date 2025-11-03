@@ -6,7 +6,6 @@
 #include "nstl/base/base_include.hpp"
 #include "nstl/base/base_log.hpp"
 #include "nstl/base/base_job_system.hpp"
-#include "nstl/base/base_math.hpp"
 #include "app_state.hpp"
 
 #include <math.h>

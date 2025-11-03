@@ -7,8 +7,14 @@
 #include "nstl/os/os_include.hpp"
 #include "app_interface.hpp"
 
+#define RENDERER_BACKEND_VULKAN
+#include "nstl/renderer/renderer_include.hpp"
+
+#include "nstl/base/base_include.cpp"
+#include "nstl/os/os_include.cpp"
+#include "nstl/renderer/renderer_include.cpp"
+
 #include <dlfcn.h>
-#include <vulkan/vulkan.h>
 
 #define APP_MODULE_SOURCE_RELATIVE "hot/utilities_app.dylib"
 #define APP_SOURCE_PATH "app.cpp"
@@ -51,6 +57,7 @@ struct HostState {
     AppHostContext hostContext;
     AppPlatform platformAPI;
     AppInput input;
+    Renderer renderer;
     B32 graphicsInitialized;
     OS_GraphicsEvent eventBuffer[HOST_EVENT_CAP];
     U64 moduleTimestamp;
@@ -152,15 +159,10 @@ static B32 host_ensure_graphics_initialized(HostState* state) {
         return 0;
     }
 
-    U32 vulkanVersion = 0;
-    VkResult result = vkEnumerateInstanceVersion(&vulkanVersion);
-    if (result == VK_SUCCESS) {
-        U32 major = VK_VERSION_MAJOR(vulkanVersion);
-        U32 minor = VK_VERSION_MINOR(vulkanVersion);
-        U32 patch = VK_VERSION_PATCH(vulkanVersion);
-        LOG_INFO("host", "Vulkan API version: {}.{}.{}", major, minor, patch);
-    } else {
-        LOG_ERROR("host", "Failed to enumerate Vulkan version: {}", result);
+    MEMSET(&state->renderer, 0, sizeof(state->renderer));
+    if (!renderer_init(state->programArena, &state->renderer)) {
+        LOG_ERROR("host", "Failed to initialize renderer");
+        return 0;
     }
 
     state->graphicsInitialized = 1;
@@ -543,6 +545,7 @@ int host_main_loop(int argc, char** argv) {
 
     host_unload_module(&state, 1, 0);
     if (state.graphicsInitialized) {
+        renderer_shutdown(&state.renderer);
         OS_graphics_shutdown();
         state.graphicsInitialized = 0;
     }
