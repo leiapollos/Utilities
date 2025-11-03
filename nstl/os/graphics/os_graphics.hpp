@@ -109,14 +109,14 @@ struct OS_WindowSurfaceInfo {
     void* metalLayerPtr;
 };
 
-static B32 OS_graphics_init();
-static void OS_graphics_shutdown();
+B32 OS_graphics_init();
+void OS_graphics_shutdown();
 
-static OS_WindowHandle OS_window_create(OS_WindowDesc desc);
-static void OS_window_destroy(OS_WindowHandle window);
-static void* OS_window_get_native_handle(OS_WindowHandle window);
-static B32 OS_window_is_open(OS_WindowHandle window);
-static OS_WindowSurfaceInfo OS_window_get_surface_info(OS_WindowHandle window);
-static U32 OS_graphics_poll_events(OS_GraphicsEvent* outEvents, U32 maxEvents);
-static B32 OS_graphics_pump_events();
+OS_WindowHandle OS_window_create(OS_WindowDesc desc);
+void OS_window_destroy(OS_WindowHandle window);
+void* OS_window_get_native_handle(OS_WindowHandle window);
+B32 OS_window_is_open(OS_WindowHandle window);
+OS_WindowSurfaceInfo OS_window_get_surface_info(OS_WindowHandle window);
+U32 OS_graphics_poll_events(OS_GraphicsEvent* outEvents, U32 maxEvents);
+B32 OS_graphics_pump_events();
 

@@ -4,6 +4,7 @@
 
 
 void base_entry_point(int argc, char** argv) {
+    thread_context_alloc();
     log_init();
     profiler_initialize();
 
@@ -11,6 +12,7 @@ void base_entry_point(int argc, char** argv) {
 
     profiler_print_report();
     profiler_shutdown();
+    thread_context_release();
 }
 
 void thread_entry_point(void (*func)(void* params), void* args) {

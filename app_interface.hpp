@@ -5,25 +5,68 @@
 #pragma once
 
 #include "nstl/base/base_include.hpp"
+#include "nstl/os/core/os_core.hpp"
+#include "nstl/os/graphics/os_graphics.hpp"
 
-#define APP_INTERFACE_VERSION 2u
+#define APP_INTERFACE_VERSION 3u
+
+#define PLATFORM_OS_FUNCTIONS(X) \
+    X(OS_graphics_init) \
+    X(OS_graphics_shutdown) \
+    X(OS_graphics_pump_events) \
+    X(OS_graphics_poll_events) \
+    X(OS_window_create) \
+    X(OS_window_destroy) \
+    X(OS_window_is_open) \
+    X(OS_window_get_surface_info) \
+    X(OS_reserve) \
+    X(OS_commit) \
+    X(OS_decommit) \
+    X(OS_release) \
+    X(OS_get_time_microseconds) \
+    X(OS_get_time_nanoseconds) \
+    X(OS_sleep_milliseconds) \
+    X(OS_thread_create) \
+    X(OS_thread_join) \
+    X(OS_thread_detach) \
+    X(OS_thread_yield) \
+    X(OS_cpu_pause) \
+    X(OS_get_thread_id_u32) \
+    X(OS_mutex_create) \
+    X(OS_mutex_destroy) \
+    X(OS_mutex_lock) \
+    X(OS_mutex_unlock) \
+    X(OS_condition_variable_create) \
+    X(OS_condition_variable_destroy) \
+    X(OS_condition_variable_wait) \
+    X(OS_condition_variable_signal) \
+    X(OS_condition_variable_broadcast) \
+    X(OS_barrier_create) \
+    X(OS_barrier_destroy) \
+    X(OS_barrier_wait) \
+    X(OS_get_system_info) \
+    X(OS_abort)
+
+struct PlatformOSApi {
+#define PLATFORM_DECLARE_OS_FN(name) decltype(&name) name;
+    PLATFORM_OS_FUNCTIONS(PLATFORM_DECLARE_OS_FN)
+#undef PLATFORM_DECLARE_OS_FN
+};
+
+#define PLATFORM_OS_FN(platform, name) ((platform)->os.name)
+#define PLATFORM_OS_CALL(platform, name, ...) ((platform)->os.name(__VA_ARGS__))
 
 struct AppHostContext {
     B32 shouldQuit;
     U32 reloadCount;
-    B32 windowIsOpen;
     void* userData;
     U32 logicalCoreCount;
 };
 
-struct AppFrameInput {
-    B32 windowCloseRequested;
-    B32 windowResized;
-    U32 newWidth;
-    U32 newHeight;
-    B32 mouseMoved;
-    F32 mouseX;
-    F32 mouseY;
+struct AppInput {
+    F32 deltaSeconds;
+    const OS_GraphicsEvent* events;
+    U32 eventCount;
 };
 
 struct AppWindowDesc {
@@ -32,25 +75,9 @@ struct AppWindowDesc {
     const char* title;
 };
 
-struct AppWindowState {
-    B32 isOpen;
-    U32 width;
-    U32 height;
-};
-
-struct AppWindowCommand {
-    B32 requestOpen;
-    B32 requestClose;
-    B32 requestFocus;
-    B32 requestSize;
-    B32 requestTitle;
-    AppWindowDesc desc;
-};
-
 struct AppPlatform {
     void* userData;
-    void (*issue_window_command)(void* userData, const AppWindowCommand* command);
-    void (*request_quit)(void* userData);
+    PlatformOSApi os;
 };
 
 struct AppMemory {
@@ -60,18 +87,6 @@ struct AppMemory {
     void* transientStorage;
     U64 transientStorageSize;
     Arena* programArena;
-    AppPlatform* platform;
-    AppHostContext* hostContext;
-    const AppFrameInput* frameInput;
-    AppWindowState* windowState;
-};
-
-struct AppRuntime {
-    AppMemory* memory;
-    AppPlatform* platform;
-    AppHostContext* host;
-    const AppFrameInput* input;
-    AppWindowState* window;
 };
 
 struct AppModuleExports {
@@ -79,10 +94,10 @@ struct AppModuleExports {
     U64 requiredPermanentMemory;
     U64 requiredTransientMemory;
     U64 requiredProgramArenaSize;
-    B32 (*initialize)(AppRuntime* runtime);
-    void (*reload)(AppRuntime* runtime);
-    void (*tick)(AppRuntime* runtime, F32 deltaSeconds);
-    void (*shutdown)(AppRuntime* runtime);
+    B32 (*initialize)(AppPlatform* platform, AppMemory* memory, AppHostContext* host);
+    void (*reload)(AppPlatform* platform, AppMemory* memory, AppHostContext* host);
+    void (*update)(AppPlatform* platform, AppMemory* memory, AppHostContext* host, const AppInput* input, F32 deltaSeconds);
+    void (*shutdown)(AppPlatform* platform, AppMemory* memory, AppHostContext* host);
 };
 
 #if defined(__clang__) || defined(__GNUC__)

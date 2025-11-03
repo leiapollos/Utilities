@@ -400,7 +400,7 @@ static void free_OS_graphics_entity(OS_MACOS_GraphicsEntity* entity) {
 // ////////////////////////
 // Graphics System
 
-static B32 OS_graphics_init() {
+B32 OS_graphics_init() {
     if (g_OS_MacOSGraphicsState.initialized) {
         return 1;
     }
@@ -429,12 +429,19 @@ static B32 OS_graphics_init() {
     return 1;
 }
 
-static void OS_graphics_shutdown() {
+void OS_graphics_shutdown() {
     if (!g_OS_MacOSGraphicsState.initialized) {
         return;
     }
 
     @autoreleasepool {
+        // Ensure all active graphics entities are released before shutdown.
+        while (g_OS_MacOSGraphicsState.activeEntities) {
+            OS_MACOS_GraphicsEntity* entity = g_OS_MacOSGraphicsState.activeEntities;
+            OS_WindowHandle handle = os_make_window_handle_from_entity(entity);
+            OS_window_destroy(handle);
+        }
+
         ASSERT_DEBUG(g_OS_MacOSGraphicsState.activeEntities == 0);
 
         if (g_OS_MacOSGraphicsState.entityArena) {
@@ -456,7 +463,7 @@ static void OS_graphics_shutdown() {
 // ////////////////////////
 // Window Management
 
-static OS_WindowHandle OS_window_create(OS_WindowDesc desc) {
+OS_WindowHandle OS_window_create(OS_WindowDesc desc) {
     if (!g_OS_MacOSGraphicsState.initialized) {
         OS_WindowHandle empty = {0};
         return empty;
@@ -510,7 +517,7 @@ static OS_WindowHandle OS_window_create(OS_WindowDesc desc) {
     return handle;
 }
 
-static void OS_window_destroy(OS_WindowHandle windowHandle) {
+void OS_window_destroy(OS_WindowHandle windowHandle) {
     if (!windowHandle.handle) {
         return;
     }
@@ -555,7 +562,7 @@ static void OS_window_destroy(OS_WindowHandle windowHandle) {
     free_OS_graphics_entity(entity);
 }
 
-static void* OS_window_get_native_handle(OS_WindowHandle windowHandle) {
+void* OS_window_get_native_handle(OS_WindowHandle windowHandle) {
     if (!windowHandle.handle) {
         return 0;
     }
@@ -569,7 +576,7 @@ static void* OS_window_get_native_handle(OS_WindowHandle windowHandle) {
     return (__bridge void*) contentView;
 }
 
-static OS_WindowSurfaceInfo OS_window_get_surface_info(OS_WindowHandle windowHandle) {
+OS_WindowSurfaceInfo OS_window_get_surface_info(OS_WindowHandle windowHandle) {
     OS_WindowSurfaceInfo info = {};
 
     if (!windowHandle.handle) {
@@ -600,7 +607,7 @@ static OS_WindowSurfaceInfo OS_window_get_surface_info(OS_WindowHandle windowHan
     return info;
 }
 
-static B32 OS_window_is_open(OS_WindowHandle windowHandle) {
+B32 OS_window_is_open(OS_WindowHandle windowHandle) {
     if (!windowHandle.handle) {
         return 0;
     }
@@ -620,7 +627,7 @@ static B32 OS_window_is_open(OS_WindowHandle windowHandle) {
     }
 }
 
-static U32 OS_graphics_poll_events(OS_GraphicsEvent* outEvents, U32 maxEvents) {
+U32 OS_graphics_poll_events(OS_GraphicsEvent* outEvents, U32 maxEvents) {
     if (!outEvents || maxEvents == 0) {
         return 0;
     }
@@ -653,7 +660,7 @@ static U32 OS_graphics_poll_events(OS_GraphicsEvent* outEvents, U32 maxEvents) {
     return count;
 }
 
-static B32 OS_graphics_pump_events() {
+B32 OS_graphics_pump_events() {
     if (!g_OS_MacOSGraphicsState.initialized) {
         return 0;
     }

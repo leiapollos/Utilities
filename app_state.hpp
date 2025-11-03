@@ -11,12 +11,9 @@ struct AppTestsState;
 struct AppCoreState {
     U32 version;
     AppWindowDesc desiredWindow;
+    OS_WindowHandle windowHandle;
     U64 frameCounter;
     U32 reloadCount;
-    B32 keepWindowVisible;
-    B32 mouseMovedLogged;
-    F32 lastMouseX;
-    F32 lastMouseY;
 
     JobSystem* jobSystem;
     U32 workerCount;
