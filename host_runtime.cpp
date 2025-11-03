@@ -14,6 +14,7 @@
 #include <stdio.h>
 
 #define APP_MODULE_SOURCE_PATH "hot/utilities_app.dylib"
+#define APP_SOURCE_PATH "app.cpp"
 #define HOT_MODULE_NAME_PATTERN "hot/utilities_app_loaded_%llu.dylib"
 #define HOT_MODULE_PATH_MAX 256
 #define HOT_MODULE_HISTORY_MAX 32
@@ -51,11 +52,13 @@ struct HostState {
     OS_WindowDesc windowDesc;
     B32 graphicsInitialized;
     U64 moduleTimestamp;
+    U64 sourceTimestamp;
     U64 moduleGeneration;
     char currentModulePath[HOT_MODULE_PATH_MAX];
     void* retiredModuleHandles[HOT_MODULE_HISTORY_MAX];
     char retiredModulePaths[HOT_MODULE_HISTORY_MAX][HOT_MODULE_PATH_MAX];
     U32 retiredModuleCount;
+    B32 buildFailed;
 };
 
 static U64 host_get_file_timestamp(const char* path) {
@@ -631,7 +634,36 @@ static void host_unload_module(HostState* state, B32 callShutdown, B32 retainHan
     state->currentModulePath[0] = '\0';
 }
 
+static void host_try_build_module(HostState* state) {
+    U64 sourceTimestamp = host_get_file_timestamp(APP_SOURCE_PATH);
+    if (sourceTimestamp == 0) {
+        return;
+    }
+
+    if (sourceTimestamp <= state->sourceTimestamp) {
+        return;
+    }
+
+    LOG_INFO("host", "Detected source change in '{}' -> rebuilding module", APP_SOURCE_PATH);
+    int buildResult = system("sh build.sh debug module");
+    if (buildResult != 0) {
+        LOG_ERROR("host", "Module rebuild failed (exit code {})", buildResult);
+        state->sourceTimestamp = sourceTimestamp;
+        state->buildFailed = 1;
+        return;
+    } else {
+        state->sourceTimestamp = sourceTimestamp;
+        state->buildFailed = 0;
+    }
+}
+
 static void host_try_reload_module(HostState* state) {
+    host_try_build_module(state);
+
+    if (state->buildFailed) {
+        return;
+    }
+
     U64 timestamp = host_get_file_timestamp(APP_MODULE_SOURCE_PATH);
     if (timestamp == 0) {
         return;
@@ -668,6 +700,8 @@ int host_main_loop(int argc, char** argv) {
 
     state.moduleGeneration = 0;
     state.currentModulePath[0] = '\0';
+    state.sourceTimestamp = host_get_file_timestamp(APP_SOURCE_PATH);
+    state.buildFailed = 0;
 
     if (!host_load_module(&state, 0)) {
         LOG_ERROR("host", "Initial module load failed");

@@ -6,6 +6,8 @@
 
 #include "app_interface.hpp"
 
+struct AppTestsState;
+
 struct AppCoreState {
     U32 version;
     AppWindowDesc desiredWindow;
@@ -18,5 +20,6 @@ struct AppCoreState {
 
     JobSystem* jobSystem;
     U32 workerCount;
+    AppTestsState* tests;
 };
 

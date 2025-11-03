@@ -3,14 +3,23 @@
 //
 
 #include "nstl/base/base_include.hpp"
+#include "nstl/os/os_include.hpp"
+#include "nstl/base/base_include.cpp"
+// #include "nstl/os/os_include.cpp"
+
+static void entry_point(void) {
+}
+
 #include "app_interface.hpp"
+#include "app_tests.hpp"
 #include "app_state.hpp"
 
-#define APP_PERMANENT_STORAGE_SIZE MB(64)
-#define APP_CORE_STATE_VERSION 1u
+#include "app_tests.cpp"
+
+#define APP_CORE_STATE_VERSION 2u
 
 static U64 app_total_permanent_size(void) {
-    return sizeof(AppCoreState);
+    return sizeof(AppCoreState) + app_tests_permanent_size();
 }
 
 static AppCoreState* app_get_state(AppMemory* memory) {
@@ -18,6 +27,18 @@ static AppCoreState* app_get_state(AppMemory* memory) {
     ASSERT_DEBUG(memory->permanentStorage != 0);
     ASSERT_DEBUG(memory->permanentStorageSize >= app_total_permanent_size());
     return (AppCoreState*) memory->permanentStorage;
+}
+
+static void app_assign_tests_state(AppCoreState* state) {
+    if (!state) {
+        return;
+    }
+    U8* base = (U8*) state;
+    state->tests = (AppTestsState*) (base + sizeof(AppCoreState));
+}
+
+static AppTestsState* app_get_tests(AppCoreState* state) {
+    return state ? state->tests : 0;
 }
 
 static U32 app_select_worker_count(const AppRuntime* runtime) {
@@ -46,6 +67,8 @@ static B32 app_initialize(AppRuntime* runtime) {
     }
 
     state = app_get_state(memory);
+    app_assign_tests_state(state);
+    AppTestsState* tests = app_get_tests(state);
 
     if (needsReset) {
         state->version = APP_CORE_STATE_VERSION;
@@ -68,6 +91,10 @@ static B32 app_initialize(AppRuntime* runtime) {
         } else {
             LOG_INFO("jobs", "Job system ready (workers={})", state->workerCount);
         }
+    }
+
+    if (needsReset) {
+        app_tests_initialize(runtime, state, tests);
     }
 
     state->keepWindowVisible = 1;
@@ -93,6 +120,9 @@ static void app_reload(AppRuntime* runtime) {
     }
 
     AppCoreState* state = app_get_state(runtime->memory);
+    app_assign_tests_state(state);
+    AppTestsState* tests = app_get_tests(state);
+
     state->desiredWindow.title = "Utilities Hot Reload";
     state->reloadCount += 1;
     if (runtime->memory->hostContext) {
@@ -109,6 +139,7 @@ static void app_reload(AppRuntime* runtime) {
         }
     }
 
+    app_tests_reload(runtime, state, tests);
     if (runtime->memory->platform && runtime->memory->platform->issue_window_command) {
         AppWindowCommand command = {};
         command.requestTitle = 1;
@@ -123,7 +154,10 @@ static void app_tick(AppRuntime* runtime, F32 deltaSeconds) {
     }
 
     AppCoreState* state = app_get_state(runtime->memory);
+    AppTestsState* tests = app_get_tests(state);
+
     state->frameCounter += 1ull;
+    app_tests_tick(runtime, state, tests, deltaSeconds);
 }
 
 static void app_shutdown(AppRuntime* runtime) {
@@ -132,6 +166,9 @@ static void app_shutdown(AppRuntime* runtime) {
     }
 
     AppCoreState* state = app_get_state(runtime->memory);
+    AppTestsState* tests = app_get_tests(state);
+
+    app_tests_shutdown(runtime, state, tests);
 
     if (state->jobSystem) {
         job_system_destroy(state->jobSystem);
@@ -145,8 +182,6 @@ static void app_shutdown(AppRuntime* runtime) {
         runtime->memory->platform->issue_window_command(runtime->memory->platform->userData, &command);
         state->keepWindowVisible = 0;
     }
-
-    LOG_INFO("app", "App shutdown");
 }
 
 APP_MODULE_EXPORT B32 app_get_entry_points(AppModuleExports* outExports) {
