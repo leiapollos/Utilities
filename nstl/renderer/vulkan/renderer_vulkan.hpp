@@ -104,3 +104,5 @@ static void vulkan_destroy_frames(RendererVulkan* vulkan);
 
 static B32 vulkan_create_debug_messenger(Arena* arena, RendererVulkan* vulkan);
 static void vulkan_destroy_debug_messenger(RendererVulkan* vulkan);
+
+void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, Vec3F32 color);

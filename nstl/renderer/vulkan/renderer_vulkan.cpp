@@ -587,8 +587,9 @@ static B32 vulkan_create_surface(OS_WindowHandle window, RendererVulkan* vulkan)
     }
 
     OS_WindowSurfaceInfo surfaceInfo = OS_window_get_surface_info(window);
-    if (!surfaceInfo.viewPtr) {
-        LOG_ERROR(VULKAN_LOG_DOMAIN, "Window does not expose a Metal view for surface creation");
+    void* surfacePointer = surfaceInfo.metalLayerPtr ? surfaceInfo.metalLayerPtr : surfaceInfo.viewPtr;
+    if (!surfacePointer) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Window does not expose a Metal layer/view for surface creation");
         return 0;
     }
 
@@ -603,7 +604,7 @@ static B32 vulkan_create_surface(OS_WindowHandle window, RendererVulkan* vulkan)
 
     VkMacOSSurfaceCreateInfoMVK createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_MACOS_SURFACE_CREATE_INFO_MVK;
-    createInfo.pView = surfaceInfo.viewPtr;
+    createInfo.pView = surfacePointer;
 
     VK_CHECK(createSurface(vulkan->instance, &createInfo, 0, &vulkan->surface));
     LOG_DEBUG(VULKAN_LOG_DOMAIN, "Created macOS surface");
@@ -949,3 +950,166 @@ static void vulkan_destroy_frames(RendererVulkan* vulkan) {
     LOG_DEBUG(VULKAN_LOG_DOMAIN, "Destroyed all frame command pools, buffers, and sync structures");
 }
 
+void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, Vec3F32 color) {
+    if (!vulkan || !window.handle) {
+        return;
+    }
+
+    if (vulkan->device == VK_NULL_HANDLE || vulkan->graphicsQueue == VK_NULL_HANDLE) {
+        return;
+    }
+
+    if (vulkan->swapchain.handle == VK_NULL_HANDLE) {
+        if (!vulkan_create_swapchain(vulkan, window)) {
+            return;
+        }
+    }
+
+    RendererVulkanFrame* frame = &vulkan->frames[vulkan->currentFrameIndex];
+
+    VkResult waitResult = vkWaitForFences(vulkan->device, 1, &frame->renderFence, VK_TRUE, UINT64_MAX);
+    if (waitResult != VK_SUCCESS) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to wait for frame fence: {}", waitResult);
+        return;
+    }
+
+    VK_CHECK(vkResetFences(vulkan->device, 1, &frame->renderFence));
+
+    U32 imageIndex = 0u;
+    VkResult acquireResult = vkAcquireNextImageKHR(vulkan->device,
+                                                   vulkan->swapchain.handle,
+                                                   UINT64_MAX,
+                                                   frame->swapchainSemaphore,
+                                                   VK_NULL_HANDLE,
+                                                   &imageIndex);
+
+    if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR) {
+        LOG_WARNING(VULKAN_LOG_DOMAIN, "Swapchain out of date; skipping frame");
+        vulkan_destroy_swapchain(vulkan);
+        return;
+    } else if (acquireResult != VK_SUCCESS && acquireResult != VK_SUBOPTIMAL_KHR) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to acquire swapchain image: {}", acquireResult);
+        return;
+    }
+
+    frame->imageIndex = imageIndex;
+
+    if (imageIndex >= vulkan->swapchain.imageCount) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Swapchain returned invalid image index {} (count {})",
+                  imageIndex, vulkan->swapchain.imageCount);
+        return;
+    }
+
+    RendererVulkanSwapchainImage* image = &vulkan->swapchain.images[imageIndex];
+
+    VK_CHECK(vkResetCommandPool(vulkan->device, frame->commandPool, 0));
+
+    VkCommandBufferBeginInfo beginInfo = {};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    VK_CHECK(vkBeginCommandBuffer(frame->commandBuffer, &beginInfo));
+
+    VkImageSubresourceRange subresourceRange = {};
+    subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    subresourceRange.baseMipLevel = 0;
+    subresourceRange.levelCount = 1;
+    subresourceRange.baseArrayLayer = 0;
+    subresourceRange.layerCount = 1;
+
+    if (image->layout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+        VkImageMemoryBarrier toTransfer = {};
+        toTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toTransfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toTransfer.image = image->handle;
+        toTransfer.subresourceRange = subresourceRange;
+        toTransfer.oldLayout = image->layout;
+        toTransfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        toTransfer.srcAccessMask = (image->layout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR) ? VK_ACCESS_MEMORY_READ_BIT : 0;
+        toTransfer.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+        VkPipelineStageFlags srcStage = (image->layout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
+                                        ? VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT
+                                        : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+
+        vkCmdPipelineBarrier(frame->commandBuffer,
+                             srcStage,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0,
+                             0, 0,
+                             0, 0,
+                             1, &toTransfer);
+
+        image->layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    }
+
+    VkClearColorValue clearColor = {{color.r, color.g, color.b, 1.0f}};
+    vkCmdClearColorImage(frame->commandBuffer,
+                         image->handle,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                         &clearColor,
+                         1,
+                         &subresourceRange);
+
+    VkImageMemoryBarrier toPresent = {};
+    toPresent.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toPresent.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toPresent.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toPresent.image = image->handle;
+    toPresent.subresourceRange = subresourceRange;
+    toPresent.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    toPresent.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toPresent.dstAccessMask = 0;
+
+    vkCmdPipelineBarrier(frame->commandBuffer,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                         0,
+                         0, 0,
+                         0, 0,
+                         1, &toPresent);
+
+    VK_CHECK(vkEndCommandBuffer(frame->commandBuffer));
+
+    image->layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+
+    VkSubmitInfo submitInfo = {};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.waitSemaphoreCount = 1;
+    submitInfo.pWaitSemaphores = &frame->swapchainSemaphore;
+    submitInfo.pWaitDstStageMask = &waitStage;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &frame->commandBuffer;
+    submitInfo.signalSemaphoreCount = 1;
+    submitInfo.pSignalSemaphores = &frame->renderSemaphore;
+
+    VkResult submitResult = vkQueueSubmit(vulkan->graphicsQueue, 1, &submitInfo, frame->renderFence);
+    if (submitResult != VK_SUCCESS) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "vkQueueSubmit failed: {}", submitResult);
+        return;
+    }
+
+    VkPresentInfoKHR presentInfo = {};
+    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    presentInfo.waitSemaphoreCount = 1;
+    presentInfo.pWaitSemaphores = &frame->renderSemaphore;
+    presentInfo.swapchainCount = 1;
+    presentInfo.pSwapchains = &vulkan->swapchain.handle;
+    presentInfo.pImageIndices = &frame->imageIndex;
+
+    VkResult presentResult = vkQueuePresentKHR(vulkan->graphicsQueue, &presentInfo);
+    if (presentResult == VK_ERROR_OUT_OF_DATE_KHR) {
+        LOG_WARNING(VULKAN_LOG_DOMAIN, "Swapchain became out of date during present");
+        vulkan_destroy_swapchain(vulkan);
+    } else if (presentResult == VK_SUBOPTIMAL_KHR) {
+        LOG_INFO(VULKAN_LOG_DOMAIN, "Swapchain reported SUBOPTIMAL during present");
+    } else if (presentResult != VK_SUCCESS) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "vkQueuePresentKHR failed: {}", presentResult);
+    }
+
+    vulkan->currentFrameIndex = (vulkan->currentFrameIndex + 1u) % VULKAN_FRAME_OVERLAP;
+}
