@@ -16,6 +16,7 @@
 #define APP_MODULE_SOURCE_PATH "hot/utilities_app.dylib"
 #define HOT_MODULE_NAME_PATTERN "hot/utilities_app_loaded_%llu.dylib"
 #define HOT_MODULE_PATH_MAX 256
+#define HOT_MODULE_HISTORY_MAX 32
 
 typedef B32 (*AppGetEntryPointsProc)(AppModuleExports* outExports);
 
@@ -52,6 +53,9 @@ struct HostState {
     U64 moduleTimestamp;
     U64 moduleGeneration;
     char currentModulePath[HOT_MODULE_PATH_MAX];
+    void* retiredModuleHandles[HOT_MODULE_HISTORY_MAX];
+    char retiredModulePaths[HOT_MODULE_HISTORY_MAX][HOT_MODULE_PATH_MAX];
+    U32 retiredModuleCount;
 };
 
 static U64 host_get_file_timestamp(const char* path) {
@@ -72,6 +76,40 @@ static U64 host_get_file_timestamp(const char* path) {
 #endif
 
     return seconds * 1000000000ull + nanos;
+}
+
+static void host_record_retired_module(HostState* state, void* handle, const char* path) {
+    if (!handle || !state) {
+        return;
+    }
+
+    if (state->retiredModuleCount >= HOT_MODULE_HISTORY_MAX) {
+        void* oldHandle = state->retiredModuleHandles[0];
+        if (oldHandle) {
+            dlclose(oldHandle);
+        }
+        if (state->retiredModulePaths[0][0] != '\0') {
+            unlink(state->retiredModulePaths[0]);
+        }
+        for (U32 i = 1; i < state->retiredModuleCount; ++i) {
+            state->retiredModuleHandles[i - 1] = state->retiredModuleHandles[i];
+            MEMMOVE(state->retiredModulePaths[i - 1], state->retiredModulePaths[i], HOT_MODULE_PATH_MAX);
+        }
+        state->retiredModuleCount -= 1;
+    }
+
+    state->retiredModuleHandles[state->retiredModuleCount] = handle;
+    if (path && path[0] != '\0') {
+        U64 len = C_STR_LEN(path);
+        if (len >= HOT_MODULE_PATH_MAX) {
+            len = HOT_MODULE_PATH_MAX - 1;
+        }
+        MEMMOVE(state->retiredModulePaths[state->retiredModuleCount], path, len);
+        state->retiredModulePaths[state->retiredModuleCount][len] = '\0';
+    } else {
+        state->retiredModulePaths[state->retiredModuleCount][0] = '\0';
+    }
+    state->retiredModuleCount += 1;
 }
 
 static B32 host_ensure_graphics_initialized(HostState* state) {
@@ -578,9 +616,10 @@ static void host_unload_module(HostState* state, B32 callShutdown, B32 retainHan
 
     if (callShutdown && state->module.isValid && state->module.exports.shutdown) {
         state->module.exports.shutdown(&state->runtime);
+        host_flush_window_command(state);
     }
-
     if (retainHandle) {
+        host_record_retired_module(state, state->module.handle, state->currentModulePath);
     } else {
         dlclose(state->module.handle);
         if (state->currentModulePath[0] != '\0') {
@@ -667,6 +706,18 @@ int host_main_loop(int argc, char** argv) {
         OS_graphics_shutdown();
         state.graphicsInitialized = 0;
     }
+
+    for (U32 i = 0; i < state.retiredModuleCount; ++i) {
+        if (state.retiredModuleHandles[i]) {
+            dlclose(state.retiredModuleHandles[i]);
+            state.retiredModuleHandles[i] = 0;
+        }
+        if (state.retiredModulePaths[i][0] != '\0') {
+            unlink(state.retiredModulePaths[i]);
+            state.retiredModulePaths[i][0] = '\0';
+        }
+    }
+    state.retiredModuleCount = 0;
 
     host_release_memory(&state);
 
