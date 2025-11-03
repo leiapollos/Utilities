@@ -28,6 +28,9 @@ static const U32 VULKAN_FRAME_OVERLAP = 2u;
 struct RendererVulkanFrame {
     VkCommandPool commandPool;
     VkCommandBuffer mainCommandBuffer;
+    VkSemaphore swapchainSemaphore;
+    VkSemaphore renderSemaphore;
+    VkFence renderFence;
 };
 
 struct RendererVulkan {
@@ -64,6 +67,7 @@ static B32 vulkan_init_device_queues(RendererVulkan* vulkan);
 static void vulkan_destroy_device(RendererVulkan* vulkan);
 
 static B32 vulkan_create_frames(RendererVulkan* vulkan);
+static B32 vulkan_create_sync_structures(RendererVulkan* vulkan);
 static void vulkan_destroy_frames(RendererVulkan* vulkan);
 
 static B32 vulkan_create_debug_messenger(Arena* arena, RendererVulkan* vulkan);

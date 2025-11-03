@@ -29,6 +29,9 @@ B32 renderer_init(Arena* arena, Renderer* renderer) {
     for (U32 i = 0; i < VULKAN_FRAME_OVERLAP; ++i) {
         vulkan->frames[i].commandPool = VK_NULL_HANDLE;
         vulkan->frames[i].mainCommandBuffer = VK_NULL_HANDLE;
+        vulkan->frames[i].swapchainSemaphore = VK_NULL_HANDLE;
+        vulkan->frames[i].renderSemaphore = VK_NULL_HANDLE;
+        vulkan->frames[i].renderFence = VK_NULL_HANDLE;
     }
 
     if (!vulkan_create_instance(arena, vulkan)) {
@@ -548,7 +551,37 @@ static B32 vulkan_create_frames(RendererVulkan* vulkan) {
         LOG_DEBUG(VULKAN_LOG_DOMAIN, "Created frame {} command pool and command buffer", i);
     }
 
+    if (!vulkan_create_sync_structures(vulkan)) {
+        return 0;
+    }
+
     LOG_DEBUG(VULKAN_LOG_DOMAIN, "Created {} frames for frame overlap", VULKAN_FRAME_OVERLAP);
+    return 1;
+}
+
+static B32 vulkan_create_sync_structures(RendererVulkan* vulkan) {
+    if (!vulkan || vulkan->device == VK_NULL_HANDLE) {
+        return 0;
+    }
+
+    VkSemaphoreCreateInfo semaphoreInfo = {};
+    semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+    VkFenceCreateInfo fenceInfo = {};
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+    for (U32 i = 0; i < VULKAN_FRAME_OVERLAP; ++i) {
+        RendererVulkanFrame* frame = &vulkan->frames[i];
+
+        VK_CHECK(vkCreateSemaphore(vulkan->device, &semaphoreInfo, 0, &frame->swapchainSemaphore));
+        VK_CHECK(vkCreateSemaphore(vulkan->device, &semaphoreInfo, 0, &frame->renderSemaphore));
+        VK_CHECK(vkCreateFence(vulkan->device, &fenceInfo, 0, &frame->renderFence));
+
+        LOG_DEBUG(VULKAN_LOG_DOMAIN, "Created sync structures for frame {}", i);
+    }
+
+    LOG_DEBUG(VULKAN_LOG_DOMAIN, "Created sync structures for all frames");
     return 1;
 }
 
@@ -560,6 +593,18 @@ static void vulkan_destroy_frames(RendererVulkan* vulkan) {
     for (U32 i = 0; i < VULKAN_FRAME_OVERLAP; ++i) {
         RendererVulkanFrame* frame = &vulkan->frames[i];
 
+        if (frame->renderFence != VK_NULL_HANDLE) {
+            vkDestroyFence(vulkan->device, frame->renderFence, 0);
+            frame->renderFence = VK_NULL_HANDLE;
+        }
+        if (frame->renderSemaphore != VK_NULL_HANDLE) {
+            vkDestroySemaphore(vulkan->device, frame->renderSemaphore, 0);
+            frame->renderSemaphore = VK_NULL_HANDLE;
+        }
+        if (frame->swapchainSemaphore != VK_NULL_HANDLE) {
+            vkDestroySemaphore(vulkan->device, frame->swapchainSemaphore, 0);
+            frame->swapchainSemaphore = VK_NULL_HANDLE;
+        }
         if (frame->commandPool != VK_NULL_HANDLE) {
             vkDestroyCommandPool(vulkan->device, frame->commandPool, 0);
             frame->commandPool = VK_NULL_HANDLE;
@@ -568,6 +613,6 @@ static void vulkan_destroy_frames(RendererVulkan* vulkan) {
     }
 
     vulkan->currentFrameIndex = 0u;
-    LOG_DEBUG(VULKAN_LOG_DOMAIN, "Destroyed all frame command pools and buffers");
+    LOG_DEBUG(VULKAN_LOG_DOMAIN, "Destroyed all frame command pools, buffers, and sync structures");
 }
 
