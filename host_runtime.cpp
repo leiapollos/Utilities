@@ -8,9 +8,6 @@
 #include "app_interface.hpp"
 
 #include <dlfcn.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <stdio.h>
 
 #define APP_MODULE_SOURCE_RELATIVE "hot/utilities_app.dylib"
 #define APP_SOURCE_PATH "app.cpp"
