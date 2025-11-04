@@ -13,12 +13,12 @@
 // Assert
 
 void debug_break() {
-#if defined(_MSC_VER)
+#if defined(COMPILER_MSVC)
     __debugbreak();
-#elif defined(__clang__) || defined(__GNUC__)
+#elif defined(COMPILER_CLANG) || defined(COMPILER_GCC)
     __builtin_trap();
 #else
-    std::abort();
+#error "Unsupported compiler"
 #endif
 }
 

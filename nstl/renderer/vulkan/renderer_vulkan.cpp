@@ -35,6 +35,7 @@ B32 renderer_init(Arena* arena, Renderer* renderer) {
     vulkan->swapchain.extent = {};
     vulkan->swapchainImageIndex = 0u;
     vulkan->currentFrameIndex = 0u;
+    vulkan->allocator = 0;
     
     for (U32 i = 0; i < VULKAN_FRAME_OVERLAP; ++i) {
         vulkan->frames[i].commandPool = VK_NULL_HANDLE;
@@ -54,6 +55,10 @@ B32 renderer_init(Arena* arena, Renderer* renderer) {
 
     if (!vulkan_init_device_queues(vulkan)) {
         ASSERT_ALWAYS(false && "Failed to initialize Vulkan queues");
+    }
+
+    if (!vulkan_create_allocator(vulkan)) {
+        ASSERT_ALWAYS(false && "Failed to create VMA allocator");
     }
 
     if (!vulkan_create_frames(vulkan)) {
@@ -79,6 +84,7 @@ void renderer_shutdown(Renderer* renderer) {
     
     vulkan_destroy_swapchain(vulkan);
     vulkan_destroy_frames(vulkan);
+    vulkan_destroy_allocator(vulkan);
     vulkan_destroy_device(vulkan);
     vulkan_destroy_debug_messenger(vulkan);
     vulkan_destroy_surface(vulkan);
@@ -540,6 +546,37 @@ static void vulkan_destroy_device(RendererVulkan* vulkan) {
     vulkan->graphicsQueue = VK_NULL_HANDLE;
     vulkan->graphicsQueueFamilyIndex = 0u;
     vulkan->physicalDevice = VK_NULL_HANDLE;
+}
+
+// ////////////////////////
+// VMA Allocator
+
+static B32 vulkan_create_allocator(RendererVulkan* vulkan) {
+    if (!vulkan || vulkan->device == VK_NULL_HANDLE || vulkan->physicalDevice == VK_NULL_HANDLE) {
+        return 0;
+    }
+
+    VmaAllocatorCreateInfo allocatorInfo = {};
+    allocatorInfo.physicalDevice = vulkan->physicalDevice;
+    allocatorInfo.device = vulkan->device;
+    allocatorInfo.instance = vulkan->instance;
+
+    VkResult result = vmaCreateAllocator(&allocatorInfo, &vulkan->allocator);
+    if (result != VK_SUCCESS) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create VMA allocator: {}", result);
+        return 0;
+    }
+
+    LOG_INFO(VULKAN_LOG_DOMAIN, "VMA allocator created successfully");
+    return 1;
+}
+
+static void vulkan_destroy_allocator(RendererVulkan* vulkan) {
+    if (vulkan && vulkan->allocator != 0) {
+        vmaDestroyAllocator(vulkan->allocator);
+        LOG_DEBUG(VULKAN_LOG_DOMAIN, "VMA allocator destroyed");
+        vulkan->allocator = 0;
+    }
 }
 
 // ////////////////////////

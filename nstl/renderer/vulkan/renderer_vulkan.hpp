@@ -15,6 +15,18 @@
 
 #include <vulkan/vulkan.h>
 
+#if defined(COMPILER_CLANG)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wnullability-completeness"
+#pragma clang diagnostic ignored "-Wsign-conversion"
+#pragma clang diagnostic ignored "-Wmissing-field-initializers"
+#pragma clang diagnostic ignored "-Wunused-private-field"
+#endif
+#include <vk_mem_alloc.h>
+#if defined(COMPILER_CLANG)
+#pragma clang diagnostic pop
+#endif
+
 static const StringU8 VULKAN_LOG_DOMAIN = str8("vulkan");
 
 // ////////////////////////
@@ -72,6 +84,7 @@ struct RendererVulkan {
     U32 swapchainImageIndex;
     RendererVulkanFrame frames[VULKAN_FRAME_OVERLAP];
     U32 currentFrameIndex;
+    VmaAllocator allocator;
 };
 
 #if defined(NDEBUG)
@@ -94,6 +107,9 @@ static void vulkan_destroy_instance(RendererVulkan* vulkan);
 static B32 vulkan_create_device(Arena* arena, RendererVulkan* vulkan);
 static B32 vulkan_init_device_queues(RendererVulkan* vulkan);
 static void vulkan_destroy_device(RendererVulkan* vulkan);
+
+static B32 vulkan_create_allocator(RendererVulkan* vulkan);
+static void vulkan_destroy_allocator(RendererVulkan* vulkan);
 
 static B32 vulkan_create_surface(OS_WindowHandle window, RendererVulkan* vulkan);
 static void vulkan_destroy_surface(RendererVulkan* vulkan);

@@ -102,7 +102,7 @@ struct AppModuleExports {
     void (*shutdown)(AppPlatform* platform, AppMemory* memory, AppHostContext* host);
 };
 
-#if defined(__clang__) || defined(__GNUC__)
+#if defined(COMPILER_CLANG) || defined(COMPILER_GCC)
 #define APP_MODULE_EXPORT extern "C" __attribute__((visibility("default")))
 #else
 #define APP_MODULE_EXPORT extern "C"

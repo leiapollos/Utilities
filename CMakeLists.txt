@@ -22,13 +22,14 @@ set(SRC_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 
 set(VULKAN_SDK_ROOT "${SRC_ROOT}/third_party/vulkan")
 set(VULKAN_SDK_INCLUDE_DIR "${VULKAN_SDK_ROOT}/include")
+set(VULKAN_VMA_INCLUDE_DIR "${SRC_ROOT}/third_party/vulkan_vma")
 
 set(HOST_SOURCES
     ${SRC_ROOT}/main.mm
 )
 
 add_executable(utilities_host ${HOST_SOURCES})
-target_include_directories(utilities_host PRIVATE ${SRC_ROOT})
+target_include_directories(utilities_host PRIVATE ${SRC_ROOT} ${VULKAN_VMA_INCLUDE_DIR})
 
 if(APPLE)
     set(VULKAN_SDK_LIB_DIR "${VULKAN_SDK_ROOT}/macos/lib")
@@ -71,7 +72,7 @@ endif()
 set_target_properties(utilities_host PROPERTIES OUTPUT_NAME "utilities_host")
 
 add_library(utilities_app MODULE ${SRC_ROOT}/app.cpp)
-target_include_directories(utilities_app PRIVATE ${SRC_ROOT})
+target_include_directories(utilities_app PRIVATE ${SRC_ROOT} ${VULKAN_VMA_INCLUDE_DIR})
 
 if(APPLE)
     set_target_properties(utilities_app PROPERTIES SUFFIX ".dylib")
