@@ -690,17 +690,28 @@ static VkExtent2D vulkan_choose_extent(const VkSurfaceCapabilitiesKHR* capabilit
     return clamped;
 }
 
+static VkSemaphoreCreateInfo vulkan_semaphore_create_info(VkSemaphoreCreateFlags flags) {
+    VkSemaphoreCreateInfo createInfo = {};
+    createInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    createInfo.flags = flags;
+    return createInfo;
+}
+
+static VkFenceCreateInfo vulkan_fence_create_info(VkFenceCreateFlags flags) {
+    VkFenceCreateInfo createInfo = {};
+    createInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    createInfo.flags = flags;
+    return createInfo;
+}
+
 static B32 vulkan_create_sync_structures(RendererVulkan* vulkan) {
     if (!vulkan || vulkan->device == VK_NULL_HANDLE) {
         return 0;
     }
 
-    VkSemaphoreCreateInfo semaphoreInfo = {};
-    semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    VkSemaphoreCreateInfo semaphoreInfo = vulkan_semaphore_create_info(0);
 
-    VkFenceCreateInfo fenceInfo = {};
-    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+    VkFenceCreateInfo fenceInfo = vulkan_fence_create_info(VK_FENCE_CREATE_SIGNALED_BIT);
 
     for (U32 i = 0; i < VULKAN_FRAME_OVERLAP; ++i) {
         RendererVulkanFrame* frame = &vulkan->frames[i];

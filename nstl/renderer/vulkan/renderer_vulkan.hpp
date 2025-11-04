@@ -101,6 +101,9 @@ static void vulkan_destroy_surface(RendererVulkan* vulkan);
 static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle window);
 static void vulkan_destroy_swapchain(RendererVulkan* vulkan);
 
+static VkSemaphoreCreateInfo vulkan_semaphore_create_info(VkSemaphoreCreateFlags flags);
+static VkFenceCreateInfo vulkan_fence_create_info(VkFenceCreateFlags flags);
+
 static B32 vulkan_create_frames(RendererVulkan* vulkan);
 static B32 vulkan_create_sync_structures(RendererVulkan* vulkan);
 static void vulkan_destroy_frames(RendererVulkan* vulkan);
