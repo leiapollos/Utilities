@@ -14,4 +14,3 @@ struct Renderer {
 B32 renderer_init(Arena* arena, Renderer* renderer);
 void renderer_shutdown(Renderer* renderer);
 void renderer_draw_color(Renderer* renderer, OS_WindowHandle window, Vec3F32 color);
-

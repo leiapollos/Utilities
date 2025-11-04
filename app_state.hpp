@@ -19,4 +19,3 @@ struct AppCoreState {
     U32 workerCount;
     AppTestsState* tests;
 };
-

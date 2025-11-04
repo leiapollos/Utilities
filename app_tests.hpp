@@ -11,4 +11,3 @@ void app_tests_initialize(AppMemory* memory, AppCoreState* core, AppTestsState* 
 void app_tests_reload(AppMemory* memory, AppCoreState* core, AppTestsState* tests);
 void app_tests_tick(AppMemory* memory, AppCoreState* core, AppTestsState* tests, F32 deltaSeconds);
 void app_tests_shutdown(AppMemory* memory, AppCoreState* core, AppTestsState* tests);
-

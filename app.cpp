@@ -72,7 +72,7 @@ static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostConte
         state->frameCounter = 0;
         state->reloadCount = 0;
         set_log_level(LogLevel_Info);
-        StringU8 eventsDomain = str8((const char*)"events", 6);
+        StringU8 eventsDomain = str8((const char*) "events", 6);
         set_log_domain_level(eventsDomain, LogLevel_Debug);
     }
 
@@ -123,7 +123,8 @@ static void app_reload(AppPlatform* platform, AppMemory* memory, AppHostContext*
     app_tests_reload(memory, state, tests);
 }
 
-static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext* host, const AppInput* input, F32 deltaSeconds) {
+static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext* host, const AppInput* input,
+                       F32 deltaSeconds) {
     if (!memory || !memory->permanentStorage) {
         return;
     }
@@ -149,7 +150,8 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
                         state->desiredWindow.width = evt->windowEvent.width;
                         state->desiredWindow.height = evt->windowEvent.height;
                     }
-                } break;
+                }
+                break;
 
                 case OS_GraphicsEventType_WindowClosed:
                 case OS_GraphicsEventType_WindowDestroyed: {
@@ -163,11 +165,13 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
                             PLATFORM_OS_CALL(platform, OS_window_destroy, closedHandle);
                         }
                     }
-                } break;
+                }
+                break;
 
                 case OS_GraphicsEventType_MouseMove: {
                     LOG_INFO("app", "Mouse moved to ({}, {})", evt->mouse.x, evt->mouse.y);
-                } break;
+                }
+                break;
 
                 case OS_GraphicsEventType_MouseButtonDown:
                 case OS_GraphicsEventType_MouseButtonUp:
@@ -176,7 +180,8 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
                 case OS_GraphicsEventType_KeyUp:
                 case OS_GraphicsEventType_TextInput:
                 default: {
-                } break;
+                }
+                    break;
             }
         }
     }

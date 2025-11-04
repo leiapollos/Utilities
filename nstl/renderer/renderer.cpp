@@ -15,4 +15,3 @@ void renderer_draw_color(Renderer* renderer, OS_WindowHandle window, Vec3F32 col
     (void) color;
 #endif
 }
-

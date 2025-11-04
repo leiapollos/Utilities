@@ -98,13 +98,13 @@ static const char* VALIDATION_LAYERS[] = {
 };
 
 
-static B32 vulkan_check_validation_layer_support(Arena* arena);
+static B32 vulkan_check_validation_layer_support(Arena * arena);
 static B32 vulkan_check_extension_support(Arena* arena, const char* extensionName);
 
-static B32 vulkan_create_instance(Arena* arena, RendererVulkan* vulkan);
+static B32 vulkan_create_instance(Arena * arena, RendererVulkan * vulkan);
 static void vulkan_destroy_instance(RendererVulkan* vulkan);
 
-static B32 vulkan_create_device(Arena* arena, RendererVulkan* vulkan);
+static B32 vulkan_create_device(Arena * arena, RendererVulkan * vulkan);
 static B32 vulkan_init_device_queues(RendererVulkan* vulkan);
 static void vulkan_destroy_device(RendererVulkan* vulkan);
 
@@ -123,11 +123,12 @@ static VkCommandBufferBeginInfo vulkan_command_buffer_begin_info(VkCommandBuffer
 
 static VkImageSubresourceRange vulkan_image_subresource_range(VkImageAspectFlags aspectMask);
 static VkImageMemoryBarrier2 vulkan_image_memory_barrier2(VkImage image,
-                                                         VkImageLayout oldLayout,
-                                                         VkImageLayout newLayout);
+                                                          VkImageLayout oldLayout,
+                                                          VkImageLayout newLayout);
 static VkDependencyInfo vulkan_dependency_info(U32 imageMemoryBarrierCount,
                                                const VkImageMemoryBarrier2* pImageMemoryBarriers);
-static void vulkan_transition_image(VkCommandBuffer cmd, VkImage image, VkImageLayout currentLayout, VkImageLayout newLayout);
+static void vulkan_transition_image(VkCommandBuffer cmd, VkImage image, VkImageLayout currentLayout,
+                                    VkImageLayout newLayout);
 
 static VkSemaphoreSubmitInfo vulkan_semaphore_submit_info(VkPipelineStageFlags2 stageMask, VkSemaphore semaphore);
 static VkCommandBufferSubmitInfo vulkan_command_buffer_submit_info(VkCommandBuffer cmd);
@@ -139,7 +140,7 @@ static B32 vulkan_create_frames(RendererVulkan* vulkan);
 static B32 vulkan_create_sync_structures(RendererVulkan* vulkan);
 static void vulkan_destroy_frames(RendererVulkan* vulkan);
 
-static B32 vulkan_create_debug_messenger(Arena* arena, RendererVulkan* vulkan);
+static B32 vulkan_create_debug_messenger(Arena * arena, RendererVulkan * vulkan);
 static void vulkan_destroy_debug_messenger(RendererVulkan* vulkan);
 
 void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, Vec3F32 color);

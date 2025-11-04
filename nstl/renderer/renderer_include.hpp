@@ -16,4 +16,3 @@
 #else
 #error "No renderer backend defined"
 #endif
-

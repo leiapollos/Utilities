@@ -92,7 +92,7 @@ static void host_build_module_path(HostState* state, const char* relativePath, c
 
     StringU8 relativeStr = str8(relativePath);
     StringU8 result;
-    
+
     if (state->moduleBasePath[0] == '\0') {
         result = relativeStr;
     } else {
@@ -101,7 +101,7 @@ static void host_build_module_path(HostState* state, const char* relativePath, c
         StringU8 pieces[] = {baseStr, separator, relativeStr};
         result = str8_concat_n(arena, pieces, ARRAY_COUNT(pieces));
     }
-    
+
     U64 len = result.size;
     if (len >= maxLen) {
         len = maxLen - 1;
@@ -200,7 +200,7 @@ static void host_update_input(HostState* state, F32 deltaSeconds) {
     input->eventCount = eventCount;
 
     for (U32 index = 0; index < eventCount; ++index) {
-        (void)state;
+        (void) state;
     }
 }
 
@@ -228,7 +228,8 @@ static B32 host_copy_file(const char* srcPath, const char* dstPath) {
 
     int errorCode = errno;
     const char* errorText = strerror(errorCode);
-    LOG_ERROR("host", "Failed to copy module from '{}' to '{}' (errno={} '{}')", srcPath, dstPath, errorCode, errorText ? errorText : "<unknown>");
+    LOG_ERROR("host", "Failed to copy module from '{}' to '{}' (errno={} '{}')", srcPath, dstPath, errorCode,
+              errorText ? errorText : "<unknown>");
     return 0;
 }
 
@@ -314,17 +315,17 @@ static B32 host_load_module(HostState* state, B32 isReload) {
 
     state->moduleGeneration += 1;
     char loadPath[HOT_MODULE_PATH_MAX];
-    
+
     Temp scratch = get_scratch(0, 0);
     DEFER_REF(temp_end(&scratch));
     Arena* arena = scratch.arena;
-    
+
     StringU8 baseName = str8("hot/utilities_app_loaded_");
     StringU8 generationStr = str8_from_U64(arena, state->moduleGeneration, 10);
     StringU8 suffix = str8(".dylib");
     StringU8 pieces[] = {baseName, generationStr, suffix};
     StringU8 loadPathRelativeStr = str8_concat_n(arena, pieces, ARRAY_COUNT(pieces));
-    
+
     char loadPathRelative[HOT_MODULE_PATH_MAX];
     U64 len = loadPathRelativeStr.size;
     if (len >= sizeof(loadPathRelative)) {
@@ -332,7 +333,7 @@ static B32 host_load_module(HostState* state, B32 isReload) {
     }
     MEMMOVE(loadPathRelative, loadPathRelativeStr.data, len);
     loadPathRelative[len] = '\0';
-    
+
     host_build_module_path(state, loadPathRelative, loadPath, sizeof(loadPath));
 
     if (!host_copy_file(sourcePath, loadPath)) {
@@ -364,25 +365,29 @@ static B32 host_load_module(HostState* state, B32 isReload) {
     }
 
     if (exports.interfaceVersion != APP_INTERFACE_VERSION) {
-        LOG_ERROR("host", "Module interface mismatch (expected {}, got {})", APP_INTERFACE_VERSION, exports.interfaceVersion);
+        LOG_ERROR("host", "Module interface mismatch (expected {}, got {})", APP_INTERFACE_VERSION,
+                  exports.interfaceVersion);
         dlclose(handle);
         return 0;
     }
 
     if (exports.requiredPermanentMemory > state->memory.permanentStorageSize) {
-        LOG_ERROR("host", "Module permanent memory requirement too large ({} > {})", exports.requiredPermanentMemory, state->memory.permanentStorageSize);
+        LOG_ERROR("host", "Module permanent memory requirement too large ({} > {})", exports.requiredPermanentMemory,
+                  state->memory.permanentStorageSize);
         dlclose(handle);
         return 0;
     }
 
     if (exports.requiredTransientMemory > state->memory.transientStorageSize) {
-        LOG_ERROR("host", "Module transient memory requirement too large ({} > {})", exports.requiredTransientMemory, state->memory.transientStorageSize);
+        LOG_ERROR("host", "Module transient memory requirement too large ({} > {})", exports.requiredTransientMemory,
+                  state->memory.transientStorageSize);
         dlclose(handle);
         return 0;
     }
 
     if (exports.requiredProgramArenaSize > MB(256)) {
-        LOG_ERROR("host", "Module program arena requirement too large ({} > {})", exports.requiredProgramArenaSize, MB(256));
+        LOG_ERROR("host", "Module program arena requirement too large ({} > {})", exports.requiredProgramArenaSize,
+                  MB(256));
         dlclose(handle);
         return 0;
     }
@@ -493,8 +498,8 @@ static void host_try_reload_module(HostState* state) {
 }
 
 int host_main_loop(int argc, char** argv) {
-    (void)argc;
-    (void)argv;
+    (void) argc;
+    (void) argv;
 
     log_init();
     set_log_level(LogLevel_Info);
@@ -531,13 +536,14 @@ int host_main_loop(int argc, char** argv) {
         U64 now = OS_get_time_microseconds();
         U64 deltaMicro = now - lastTickTime;
         lastTickTime = now;
-        F32 deltaSeconds = (F32)((F64) deltaMicro / (F64)MILLION(1ULL));
+        F32 deltaSeconds = (F32) ((F64) deltaMicro / (F64) MILLION(1ULL));
 
         host_try_reload_module(&state);
         host_update_input(&state, deltaSeconds);
 
         if (state.module.isValid && state.module.exports.update) {
-            state.module.exports.update(&state.platformAPI, &state.memory, &state.hostContext, &state.input, deltaSeconds);
+            state.module.exports.update(&state.platformAPI, &state.memory, &state.hostContext, &state.input,
+                                        deltaSeconds);
         } else {
             OS_sleep_milliseconds(100);
         }
@@ -567,4 +573,3 @@ int host_main_loop(int argc, char** argv) {
     host_release_memory(&state);
     return 0;
 }
-

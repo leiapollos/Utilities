@@ -98,7 +98,8 @@ struct AppModuleExports {
     U64 requiredProgramArenaSize;
     B32 (*initialize)(AppPlatform* platform, AppMemory* memory, AppHostContext* host);
     void (*reload)(AppPlatform* platform, AppMemory* memory, AppHostContext* host);
-    void (*update)(AppPlatform* platform, AppMemory* memory, AppHostContext* host, const AppInput* input, F32 deltaSeconds);
+    void (*update)(AppPlatform* platform, AppMemory* memory, AppHostContext* host, const AppInput* input,
+                   F32 deltaSeconds);
     void (*shutdown)(AppPlatform* platform, AppMemory* memory, AppHostContext* host);
 };
 
@@ -109,4 +110,3 @@ struct AppModuleExports {
 #endif
 
 APP_MODULE_EXPORT B32 app_get_entry_points(AppModuleExports* outExports);
-
