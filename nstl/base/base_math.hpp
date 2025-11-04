@@ -149,8 +149,9 @@ struct Mat4x4F32 {
 // ////////////////////////
 // Clamp
 
-#define CLAMP_BOT(x, bottom) MAX(x, bottom)
-#define CLAMP_TOP(x, top)    MIN(x, top)
+#define CLAMP_BOT(x, bottom)    MAX(x, bottom)
+#define CLAMP_TOP(x, top)       MIN(x, top)
+#define CLAMP(x, bottom, top)   MIN(MAX(x, bottom), top)
 
 
 // ////////////////////////

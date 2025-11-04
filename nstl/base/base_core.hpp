@@ -29,7 +29,7 @@ debug_break(); \
 } \
 } while (false)
 
-#ifndef NDEBUG
+#if defined(DEBUG)
 #define ASSERT_DEBUG(condition) ASSERT_ALWAYS(condition)
 #else
 #define ASSERT_DEBUG(condition) do {} while (false)

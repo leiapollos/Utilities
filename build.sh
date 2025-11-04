@@ -32,8 +32,8 @@ case "${FLAVOR}" in
   debug)
     CMAKE_ARGS+=("-DCMAKE_BUILD_TYPE=Debug")
     CMAKE_ARGS+=("-DADDRESS_SANITIZER=1")
-    C_FLAGS+=" -fsanitize=address -fno-omit-frame-pointer"
-    CXX_FLAGS+=" -fsanitize=address -fno-omit-frame-pointer"
+    C_FLAGS+=" -fsanitize=address -fno-omit-frame-pointer -DDEBUG=1"
+    CXX_FLAGS+=" -fsanitize=address -fno-omit-frame-pointer -DDEBUG=1"
     LD_FLAGS="-fsanitize=address"
     ;;
 
