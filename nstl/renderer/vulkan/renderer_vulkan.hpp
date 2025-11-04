@@ -38,7 +38,6 @@ struct RendererVulkanFrame {
     VkCommandPool commandPool;
     VkCommandBuffer commandBuffer;
     VkSemaphore swapchainSemaphore;
-    VkSemaphore renderSemaphore;
     VkFence renderFence;
     U32 imageIndex;
 };
@@ -52,6 +51,7 @@ struct RendererVulkanSwapchainImage {
 struct RendererVulkanSwapchain {
     VkSwapchainKHR handle;
     RendererVulkanSwapchainImage* images;
+    VkSemaphore* imageSemaphores;
     U32 imageCount;
     U32 imageCapacity;
     VkSurfaceFormatKHR format;

@@ -28,6 +28,7 @@ B32 renderer_init(Arena* arena, Renderer* renderer) {
     vulkan->surface = VK_NULL_HANDLE;
     vulkan->swapchain.handle = VK_NULL_HANDLE;
     vulkan->swapchain.images = 0;
+    vulkan->swapchain.imageSemaphores = 0;
     vulkan->swapchain.imageCount = 0u;
     vulkan->swapchain.imageCapacity = 0u;
     vulkan->swapchain.format = {};
@@ -39,7 +40,6 @@ B32 renderer_init(Arena* arena, Renderer* renderer) {
         vulkan->frames[i].commandPool = VK_NULL_HANDLE;
         vulkan->frames[i].commandBuffer = VK_NULL_HANDLE;
         vulkan->frames[i].swapchainSemaphore = VK_NULL_HANDLE;
-        vulkan->frames[i].renderSemaphore = VK_NULL_HANDLE;
         vulkan->frames[i].renderFence = VK_NULL_HANDLE;
         vulkan->frames[i].imageIndex = 0u;
     }
@@ -724,7 +724,6 @@ static B32 vulkan_create_sync_structures(RendererVulkan* vulkan) {
         RendererVulkanFrame* frame = &vulkan->frames[i];
 
         VK_CHECK(vkCreateSemaphore(vulkan->device, &semaphoreInfo, 0, &frame->swapchainSemaphore));
-        VK_CHECK(vkCreateSemaphore(vulkan->device, &semaphoreInfo, 0, &frame->renderSemaphore));
         VK_CHECK(vkCreateFence(vulkan->device, &fenceInfo, 0, &frame->renderFence));
 
         LOG_DEBUG(VULKAN_LOG_DOMAIN, "Created sync structures for frame {}", i);
@@ -842,17 +841,7 @@ static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle windo
     VK_CHECK(vkCreateSwapchainKHR(vulkan->device, &createInfo, 0, &vulkan->swapchain.handle));
 
     if (oldSwapchain != VK_NULL_HANDLE) {
-        if (vulkan->swapchain.images) {
-            for (U32 i = 0; i < oldImageCount; ++i) {
-                if (vulkan->swapchain.images[i].view != VK_NULL_HANDLE) {
-                    vkDestroyImageView(vulkan->device, vulkan->swapchain.images[i].view, 0);
-                    vulkan->swapchain.images[i].view = VK_NULL_HANDLE;
-                }
-                vulkan->swapchain.images[i].handle = VK_NULL_HANDLE;
-                vulkan->swapchain.images[i].layout = VK_IMAGE_LAYOUT_UNDEFINED;
-            }
-        }
-        vkDestroySwapchainKHR(vulkan->device, oldSwapchain, 0);
+        vulkan_destroy_swapchain(vulkan);
     }
 
     U32 retrievedImageCount = 0;
@@ -868,6 +857,11 @@ static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle windo
             LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to allocate swapchain image storage");
             return 0;
         }
+        vulkan->swapchain.imageSemaphores = ARENA_PUSH_ARRAY(vulkan->arena, VkSemaphore, retrievedImageCount);
+        if (!vulkan->swapchain.imageSemaphores) {
+            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to allocate swapchain image semaphores");
+            return 0;
+        }
         vulkan->swapchain.imageCapacity = retrievedImageCount;
     }
 
@@ -878,9 +872,15 @@ static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle windo
     }
     VK_CHECK(vkGetSwapchainImagesKHR(vulkan->device, vulkan->swapchain.handle, &retrievedImageCount, rawImages));
 
+    VkSemaphoreCreateInfo semaphoreInfo = vulkan_semaphore_create_info(0);
+
     for (U32 i = 0; i < retrievedImageCount; ++i) {
         vulkan->swapchain.images[i].handle = rawImages[i];
         vulkan->swapchain.images[i].layout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        if (i >= oldImageCount || vulkan->swapchain.imageSemaphores[i] == VK_NULL_HANDLE) {
+            VK_CHECK(vkCreateSemaphore(vulkan->device, &semaphoreInfo, 0, &vulkan->swapchain.imageSemaphores[i]));
+        }
 
         VkImageViewCreateInfo viewInfo = {};
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -926,6 +926,15 @@ static void vulkan_destroy_swapchain(RendererVulkan* vulkan) {
         }
     }
 
+    if (vulkan->swapchain.imageSemaphores) {
+        for (U32 i = 0; i < vulkan->swapchain.imageCount; ++i) {
+            if (vulkan->swapchain.imageSemaphores[i] != VK_NULL_HANDLE) {
+                vkDestroySemaphore(vulkan->device, vulkan->swapchain.imageSemaphores[i], 0);
+                vulkan->swapchain.imageSemaphores[i] = VK_NULL_HANDLE;
+            }
+        }
+    }
+
     if (vulkan->swapchain.handle != VK_NULL_HANDLE) {
         vkDestroySwapchainKHR(vulkan->device, vulkan->swapchain.handle, 0);
         vulkan->swapchain.handle = VK_NULL_HANDLE;
@@ -950,10 +959,6 @@ static void vulkan_destroy_frames(RendererVulkan* vulkan) {
         if (frame->renderFence != VK_NULL_HANDLE) {
             vkDestroyFence(vulkan->device, frame->renderFence, 0);
             frame->renderFence = VK_NULL_HANDLE;
-        }
-        if (frame->renderSemaphore != VK_NULL_HANDLE) {
-            vkDestroySemaphore(vulkan->device, frame->renderSemaphore, 0);
-            frame->renderSemaphore = VK_NULL_HANDLE;
         }
         if (frame->swapchainSemaphore != VK_NULL_HANDLE) {
             vkDestroySemaphore(vulkan->device, frame->swapchainSemaphore, 0);
@@ -1118,7 +1123,7 @@ void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, 
     VK_CHECK(vkEndCommandBuffer(frame->commandBuffer));
 
     VkSemaphoreSubmitInfo waitSemaphoreInfo = vulkan_semaphore_submit_info(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR, frame->swapchainSemaphore);
-    VkSemaphoreSubmitInfo signalSemaphoreInfo = vulkan_semaphore_submit_info(VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT, frame->renderSemaphore);
+    VkSemaphoreSubmitInfo signalSemaphoreInfo = vulkan_semaphore_submit_info(VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT, vulkan->swapchain.imageSemaphores[imageIndex]);
     VkCommandBufferSubmitInfo cmdBufferInfo = vulkan_command_buffer_submit_info(frame->commandBuffer);
     VkSubmitInfo2 submitInfo = vulkan_submit_info2(&cmdBufferInfo, &signalSemaphoreInfo, &waitSemaphoreInfo);
 
@@ -1127,7 +1132,7 @@ void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, 
     VkPresentInfoKHR presentInfo = {};
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     presentInfo.waitSemaphoreCount = 1;
-    presentInfo.pWaitSemaphores = &frame->renderSemaphore;
+    presentInfo.pWaitSemaphores = &vulkan->swapchain.imageSemaphores[imageIndex];
     presentInfo.swapchainCount = 1;
     presentInfo.pSwapchains = &vulkan->swapchain.handle;
     presentInfo.pImageIndices = &frame->imageIndex;
