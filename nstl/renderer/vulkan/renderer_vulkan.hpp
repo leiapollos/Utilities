@@ -103,6 +103,21 @@ static void vulkan_destroy_swapchain(RendererVulkan* vulkan);
 
 static VkSemaphoreCreateInfo vulkan_semaphore_create_info(VkSemaphoreCreateFlags flags);
 static VkFenceCreateInfo vulkan_fence_create_info(VkFenceCreateFlags flags);
+static VkCommandBufferBeginInfo vulkan_command_buffer_begin_info(VkCommandBufferUsageFlags flags);
+
+static VkImageSubresourceRange vulkan_image_subresource_range(VkImageAspectFlags aspectMask);
+static VkImageMemoryBarrier2 vulkan_image_memory_barrier2(VkImage image,
+                                                         VkImageLayout oldLayout,
+                                                         VkImageLayout newLayout);
+static VkDependencyInfo vulkan_dependency_info(U32 imageMemoryBarrierCount,
+                                               const VkImageMemoryBarrier2* pImageMemoryBarriers);
+static void vulkan_transition_image(VkCommandBuffer cmd, VkImage image, VkImageLayout currentLayout, VkImageLayout newLayout);
+
+static VkSemaphoreSubmitInfo vulkan_semaphore_submit_info(VkPipelineStageFlags2 stageMask, VkSemaphore semaphore);
+static VkCommandBufferSubmitInfo vulkan_command_buffer_submit_info(VkCommandBuffer cmd);
+static VkSubmitInfo2 vulkan_submit_info2(VkCommandBufferSubmitInfo* cmd,
+                                         VkSemaphoreSubmitInfo* signalSemaphoreInfo,
+                                         VkSemaphoreSubmitInfo* waitSemaphoreInfo);
 
 static B32 vulkan_create_frames(RendererVulkan* vulkan);
 static B32 vulkan_create_sync_structures(RendererVulkan* vulkan);

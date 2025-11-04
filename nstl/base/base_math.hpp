@@ -180,3 +180,8 @@ static constexpr U64 TB(U64 n) {
 #define THOUSAND(n) (n * 1000)
 #define MILLION(n)  (n * 1000000)
 #define BILLION(n)  (n * 1000000000)
+
+// ////////////////////////
+// Time Units
+
+#define SECONDS_TO_NANOSECONDS(s) ((s) * 1000000000ULL)
