@@ -115,20 +115,9 @@ static void app_reload(AppPlatform* platform, AppMemory* memory, AppHostContext*
     app_assign_tests_state(state);
     AppTestsState* tests = app_get_tests(state);
 
-    state->desiredWindow.title = "Utilities Hot Reload";
     state->reloadCount += 1;
     if (host) {
         host->reloadCount = state->reloadCount;
-    }
-
-    if (!state->jobSystem) {
-        state->workerCount = app_select_worker_count(host);
-        state->jobSystem = job_system_create(memory->programArena, state->workerCount);
-        if (state->jobSystem) {
-            LOG_INFO("jobs", "Job system re-created on reload (workers={})", state->workerCount);
-        } else {
-            LOG_ERROR("jobs", "Failed to recreate job system on reload");
-        }
     }
 
     app_tests_reload(memory, state, tests);
@@ -195,10 +184,16 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
     app_tests_tick(memory, state, tests, deltaSeconds);
 
     if (host && host->renderer && state->windowHandle.handle) {
+        U64 frame = state->frameCounter;
+        F32 velocity = 0.05f;
+        F32 x = frame * velocity;
+        F32 red = CLAMP(sin(x) * 0.5f + 0.5f, 0.3f, 0.7f);
+        F32 green = CLAMP(cos(x) * 0.5f + 0.5f, 0.3f, 0.7f);
+        F32 blue = CLAMP(sin(x + 0.3f) * 0.5f + 0.5f, 0.3f, 0.7f);
         Vec3F32 color = {};
-        color.r = 0.1f;
-        color.g = 0.2f;
-        color.b = 0.3f;
+        color.r = red;
+        color.g = green;
+        color.b = blue;
         renderer_draw_color(host->renderer, state->windowHandle, color);
     }
 }
