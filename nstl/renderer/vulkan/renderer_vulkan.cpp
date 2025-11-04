@@ -647,7 +647,11 @@ static VkSurfaceFormatKHR vulkan_choose_surface_format(const VkSurfaceFormatKHR*
 }
 
 static VkPresentModeKHR vulkan_choose_present_mode(const VkPresentModeKHR* modes, U32 count) {
+#if defined(PLATFORM_BUILD_DEBUG)
+    VkPresentModeKHR desired = VK_PRESENT_MODE_FIFO_KHR;
+#else
     VkPresentModeKHR desired = VK_PRESENT_MODE_MAILBOX_KHR;
+#endif
     VkPresentModeKHR fallback = VK_PRESENT_MODE_FIFO_KHR;
 
     for (U32 i = 0; i < count; ++i) {
