@@ -44,6 +44,19 @@ debug_break(); \
 } \
 } while (false)
 
+// ////////////////////////
+// Safe Casts
+
+#if defined(DEBUG)
+static inline S32 safe_cast_u32_s32_impl(U32 value) {
+    ASSERT_DEBUG(value <= (U32)INT32_MAX);
+    return (S32)value;
+}
+#define SafeCast_U32_S32(value) safe_cast_u32_s32_impl(value)
+#else
+#define SafeCast_U32_S32(value) ((S32)(value))
+#endif
+
 
 // ////////////////////////
 // Branch Prediction
