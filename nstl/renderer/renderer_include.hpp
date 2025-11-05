@@ -7,7 +7,6 @@
 #include "renderer.hpp"
 
 #if defined(RENDERER_BACKEND_VULKAN)
-#define VMA_IMPLEMENTATION
 #include "vulkan/renderer_vulkan.hpp"
 #elif defined(RENDERER_BACKEND_METAL)
 #error "not supported"

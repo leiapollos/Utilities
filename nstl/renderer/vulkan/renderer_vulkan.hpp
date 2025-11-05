@@ -23,6 +23,7 @@
 #pragma clang diagnostic ignored "-Wmissing-field-initializers"
 #pragma clang diagnostic ignored "-Wunused-private-field"
 #endif
+#define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
 #if defined(COMPILER_CLANG)
 #pragma clang diagnostic pop
@@ -58,6 +59,14 @@ struct RendererVulkanFrame {
     U32 imageIndex;
 };
 
+struct RendererVulkanAllocatedImage {
+    VkImage image;
+    VkImageView imageView;
+    VmaAllocation allocation;
+    VkExtent3D imageExtent;
+    VkFormat imageFormat;
+};
+
 struct RendererVulkanSwapchainImage {
     VkImage handle;
     VkImageView view;
@@ -88,10 +97,14 @@ struct RendererVulkan {
     U32 swapchainImageIndex;
     RendererVulkanFrame frames[VULKAN_FRAME_OVERLAP];
     U32 currentFrameIndex;
+
     VmaAllocator allocator;
     VkDeferCtx deferCtx;
     U8* deferPerFrameMem;
     U8* deferGlobalMem;
+
+    RendererVulkanAllocatedImage drawImage;
+	VkExtent2D drawExtent;
 };
 
 #if defined(NDEBUG)
@@ -138,6 +151,7 @@ static VkDependencyInfo vulkan_dependency_info(U32 imageMemoryBarrierCount,
                                                const VkImageMemoryBarrier2* pImageMemoryBarriers);
 static void vulkan_transition_image(VkCommandBuffer cmd, VkImage image, VkImageLayout currentLayout,
                                     VkImageLayout newLayout);
+static void vulkan_copy_image_to_image(VkCommandBuffer cmd, VkImage source, VkImage destination, VkExtent2D srcSize, VkExtent2D dstSize);
 
 static VkSemaphoreSubmitInfo vulkan_semaphore_submit_info(VkPipelineStageFlags2 stageMask, VkSemaphore semaphore);
 static VkCommandBufferSubmitInfo vulkan_command_buffer_submit_info(VkCommandBuffer cmd);
@@ -148,6 +162,10 @@ static VkSubmitInfo2 vulkan_submit_info2(VkCommandBufferSubmitInfo* cmd,
 static B32 vulkan_create_frames(RendererVulkan* vulkan);
 static B32 vulkan_create_sync_structures(RendererVulkan* vulkan);
 static void vulkan_destroy_frames(RendererVulkan* vulkan);
+
+static VkImageCreateInfo vulkan_image_create_info(VkFormat format, VkImageUsageFlags usageFlags, VkExtent3D extent);
+static VkImageViewCreateInfo vulkan_image_view_create_info(VkFormat format, VkImage image, VkImageAspectFlags aspectFlags);
+
 
 static B32 vulkan_create_debug_messenger(Arena * arena, RendererVulkan * vulkan);
 static void vulkan_destroy_debug_messenger(RendererVulkan* vulkan);
