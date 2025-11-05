@@ -37,6 +37,13 @@ debug_break(); \
 
 #define ASSERT_NOT_IMPLEMENTED() ASSERT_ALWAYS(false && "Not implemented")
 
+#define INIT_SUCCESS(initStatement)  \
+do { \
+if (!(initStatement)) { \
+debug_break(); \
+} \
+} while (false)
+
 
 // ////////////////////////
 // Branch Prediction

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "vulkan/vulkan_core.h"
 #if defined(PLATFORM_OS_MACOS)
 #ifndef VK_USE_PLATFORM_MACOS_MVK
 #define VK_USE_PLATFORM_MACOS_MVK
@@ -26,6 +27,9 @@
 #if defined(COMPILER_CLANG)
 #pragma clang diagnostic pop
 #endif
+
+#define VKDEFER_ENABLE_VMA
+#include "vkdefer.h"
 
 static const StringU8 VULKAN_LOG_DOMAIN = str8("vulkan");
 
@@ -85,6 +89,9 @@ struct RendererVulkan {
     RendererVulkanFrame frames[VULKAN_FRAME_OVERLAP];
     U32 currentFrameIndex;
     VmaAllocator allocator;
+    VkDeferCtx deferCtx;
+    U8* deferPerFrameMem;
+    U8* deferGlobalMem;
 };
 
 #if defined(NDEBUG)
@@ -109,7 +116,9 @@ static B32 vulkan_init_device_queues(RendererVulkan* vulkan);
 static void vulkan_destroy_device(RendererVulkan* vulkan);
 
 static B32 vulkan_create_allocator(RendererVulkan* vulkan);
-static void vulkan_destroy_allocator(RendererVulkan* vulkan);
+
+static B32 vulkan_init_defer_memory(RendererVulkan* vulkan);
+static void vulkan_shutdown_defer(RendererVulkan* vulkan);
 
 static B32 vulkan_create_surface(OS_WindowHandle window, RendererVulkan* vulkan);
 static void vulkan_destroy_surface(RendererVulkan* vulkan);

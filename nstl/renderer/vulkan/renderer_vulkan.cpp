@@ -36,6 +36,8 @@ B32 renderer_init(Arena* arena, Renderer* renderer) {
     vulkan->swapchainImageIndex = 0u;
     vulkan->currentFrameIndex = 0u;
     vulkan->allocator = 0;
+    vulkan->deferPerFrameMem = 0;
+    vulkan->deferGlobalMem = 0;
 
     for (U32 i = 0; i < VULKAN_FRAME_OVERLAP; ++i) {
         vulkan->frames[i].commandPool = VK_NULL_HANDLE;
@@ -45,25 +47,20 @@ B32 renderer_init(Arena* arena, Renderer* renderer) {
         vulkan->frames[i].imageIndex = 0u;
     }
 
-    if (!vulkan_create_instance(arena, vulkan)) {
-        ASSERT_ALWAYS(false && "Failed to create Vulkan instance");
-    }
+    INIT_SUCCESS(vulkan_init_defer_memory(vulkan) && "Failed to initialize vkdefer memory");
 
-    if (!vulkan_create_device(arena, vulkan)) {
-        ASSERT_ALWAYS(false && "Failed to create Vulkan device");
-    }
+    INIT_SUCCESS(vulkan_create_instance(arena, vulkan) && "Failed to create Vulkan instance");
 
-    if (!vulkan_init_device_queues(vulkan)) {
-        ASSERT_ALWAYS(false && "Failed to initialize Vulkan queues");
-    }
+    INIT_SUCCESS(vulkan_create_device(arena, vulkan) && "Failed to create Vulkan device");
+    vkdefer_init_device(&vulkan->deferCtx, vulkan->device, 0);
 
-    if (!vulkan_create_allocator(vulkan)) {
-        ASSERT_ALWAYS(false && "Failed to create VMA allocator");
-    }
+    INIT_SUCCESS(vulkan_init_device_queues(vulkan) && "Failed to initialize Vulkan queues");
 
-    if (!vulkan_create_frames(vulkan)) {
-        ASSERT_ALWAYS(false && "Failed to create Vulkan frames");
-    }
+    INIT_SUCCESS(vulkan_create_allocator(vulkan) && "Failed to create VMA allocator");
+    vkdefer_set_vma_allocator(&vulkan->deferCtx, vulkan->allocator);
+    vkdefer_destroy_VmaAllocator(&vulkan->deferCtx.globalBuf, vulkan->allocator);
+
+    INIT_SUCCESS(vulkan_create_frames(vulkan) && "Failed to create Vulkan frames");
 
     LOG_INFO(VULKAN_LOG_DOMAIN, "Vulkan renderer initialized successfully");
 
@@ -80,15 +77,17 @@ void renderer_shutdown(Renderer* renderer) {
 
     if (vulkan->device != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(vulkan->device);
+        vkdefer_shutdown(&vulkan->deferCtx);
     }
 
     vulkan_destroy_swapchain(vulkan);
     vulkan_destroy_frames(vulkan);
-    vulkan_destroy_allocator(vulkan);
     vulkan_destroy_device(vulkan);
     vulkan_destroy_debug_messenger(vulkan);
     vulkan_destroy_surface(vulkan);
     vulkan_destroy_instance(vulkan);
+
+    vulkan_shutdown_defer(vulkan);
 
     renderer->backendData = 0;
 }
@@ -575,12 +574,52 @@ static B32 vulkan_create_allocator(RendererVulkan* vulkan) {
     return 1;
 }
 
-static void vulkan_destroy_allocator(RendererVulkan* vulkan) {
-    if (vulkan && vulkan->allocator != 0) {
-        vmaDestroyAllocator(vulkan->allocator);
-        LOG_DEBUG(VULKAN_LOG_DOMAIN, "VMA allocator destroyed");
-        vulkan->allocator = 0;
+
+// ////////////////////////
+// Defer
+
+static const U32 VKDEFER_PER_FRAME_BYTES = KB(64);
+static const U32 VKDEFER_GLOBAL_BYTES = KB(256);
+
+// Initialize defer memory buffers (can be called before device creation)
+static B32 vulkan_init_defer_memory(RendererVulkan* vulkan) {
+    if (!vulkan) {
+        return 0;
     }
+
+    U32 perFrameTotalBytes = VKDEFER_PER_FRAME_BYTES * VULKAN_FRAME_OVERLAP;
+    vulkan->deferPerFrameMem = (U8*) arena_push(vulkan->arena, perFrameTotalBytes, 8);
+    if (!vulkan->deferPerFrameMem) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to allocate per-frame defer memory");
+        return 0;
+    }
+
+    vulkan->deferGlobalMem = (U8*) arena_push(vulkan->arena, VKDEFER_GLOBAL_BYTES, 8);
+    if (!vulkan->deferGlobalMem) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to allocate global defer memory");
+        return 0;
+    }
+
+    vkdefer_init_memory(&vulkan->deferCtx,
+                       VULKAN_FRAME_OVERLAP,
+                       vulkan->deferPerFrameMem,
+                       VKDEFER_PER_FRAME_BYTES,
+                       vulkan->deferGlobalMem,
+                       VKDEFER_GLOBAL_BYTES);
+
+    LOG_DEBUG(VULKAN_LOG_DOMAIN, "VkDefer memory initialized");
+    return 1;
+}
+
+static void vulkan_shutdown_defer(RendererVulkan* vulkan) {
+    if (!vulkan) {
+        return;
+    }
+
+    vulkan->deferPerFrameMem = 0;
+    vulkan->deferGlobalMem = 0;
+
+    LOG_DEBUG(VULKAN_LOG_DOMAIN, "VkDefer memory released");
 }
 
 // ////////////////////////
@@ -775,15 +814,6 @@ static B32 vulkan_create_sync_structures(RendererVulkan* vulkan) {
 }
 
 static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle window) {
-    if (!vulkan) {
-        return 0;
-    }
-
-    if (vulkan->device == VK_NULL_HANDLE || vulkan->physicalDevice == VK_NULL_HANDLE) {
-        LOG_ERROR(VULKAN_LOG_DOMAIN, "Cannot create swapchain without logical and physical devices");
-        return 0;
-    }
-
     if (!vulkan_create_surface(window, vulkan)) {
         return 0;
     }
@@ -1125,6 +1155,8 @@ void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, 
 
     VK_CHECK(vkWaitForFences(vulkan->device, 1, &frame->renderFence, VK_TRUE, SECONDS_TO_NANOSECONDS(1)));
     VK_CHECK(vkResetFences(vulkan->device, 1, &frame->renderFence));
+
+    vkdefer_begin_frame(&vulkan->deferCtx, vulkan->currentFrameIndex);
 
     U32 imageIndex = 0u;
     VK_CHECK(vkAcquireNextImageKHR(vulkan->device,
