@@ -94,8 +94,8 @@ struct TimedScope {
     U32 prevParent;
     U64 startTicks;
 
-    FORCE_INLINE TimedScope(U32 index_, const char* label_) noexcept;
-    FORCE_INLINE ~TimedScope() noexcept;
+    TimedScope(U32 index_, const char* label_) noexcept;
+    ~TimedScope() noexcept;
 };
 
 void profiler_initialize();

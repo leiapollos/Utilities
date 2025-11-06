@@ -8,6 +8,7 @@ struct ProfilerGlobalState {
     U64 globalStartMicros;
     U32 threadCount;
     ProfilerThreadState* threadStates[PROFILER_MAX_THREADS];
+    Arena* labelArena;
 
 #if PROFILER_USE_TSC
     U64 tscFrequencyHz;
@@ -55,6 +56,12 @@ U64 ProfClock::to_micros(U64 ticksOrMicros) {
 void profiler_initialize() {
     memset(&g_profiler, 0, sizeof(g_profiler));
     g_profiler.registryMutex = OS_mutex_create();
+    
+    ArenaParameters params = {};
+    params.arenaSize = MB(1);
+    params.committedSize = KB(64);
+    params.flags = ArenaFlags_DoChain;
+    g_profiler.labelArena = arena_alloc(params);
 
 #if PROFILER_USE_TSC
     // Calibrate TSC-equivalent frequency using platform counters
@@ -101,6 +108,11 @@ void profiler_initialize() {
 void profiler_shutdown() {
     OS_mutex_destroy(g_profiler.registryMutex);
     g_profiler.registryMutex = {0};
+    
+    if (g_profiler.labelArena) {
+        arena_release(g_profiler.labelArena);
+        g_profiler.labelArena = 0;
+    }
 }
 
 ProfilerThreadState* profiler_get_tls() {
@@ -126,8 +138,11 @@ void profiler_init_thread(const char* name, U32 traceEventCapacityIfEnabled) {
         return;
     }
 
-    ProfilerThreadState* tls =
-            (ProfilerThreadState*) malloc(sizeof(ProfilerThreadState));
+    if (!g_profiler.labelArena) {
+        return;
+    }
+
+    ProfilerThreadState* tls = ARENA_PUSH_STRUCT(g_profiler.labelArena, ProfilerThreadState);
     memset(tls, 0, sizeof(*tls));
     tls->currentParentIndex = 0;
     tls->threadId = OS_get_thread_id_u32();
@@ -141,8 +156,7 @@ void profiler_init_thread(const char* name, U32 traceEventCapacityIfEnabled) {
     tls->eventCapacity = 0;
     tls->eventCount = 0;
     if (cap > 0) {
-        tls->events = (ProfilerThreadState::TraceEvent*) malloc(
-            sizeof(ProfilerThreadState::TraceEvent) * (size_t) cap);
+        tls->events = ARENA_PUSH_ARRAY(g_profiler.labelArena, ProfilerThreadState::TraceEvent, cap);
         tls->eventCapacity = cap;
         tls->eventCount = 0;
     }
@@ -157,7 +171,7 @@ void profiler_set_thread_name(const char* name) {
     tls->threadName = name;
 }
 
-FORCE_INLINE TimedScope::TimedScope(U32 index_, const char* label_) noexcept {
+TimedScope::TimedScope(U32 index_, const char* label_) noexcept {
     ProfilerThreadState* tls = profiler_get_tls();
     index = index_;
 
@@ -165,12 +179,20 @@ FORCE_INLINE TimedScope::TimedScope(U32 index_, const char* label_) noexcept {
     tls->currentParentIndex = index;
 
     ProfilerEntry* entry = &tls->entries[index];
-    entry->label = label_;
+    
+    // Copy label to permanent storage so it persists after module unload
+    if (label_ && !entry->label && g_profiler.labelArena) {
+        StringU8 labelStr = str8((const char*) label_);
+        StringU8 labelCopy = str8_cpy(g_profiler.labelArena, labelStr);
+        entry->label = (const char*) labelCopy.data;
+    } else if (!entry->label) {
+        entry->label = label_;
+    }
 
     startTicks = ProfClock::now();
 }
 
-FORCE_INLINE TimedScope::~TimedScope() noexcept {
+TimedScope::~TimedScope() noexcept {
     ProfilerThreadState* tls = g_tlsProfilerState;
     if (!tls) {
         return;
@@ -299,7 +321,8 @@ void profiler_dump_trace_json(const char* path) {
     (void) path;
     return;
 #else
-    Temp tmp = get_scratch(0, 0);
+    Arena* excludes[1] = {g_profiler.labelArena};
+    Temp tmp = get_scratch(excludes, ARRAY_COUNT(excludes));
     DEFER_REF(temp_end(&tmp));
     Arena* arena = tmp.arena;
 
