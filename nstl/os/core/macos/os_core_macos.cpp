@@ -3,6 +3,11 @@
 //
 
 // ////////////////////////
+// Globals
+
+OS_MACOS_State g_OS_MacOSState = {};
+
+// ////////////////////////
 // System Info
 
 OS_SystemInfo* OS_get_system_info() {
@@ -658,15 +663,20 @@ B32 OS_file_copy_contents(const char* srcPath, const char* dstPath) {
 // State
 
 static OS_MACOS_Entity* alloc_OS_entity() {
-    if (g_OS_MacOSState.freeEntities) {
-        OS_MACOS_Entity* entity = g_OS_MacOSState.freeEntities;
-        g_OS_MacOSState.freeEntities = entity->next;
-        return entity;
-    }
+    pthread_mutex_lock(&g_OS_MacOSState.entityMutex);
+    DEFER_REF(pthread_mutex_unlock(&g_OS_MacOSState.entityMutex));
 
-    Arena* arena = g_OS_MacOSState.osEntityArena;
-    OS_MACOS_Entity* entity = (OS_MACOS_Entity*) arena_push(arena, sizeof(OS_MACOS_Entity), alignof(OS_MACOS_Entity));
-    memset(entity, 0, sizeof(OS_MACOS_Entity));
+    OS_MACOS_Entity* entity = g_OS_MacOSState.freeEntities;
+    if (entity) {
+        g_OS_MacOSState.freeEntities = entity->next;
+        memset(entity, 0, sizeof(OS_MACOS_Entity));
+    } else {
+        Arena* arena = g_OS_MacOSState.osEntityArena;
+        entity = (OS_MACOS_Entity*) arena_push(arena, sizeof(OS_MACOS_Entity), alignof(OS_MACOS_Entity));
+        if (entity) {
+            memset(entity, 0, sizeof(OS_MACOS_Entity));
+        }
+    }
     return entity;
 }
 
@@ -674,6 +684,9 @@ static void free_OS_entity(OS_MACOS_Entity* entity) {
     if (!entity) {
         return;
     }
+    pthread_mutex_lock(&g_OS_MacOSState.entityMutex);
+    DEFER_REF(pthread_mutex_unlock(&g_OS_MacOSState.entityMutex));
+
     entity->next = g_OS_MacOSState.freeEntities;
     g_OS_MacOSState.freeEntities = entity;
 }
@@ -696,6 +709,8 @@ int main(int argc, char** argv) {
 
     Arena* entityArena = arena_alloc();
     g_OS_MacOSState.osEntityArena = entityArena;
+
+    pthread_mutex_init(&g_OS_MacOSState.entityMutex, 0);
 
     base_entry_point(argc, argv);
 }

@@ -71,10 +71,11 @@ struct OS_MACOS_State {
 
     Arena* osEntityArena;
     OS_MACOS_Entity* freeEntities;
+    pthread_mutex_t entityMutex;
 };
 
 
 // ////////////////////////
 // Globals
 
-static OS_MACOS_State g_OS_MacOSState = {};
+extern OS_MACOS_State g_OS_MacOSState;
