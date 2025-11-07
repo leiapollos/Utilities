@@ -49,6 +49,14 @@ static PlatformOSApi host_build_os_api(void) {
     return api;
 }
 
+static PlatformRendererApi host_build_renderer_api(void) {
+    PlatformRendererApi api = {};
+#define HOST_ASSIGN_RENDERER_FN(name) api.name = name;
+    PLATFORM_RENDERER_FUNCTIONS(HOST_ASSIGN_RENDERER_FN)
+#undef HOST_ASSIGN_RENDERER_FN
+    return api;
+}
+
 struct HostState {
     LoadedModule module;
     AppMemory memory;
@@ -288,6 +296,7 @@ static B32 host_allocate_memory(HostState* state) {
 
     state->platformAPI.userData = state;
     state->platformAPI.os = host_build_os_api();
+    state->platformAPI.renderer = host_build_renderer_api();
 
     MEMSET(&state->input, 0, sizeof(state->input));
     state->input.events = state->eventBuffer;

@@ -22,9 +22,12 @@
 #pragma clang diagnostic ignored "-Wsign-conversion"
 #pragma clang diagnostic ignored "-Wmissing-field-initializers"
 #pragma clang diagnostic ignored "-Wunused-private-field"
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#pragma clang diagnostic ignored "-Wimplicit-int-conversion"
 #endif
 #define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
+#include <dxc/dxcapi.h>
 #if defined(COMPILER_CLANG)
 #pragma clang diagnostic pop
 #endif
@@ -83,6 +86,11 @@ struct RendererVulkanSwapchain {
     VkExtent2D extent;
 };
 
+struct RendererVulkanShader {
+    VkShaderModule module;
+    StringU8 path;
+};
+
 struct RendererVulkan {
     Arena* arena;
     VkInstance instance;
@@ -105,6 +113,10 @@ struct RendererVulkan {
 
     RendererVulkanAllocatedImage drawImage;
 	VkExtent2D drawExtent;
+
+    RendererVulkanShader* shaders;
+    U32 shaderCount;
+    U32 shaderCapacity;
 };
 
 #if defined(NDEBUG)
@@ -117,57 +129,5 @@ static const char* VALIDATION_LAYERS[] = {
     "VK_LAYER_KHRONOS_validation",
 };
 
-
-static B32 vulkan_check_validation_layer_support(Arena * arena);
-static B32 vulkan_check_extension_support(Arena* arena, const char* extensionName);
-
-static B32 vulkan_create_instance(Arena * arena, RendererVulkan * vulkan);
-static void vulkan_destroy_instance(RendererVulkan* vulkan);
-
-static B32 vulkan_create_device(Arena * arena, RendererVulkan * vulkan);
-static B32 vulkan_init_device_queues(RendererVulkan* vulkan);
-static void vulkan_destroy_device(RendererVulkan* vulkan);
-
-static B32 vulkan_create_allocator(RendererVulkan* vulkan);
-
-static B32 vulkan_init_defer_memory(RendererVulkan* vulkan);
-static void vulkan_shutdown_defer(RendererVulkan* vulkan);
-
-static B32 vulkan_create_surface(OS_WindowHandle window, RendererVulkan* vulkan);
-static void vulkan_destroy_surface(RendererVulkan* vulkan);
-
-static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle window);
-static void vulkan_destroy_swapchain(RendererVulkan* vulkan);
-
-static VkSemaphoreCreateInfo vulkan_semaphore_create_info(VkSemaphoreCreateFlags flags);
-static VkFenceCreateInfo vulkan_fence_create_info(VkFenceCreateFlags flags);
-static VkCommandBufferBeginInfo vulkan_command_buffer_begin_info(VkCommandBufferUsageFlags flags);
-
-static VkImageSubresourceRange vulkan_image_subresource_range(VkImageAspectFlags aspectMask);
-static VkImageMemoryBarrier2 vulkan_image_memory_barrier2(VkImage image,
-                                                          VkImageLayout oldLayout,
-                                                          VkImageLayout newLayout);
-static VkDependencyInfo vulkan_dependency_info(U32 imageMemoryBarrierCount,
-                                               const VkImageMemoryBarrier2* pImageMemoryBarriers);
-static void vulkan_transition_image(VkCommandBuffer cmd, VkImage image, VkImageLayout currentLayout,
-                                    VkImageLayout newLayout);
-static void vulkan_copy_image_to_image(VkCommandBuffer cmd, VkImage source, VkImage destination, VkExtent2D srcSize, VkExtent2D dstSize);
-
-static VkSemaphoreSubmitInfo vulkan_semaphore_submit_info(VkPipelineStageFlags2 stageMask, VkSemaphore semaphore);
-static VkCommandBufferSubmitInfo vulkan_command_buffer_submit_info(VkCommandBuffer cmd);
-static VkSubmitInfo2 vulkan_submit_info2(VkCommandBufferSubmitInfo* cmd,
-                                         VkSemaphoreSubmitInfo* signalSemaphoreInfo,
-                                         VkSemaphoreSubmitInfo* waitSemaphoreInfo);
-
-static B32 vulkan_create_frames(RendererVulkan* vulkan);
-static B32 vulkan_create_sync_structures(RendererVulkan* vulkan);
-static void vulkan_destroy_frames(RendererVulkan* vulkan);
-
-static VkImageCreateInfo vulkan_image_create_info(VkFormat format, VkImageUsageFlags usageFlags, VkExtent3D extent);
-static VkImageViewCreateInfo vulkan_image_view_create_info(VkFormat format, VkImage image, VkImageAspectFlags aspectFlags);
-
-
-static B32 vulkan_create_debug_messenger(Arena * arena, RendererVulkan * vulkan);
-static void vulkan_destroy_debug_messenger(RendererVulkan* vulkan);
-
 void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, Vec3F32 color);
+B32 renderer_vulkan_compile_shader_to_result(RendererVulkan* vulkan, Arena* arena, StringU8 shaderPath, ShaderCompileResult* outResult);

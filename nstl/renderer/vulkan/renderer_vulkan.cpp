@@ -2,10 +2,87 @@
 // Created by André Leite on 03/11/2025.
 //
 
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/stat.h>
+
+static B32 vulkan_check_validation_layer_support(Arena* arena);
+static B32 vulkan_check_extension_support(Arena* arena, const char* extensionName);
+static B32 vulkan_create_instance(Arena* arena, RendererVulkan* vulkan);
+static void vulkan_destroy_instance(RendererVulkan* vulkan);
+static B32 vulkan_create_device(Arena* arena, RendererVulkan* vulkan);
+static B32 vulkan_init_device_queues(RendererVulkan* vulkan);
+static void vulkan_destroy_device(RendererVulkan* vulkan);
+static B32 vulkan_create_allocator(RendererVulkan* vulkan);
+static B32 vulkan_init_defer_memory(RendererVulkan* vulkan);
+static void vulkan_shutdown_defer(RendererVulkan* vulkan);
+static B32 vulkan_create_surface(OS_WindowHandle window, RendererVulkan* vulkan);
+static void vulkan_destroy_surface(RendererVulkan* vulkan);
+static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle window);
+static void vulkan_destroy_swapchain(RendererVulkan* vulkan);
+static VkSemaphoreCreateInfo vulkan_semaphore_create_info(VkSemaphoreCreateFlags flags);
+static VkFenceCreateInfo vulkan_fence_create_info(VkFenceCreateFlags flags);
+static VkCommandBufferBeginInfo vulkan_command_buffer_begin_info(VkCommandBufferUsageFlags flags);
+static VkImageSubresourceRange vulkan_image_subresource_range(VkImageAspectFlags aspectMask);
+static VkImageMemoryBarrier2 vulkan_image_memory_barrier2(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout);
+static VkDependencyInfo vulkan_dependency_info(U32 imageMemoryBarrierCount, const VkImageMemoryBarrier2* pImageMemoryBarriers);
+static void vulkan_transition_image(VkCommandBuffer cmd, VkImage image, VkImageLayout currentLayout, VkImageLayout newLayout);
+static void vulkan_copy_image_to_image(VkCommandBuffer cmd, VkImage source, VkImage destination, VkExtent2D srcSize, VkExtent2D dstSize);
+static VkSemaphoreSubmitInfo vulkan_semaphore_submit_info(VkPipelineStageFlags2 stageMask, VkSemaphore semaphore);
+static VkCommandBufferSubmitInfo vulkan_command_buffer_submit_info(VkCommandBuffer cmd);
+static VkSubmitInfo2 vulkan_submit_info2(VkCommandBufferSubmitInfo* cmd, VkSemaphoreSubmitInfo* signalSemaphoreInfo, VkSemaphoreSubmitInfo* waitSemaphoreInfo);
+static B32 vulkan_create_frames(RendererVulkan* vulkan);
+static B32 vulkan_create_sync_structures(RendererVulkan* vulkan);
+static void vulkan_destroy_frames(RendererVulkan* vulkan);
+static VkImageCreateInfo vulkan_image_create_info(VkFormat format, VkImageUsageFlags usageFlags, VkExtent3D extent);
+static VkImageViewCreateInfo vulkan_image_view_create_info(VkFormat format, VkImage image, VkImageAspectFlags aspectFlags);
+static B32 vulkan_create_debug_messenger(Arena* arena, RendererVulkan* vulkan);
+static void vulkan_destroy_debug_messenger(RendererVulkan* vulkan);
+static B32 vulkan_compile_shader_wrapper(void* backendData, Arena* arena, StringU8 shaderPath, ShaderCompileResult* outResult);
+static void vulkan_merge_shader_results_wrapper(void* backendData, Arena* arena, const ShaderCompileResult* results, U32 resultCount, const ShaderCompileRequest* requests, U32 requestCount);
+
+struct DxcThreadState {
+    IDxcCompiler3* compiler;
+    IDxcUtils* utils;
+    B32 initialized;
+};
+
+thread_local DxcThreadState g_tlsDxcState = {0, 0, 0};
+
+static B32 vulkan_get_dxc_instances(IDxcCompiler3** outCompiler, IDxcUtils** outUtils) {
+    if (!outCompiler || !outUtils) {
+        return 0;
+    }
+
+    if (!g_tlsDxcState.initialized) {
+        HRESULT hr = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&g_tlsDxcState.compiler));
+        if (FAILED(hr) || !g_tlsDxcState.compiler) {
+            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create DXC compiler instance (thread {}): {}", 
+                      OS_get_thread_id_u32(), hr);
+            return 0;
+        }
+
+        hr = DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&g_tlsDxcState.utils));
+        if (FAILED(hr) || !g_tlsDxcState.utils) {
+            if (g_tlsDxcState.compiler) {
+                g_tlsDxcState.compiler->Release();
+                g_tlsDxcState.compiler = 0;
+            }
+            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create DXC utils instance (thread {}): {}", 
+                      OS_get_thread_id_u32(), hr);
+            return 0;
+        }
+
+        g_tlsDxcState.initialized = 1;
+    }
+
+    *outCompiler = g_tlsDxcState.compiler;
+    *outUtils = g_tlsDxcState.utils;
+    return 1;
+}
+
 // ////////////////////////
 // Lifetime
-
-#include <vulkan/vulkan_core.h>
 
 B32 renderer_init(Arena* arena, Renderer* renderer) {
     if (!arena || !renderer) {
@@ -41,6 +118,10 @@ B32 renderer_init(Arena* arena, Renderer* renderer) {
     vulkan->deferPerFrameMem = 0;
     vulkan->deferGlobalMem = 0;
 
+    vulkan->shaders = 0;
+    vulkan->shaderCount = 0u;
+    vulkan->shaderCapacity = 0u;
+
     for (U32 i = 0; i < VULKAN_FRAME_OVERLAP; ++i) {
         vulkan->frames[i].commandPool = VK_NULL_HANDLE;
         vulkan->frames[i].commandBuffer = VK_NULL_HANDLE;
@@ -67,6 +148,8 @@ B32 renderer_init(Arena* arena, Renderer* renderer) {
     LOG_INFO(VULKAN_LOG_DOMAIN, "Vulkan renderer initialized successfully");
 
     renderer->backendData = vulkan;
+    renderer->compileShader = vulkan_compile_shader_wrapper;
+    renderer->mergeShaderResults = vulkan_merge_shader_results_wrapper;
     return 1;
 }
 
@@ -1318,4 +1401,236 @@ void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, 
     VK_CHECK(vkQueuePresentKHR(vulkan->graphicsQueue, &presentInfo));
 
     vulkan->currentFrameIndex = (vulkan->currentFrameIndex + 1u) % VULKAN_FRAME_OVERLAP;
+}
+
+B32 renderer_vulkan_compile_shader_to_result(RendererVulkan* vulkan, Arena* arena, StringU8 shaderPath, ShaderCompileResult* outResult) {
+    if (!vulkan || str8_is_nil(shaderPath) || !outResult) {
+        return 0;
+    }
+    
+    MEMSET(outResult, 0, sizeof(ShaderCompileResult));
+    
+    if (shaderPath.size < 5) {
+        return 0;
+    }
+    
+    StringU8 suffix = str8((const char*)shaderPath.data + shaderPath.size - 5, 5);
+    if (!str8_equal(suffix, str8(".hlsl"))) {
+        return 0;
+    }
+
+    IDxcCompiler3* dxcCompiler = 0;
+    IDxcUtils* dxcUtils = 0;
+    if (!vulkan_get_dxc_instances(&dxcCompiler, &dxcUtils)) {
+        return 0;
+    }
+    
+    OS_Handle shaderFile = OS_file_open((const char*)shaderPath.data, OS_FileOpenMode_Read);
+    if (!shaderFile.handle) {
+        return 0;
+    }
+    
+    OS_FileMapping mapping = OS_file_map_ro(shaderFile);
+    OS_file_close(shaderFile);
+    
+    if (!mapping.ptr || mapping.length == 0) {
+        if (mapping.ptr) {
+            OS_file_unmap(mapping);
+        }
+        return 0;
+    }
+
+    U64 shaderSize = mapping.length;
+    
+    if (shaderSize > 0xFFFFFFFFULL) {
+        OS_file_unmap(mapping);
+        return 0;
+    }
+
+    Arena* excludes[1] = {arena};
+    Temp scratch = get_scratch(excludes, ARRAY_COUNT(excludes));
+    DEFER_REF(temp_end(&scratch));
+    Arena* scratchArena = scratch.arena;
+
+    U8* shaderSource = ARENA_PUSH_ARRAY(scratchArena, U8, shaderSize);
+    if (!shaderSource) {
+        OS_file_unmap(mapping);
+        return 0;
+    }
+
+    MEMMOVE(shaderSource, mapping.ptr, shaderSize);
+    OS_file_unmap(mapping);
+    
+    IDxcBlobEncoding* sourceBlob = 0;
+    HRESULT hr = dxcUtils->CreateBlobFromPinned(shaderSource, (U32)shaderSize, DXC_CP_UTF8, &sourceBlob);
+    if (FAILED(hr) || !sourceBlob) {
+        return 0;
+    }
+
+    const wchar_t* targetProfile = L"vs_6_0";
+    
+    if (shaderPath.size >= 8) {
+        for (U64 i = 0; i <= shaderPath.size - 8; ++i) {
+            StringU8 substr = str8((const char*)shaderPath.data + i, 8);
+            if (str8_equal(substr, str8("fragment"))) {
+                targetProfile = L"ps_6_0";
+                break;
+            }
+        }
+    }
+
+    const wchar_t* args[] = {
+        L"-spirv",
+        L"-T", targetProfile,
+        L"-E", L"main",
+    };
+    const U32 argCount = sizeof(args) / sizeof(args[0]);
+
+    IDxcIncludeHandler* includeHandler = 0;
+    hr = dxcUtils->CreateDefaultIncludeHandler(&includeHandler);
+    if (FAILED(hr) || !includeHandler) {
+        sourceBlob->Release();
+        return 0;
+    }
+
+    DxcBuffer sourceBuffer = {};
+    sourceBuffer.Ptr = sourceBlob->GetBufferPointer();
+    sourceBuffer.Size = sourceBlob->GetBufferSize();
+    sourceBuffer.Encoding = DXC_CP_UTF8;
+
+    IDxcResult* compileResult = 0;
+    hr = dxcCompiler->Compile(&sourceBuffer, args, argCount, includeHandler, IID_PPV_ARGS(&compileResult));
+
+    sourceBlob->Release();
+    includeHandler->Release();
+
+    if (FAILED(hr) || !compileResult) {
+        return 0;
+    }
+
+    HRESULT status = 0;
+    hr = compileResult->GetStatus(&status);
+    if (FAILED(hr)) {
+        compileResult->Release();
+        return 0;
+    }
+
+    if (FAILED(status)) {
+        IDxcBlobUtf8* errors = 0;
+        hr = compileResult->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errors), 0);
+        if (SUCCEEDED(hr) && errors && errors->GetStringLength() > 0) {
+            LOG_ERROR(VULKAN_LOG_DOMAIN, "DXC compilation errors for shader {}:\n{}",
+                      shaderPath, errors->GetStringPointer());
+            errors->Release();
+        }
+        compileResult->Release();
+        return 0;
+    }
+
+    IDxcBlob* spirvBlob = 0;
+    hr = compileResult->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&spirvBlob), 0);
+    if (FAILED(hr) || !spirvBlob) {
+        compileResult->Release();
+        return 0;
+    }
+
+    U64 spirvSize = spirvBlob->GetBufferSize();
+    U32* spirvCode = ARENA_PUSH_ARRAY(scratchArena, U32, (spirvSize + sizeof(U32) - 1) / sizeof(U32));
+    if (!spirvCode) {
+        spirvBlob->Release();
+        compileResult->Release();
+        return 0;
+    }
+
+    MEMMOVE(spirvCode, spirvBlob->GetBufferPointer(), spirvSize);
+    spirvBlob->Release();
+    compileResult->Release();
+
+    StringU8 basePath = str8((const char*)shaderPath.data, shaderPath.size - 5);
+    StringU8 outputPath = str8_concat(scratchArena, basePath, str8(".spv"));
+
+    OS_Handle outputFile = OS_file_open((const char*)outputPath.data, OS_FileOpenMode_Create);
+    if (outputFile.handle) {
+        RangeU64 writeRange = {0, spirvSize};
+        OS_file_write(outputFile, writeRange, spirvCode);
+        OS_file_close(outputFile);
+    }
+
+    VkShaderModuleCreateInfo createInfo = {};
+    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    createInfo.codeSize = spirvSize;
+    createInfo.pCode = spirvCode;
+
+    VkShaderModule shaderModule = VK_NULL_HANDLE;
+    VkResult vkResult = vkCreateShaderModule(vulkan->device, &createInfo, 0, &shaderModule);
+    if (vkResult != VK_SUCCESS) {
+        return 0;
+    }
+
+    outResult->module = (void*)shaderModule;
+    outResult->path = shaderPath;
+    outResult->valid = 1;
+    outResult->handle = 0;
+
+    return 1;
+}
+
+static B32 vulkan_compile_shader_wrapper(void* backendData, Arena* arena, StringU8 shaderPath, ShaderCompileResult* outResult) {
+    RendererVulkan* vulkan = (RendererVulkan*) backendData;
+    return renderer_vulkan_compile_shader_to_result(vulkan, arena, shaderPath, outResult);
+}
+
+static void vulkan_merge_shader_results_wrapper(void* backendData, Arena* arena, const ShaderCompileResult* results, U32 resultCount, const ShaderCompileRequest* requests, U32 requestCount) {
+    RendererVulkan* vulkan = (RendererVulkan*) backendData;
+    if (!vulkan || !results || resultCount == 0u) {
+        return;
+    }
+    
+    if (vulkan->shaderCount + resultCount > vulkan->shaderCapacity) {
+        U32 newCapacity = vulkan->shaderCount + resultCount;
+        if (newCapacity < vulkan->shaderCapacity * 2u) {
+            newCapacity = vulkan->shaderCapacity * 2u;
+        }
+        if (newCapacity < 16u) {
+            newCapacity = 16u;
+        }
+        
+        RendererVulkanShader* newShaders = (RendererVulkanShader*)arena_push(vulkan->arena, 
+            sizeof(RendererVulkanShader) * newCapacity, alignof(RendererVulkanShader));
+        if (!newShaders) {
+            return;
+        }
+        
+        if (vulkan->shaders) {
+            MEMMOVE(newShaders, vulkan->shaders, sizeof(RendererVulkanShader) * vulkan->shaderCount);
+        }
+        vulkan->shaders = newShaders;
+        vulkan->shaderCapacity = newCapacity;
+    }
+    
+    U32 baseIndex = vulkan->shaderCount;
+    for (U32 i = 0; i < resultCount; ++i) {
+        if (!results[i].valid) {
+            continue;
+        }
+        
+        U32 shaderIndex = baseIndex;
+        RendererVulkanShader* shader = &vulkan->shaders[shaderIndex];
+        shader->module = (VkShaderModule)results[i].module;
+        shader->path = str8_cpy(vulkan->arena, results[i].path);
+        baseIndex++;
+        
+        for (U32 reqIdx = 0; reqIdx < requestCount; ++reqIdx) {
+            if (str8_equal(requests[reqIdx].shaderPath, results[i].path)) {
+                if (requests[reqIdx].outHandle) {
+                    *requests[reqIdx].outHandle = (ShaderHandle)(shaderIndex + 1u);
+                }
+                break;
+            }
+        }
+        
+        vkdefer_destroy_VkShaderModule(&vulkan->deferCtx.globalBuf, (VkShaderModule)results[i].module);
+    }
+    
+    vulkan->shaderCount = baseIndex;
 }

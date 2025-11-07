@@ -8,6 +8,9 @@
 
 #include "app_tests.cpp"
 
+#include <dirent.h>
+#include <sys/stat.h>
+
 #define APP_CORE_STATE_VERSION 3u
 
 static U64 app_total_permanent_size(void) {
@@ -40,6 +43,81 @@ static U32 app_select_worker_count(const AppHostContext* host) {
     }
     U32 workers = (logicalCores > 1u) ? (logicalCores - 1u) : 1u;
     return workers;
+}
+
+static void app_compile_shaders_from_folder(AppPlatform* platform, AppMemory* memory, AppHostContext* host) {
+    if (!memory || !host || !host->renderer || !host->renderer->backendData) {
+        return;
+    }
+
+    AppCoreState* state = app_get_state(memory);
+    if (!state->jobSystem) {
+        return;
+    }
+
+    Temp scratch = get_scratch(0, 0);
+    DEFER_REF(temp_end(&scratch));
+    Arena* arena = scratch.arena;
+
+    StringU8 shadersDir = str8("shaders");
+    DIR* dir = opendir((const char*) shadersDir.data);
+    if (!dir) {
+        LOG_WARNING("app", "Failed to open shaders directory");
+        return;
+    }
+
+    Str8List shaderFiles = {};
+    str8list_init(&shaderFiles, arena, 16u);
+
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != 0) {
+        if (entry->d_name[0] == '.') {
+            continue;
+        }
+
+        StringU8 fileName = str8((const char*) entry->d_name, C_STR_LEN(entry->d_name));
+        
+        // Check for .hlsl extension
+        if (fileName.size < 5) {
+            continue;
+        }
+        
+        StringU8 suffix = str8((const char*)fileName.data + fileName.size - 5, 5);
+        if (!str8_equal(suffix, str8(".hlsl"))) {
+            continue;
+        }
+        
+        StringU8 shaderPath = str8_concat(arena, shadersDir, str8("/"), fileName);
+        
+        OS_FileInfo fileInfo = OS_get_file_info((const char*) shaderPath.data);
+        if (fileInfo.exists) {
+            str8list_push(&shaderFiles, shaderPath);
+        }
+    }
+    closedir(dir);
+
+    if (shaderFiles.count == 0u) {
+        LOG_INFO("app", "No shader files found in shaders directory");
+        return;
+    }
+
+    ShaderCompileRequest* requests = ARENA_PUSH_ARRAY(arena, ShaderCompileRequest, shaderFiles.count);
+    ShaderHandle* handles = ARENA_PUSH_ARRAY(arena, ShaderHandle, shaderFiles.count);
+
+    if (!requests || !handles) {
+        LOG_ERROR("app", "Failed to allocate shader compile requests");
+        return;
+    }
+
+    for (U64 i = 0u; i < shaderFiles.count; ++i) {
+        requests[i].shaderPath = str8_cpy(arena, shaderFiles.items[i]);
+        requests[i].outHandle = &handles[i];
+        handles[i] = SHADER_HANDLE_INVALID;
+    }
+    {
+        TIME_SCOPE("Shader Compilation");
+        PLATFORM_RENDERER_CALL(platform, renderer_compile_shaders, host->renderer, arena, state->jobSystem, requests, (U32) shaderFiles.count);
+    }
 }
 
 static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostContext* host) {
@@ -101,6 +179,10 @@ static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostConte
         desc.width = state->desiredWindow.width;
         desc.height = state->desiredWindow.height;
         state->windowHandle = PLATFORM_OS_CALL(platform, OS_window_create, desc);
+    }
+
+    if (host && host->renderer) {
+        app_compile_shaders_from_folder(platform, memory, host);
     }
 
     return 1;
@@ -199,7 +281,7 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
         color.r = red;
         color.g = green;
         color.b = blue;
-        renderer_draw_color(host->renderer, state->windowHandle, color);
+        PLATFORM_RENDERER_CALL(platform, renderer_draw_color, host->renderer, state->windowHandle, color);
     }
 }
 

@@ -33,6 +33,7 @@ target_include_directories(utilities_host PRIVATE ${SRC_ROOT} ${VULKAN_VMA_INCLU
 
 if(APPLE)
     set(VULKAN_SDK_LIB_DIR "${VULKAN_SDK_ROOT}/macos/lib")
+    set(VULKAN_SDK_BIN_DIR "${VULKAN_SDK_ROOT}/macos/bin")
 
     add_library(VulkanSDK::Vulkan SHARED IMPORTED)
     set_target_properties(VulkanSDK::Vulkan PROPERTIES
@@ -45,10 +46,17 @@ if(APPLE)
         "${VULKAN_SDK_LIB_DIR}/libvulkan.dylib"
         "${VULKAN_SDK_LIB_DIR}/libvulkan.1.dylib"
         "${VULKAN_SDK_LIB_DIR}/libMoltenVK.dylib"
+        "${VULKAN_SDK_LIB_DIR}/libdxcompiler.dylib"
+    )
+
+    add_library(VulkanSDK::DxcCompiler SHARED IMPORTED)
+    set_target_properties(VulkanSDK::DxcCompiler PROPERTIES
+        IMPORTED_LOCATION "${VULKAN_SDK_LIB_DIR}/libdxcompiler.dylib"
+        INTERFACE_INCLUDE_DIRECTORIES "${VULKAN_SDK_INCLUDE_DIR}"
     )
 
     target_link_libraries(utilities_host PRIVATE "-framework Cocoa" "-framework QuartzCore" "-framework Metal")
-    target_link_libraries(utilities_host PRIVATE VulkanSDK::Vulkan)
+    target_link_libraries(utilities_host PRIVATE VulkanSDK::Vulkan VulkanSDK::DxcCompiler)
     
     set_target_properties(utilities_host PROPERTIES
         BUILD_RPATH "@loader_path"

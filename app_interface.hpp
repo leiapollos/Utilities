@@ -57,6 +57,19 @@ struct PlatformOSApi {
 #define PLATFORM_OS_FN(platform, name) ((platform)->os.name)
 #define PLATFORM_OS_CALL(platform, name, ...) ((platform)->os.name(__VA_ARGS__))
 
+#define PLATFORM_RENDERER_FUNCTIONS(X) \
+    X(renderer_compile_shaders) \
+    X(renderer_draw_color)
+
+struct PlatformRendererApi {
+#define PLATFORM_DECLARE_RENDERER_FN(name) decltype(&name) name;
+    PLATFORM_RENDERER_FUNCTIONS(PLATFORM_DECLARE_RENDERER_FN)
+#undef PLATFORM_DECLARE_RENDERER_FN
+};
+
+#define PLATFORM_RENDERER_FN(platform, name) ((platform)->renderer.name)
+#define PLATFORM_RENDERER_CALL(platform, name, ...) ((platform)->renderer.name(__VA_ARGS__))
+
 struct AppHostContext {
     B32 shouldQuit;
     U32 reloadCount;
@@ -80,6 +93,7 @@ struct AppWindowDesc {
 struct AppPlatform {
     void* userData;
     PlatformOSApi os;
+    PlatformRendererApi renderer;
 };
 
 struct AppMemory {
