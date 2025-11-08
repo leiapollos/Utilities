@@ -112,7 +112,7 @@ struct RendererVulkan {
     U8* deferGlobalMem;
 
     RendererVulkanAllocatedImage drawImage;
-	VkExtent2D drawExtent;
+    VkExtent2D drawExtent;
 
     RendererVulkanShader* shaders;
     U32 shaderCount;
@@ -130,4 +130,5 @@ static const char* VALIDATION_LAYERS[] = {
 };
 
 void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, Vec3F32 color);
-B32 renderer_vulkan_compile_shader_to_result(RendererVulkan* vulkan, Arena* arena, StringU8 shaderPath, ShaderCompileResult* outResult);
+B32 renderer_vulkan_compile_shader_to_result(RendererVulkan* vulkan, Arena* arena, StringU8 shaderPath,
+                                             ShaderCompileResult* outResult);

@@ -22,8 +22,10 @@ struct ShaderCompileResult {
     B32 valid;
 };
 
-typedef B32 (*RendererCompileShaderFunc)(void* backendData, Arena* arena, StringU8 shaderPath, ShaderCompileResult* outResult);
-typedef void (*RendererMergeShaderResultsFunc)(void* backendData, Arena* arena, const ShaderCompileResult* results, U32 resultCount, const ShaderCompileRequest* requests, U32 requestCount);
+typedef B32 (*RendererCompileShaderFunc)(void* backendData, Arena* arena, StringU8 shaderPath,
+                                         ShaderCompileResult* outResult);
+typedef void (*RendererMergeShaderResultsFunc)(void* backendData, Arena* arena, const ShaderCompileResult* results,
+                                               U32 resultCount, const ShaderCompileRequest* requests, U32 requestCount);
 
 struct Renderer {
     void* backendData;

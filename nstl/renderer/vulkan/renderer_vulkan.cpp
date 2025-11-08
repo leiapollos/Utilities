@@ -6,40 +6,49 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-static B32 vulkan_check_validation_layer_support(Arena* arena);
+static B32 vulkan_check_validation_layer_support(Arena * arena);
 static B32 vulkan_check_extension_support(Arena* arena, const char* extensionName);
-static B32 vulkan_create_instance(Arena* arena, RendererVulkan* vulkan);
-static void vulkan_destroy_instance(RendererVulkan* vulkan);
-static B32 vulkan_create_device(Arena* arena, RendererVulkan* vulkan);
-static B32 vulkan_init_device_queues(RendererVulkan* vulkan);
-static void vulkan_destroy_device(RendererVulkan* vulkan);
-static B32 vulkan_create_allocator(RendererVulkan* vulkan);
-static B32 vulkan_init_defer_memory(RendererVulkan* vulkan);
-static void vulkan_shutdown_defer(RendererVulkan* vulkan);
+static B32 vulkan_create_instance(Arena * arena, RendererVulkan * vulkan);
+static void vulkan_destroy_instance(RendererVulkan * vulkan);
+static B32 vulkan_create_device(Arena * arena, RendererVulkan * vulkan);
+static B32 vulkan_init_device_queues(RendererVulkan * vulkan);
+static void vulkan_destroy_device(RendererVulkan * vulkan);
+static B32 vulkan_create_allocator(RendererVulkan * vulkan);
+static B32 vulkan_init_defer_memory(RendererVulkan * vulkan);
+static void vulkan_shutdown_defer(RendererVulkan * vulkan);
 static B32 vulkan_create_surface(OS_WindowHandle window, RendererVulkan* vulkan);
-static void vulkan_destroy_surface(RendererVulkan* vulkan);
+static void vulkan_destroy_surface(RendererVulkan * vulkan);
 static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle window);
-static void vulkan_destroy_swapchain(RendererVulkan* vulkan);
+static void vulkan_destroy_swapchain(RendererVulkan * vulkan);
 static VkSemaphoreCreateInfo vulkan_semaphore_create_info(VkSemaphoreCreateFlags flags);
 static VkFenceCreateInfo vulkan_fence_create_info(VkFenceCreateFlags flags);
 static VkCommandBufferBeginInfo vulkan_command_buffer_begin_info(VkCommandBufferUsageFlags flags);
 static VkImageSubresourceRange vulkan_image_subresource_range(VkImageAspectFlags aspectMask);
-static VkImageMemoryBarrier2 vulkan_image_memory_barrier2(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout);
-static VkDependencyInfo vulkan_dependency_info(U32 imageMemoryBarrierCount, const VkImageMemoryBarrier2* pImageMemoryBarriers);
-static void vulkan_transition_image(VkCommandBuffer cmd, VkImage image, VkImageLayout currentLayout, VkImageLayout newLayout);
-static void vulkan_copy_image_to_image(VkCommandBuffer cmd, VkImage source, VkImage destination, VkExtent2D srcSize, VkExtent2D dstSize);
+static VkImageMemoryBarrier2 vulkan_image_memory_barrier2(VkImage image, VkImageLayout oldLayout,
+                                                          VkImageLayout newLayout);
+static VkDependencyInfo vulkan_dependency_info(U32 imageMemoryBarrierCount,
+                                               const VkImageMemoryBarrier2* pImageMemoryBarriers);
+static void vulkan_transition_image(VkCommandBuffer cmd, VkImage image, VkImageLayout currentLayout,
+                                    VkImageLayout newLayout);
+static void vulkan_copy_image_to_image(VkCommandBuffer cmd, VkImage source, VkImage destination, VkExtent2D srcSize,
+                                       VkExtent2D dstSize);
 static VkSemaphoreSubmitInfo vulkan_semaphore_submit_info(VkPipelineStageFlags2 stageMask, VkSemaphore semaphore);
 static VkCommandBufferSubmitInfo vulkan_command_buffer_submit_info(VkCommandBuffer cmd);
-static VkSubmitInfo2 vulkan_submit_info2(VkCommandBufferSubmitInfo* cmd, VkSemaphoreSubmitInfo* signalSemaphoreInfo, VkSemaphoreSubmitInfo* waitSemaphoreInfo);
-static B32 vulkan_create_frames(RendererVulkan* vulkan);
-static B32 vulkan_create_sync_structures(RendererVulkan* vulkan);
-static void vulkan_destroy_frames(RendererVulkan* vulkan);
+static VkSubmitInfo2 vulkan_submit_info2(VkCommandBufferSubmitInfo * cmd, VkSemaphoreSubmitInfo * signalSemaphoreInfo,
+                                         VkSemaphoreSubmitInfo * waitSemaphoreInfo);
+static B32 vulkan_create_frames(RendererVulkan * vulkan);
+static B32 vulkan_create_sync_structures(RendererVulkan * vulkan);
+static void vulkan_destroy_frames(RendererVulkan * vulkan);
 static VkImageCreateInfo vulkan_image_create_info(VkFormat format, VkImageUsageFlags usageFlags, VkExtent3D extent);
-static VkImageViewCreateInfo vulkan_image_view_create_info(VkFormat format, VkImage image, VkImageAspectFlags aspectFlags);
-static B32 vulkan_create_debug_messenger(Arena* arena, RendererVulkan* vulkan);
-static void vulkan_destroy_debug_messenger(RendererVulkan* vulkan);
-static B32 vulkan_compile_shader_wrapper(void* backendData, Arena* arena, StringU8 shaderPath, ShaderCompileResult* outResult);
-static void vulkan_merge_shader_results_wrapper(void* backendData, Arena* arena, const ShaderCompileResult* results, U32 resultCount, const ShaderCompileRequest* requests, U32 requestCount);
+static VkImageViewCreateInfo vulkan_image_view_create_info(VkFormat format, VkImage image,
+                                                           VkImageAspectFlags aspectFlags);
+static B32 vulkan_create_debug_messenger(Arena * arena, RendererVulkan * vulkan);
+static void vulkan_destroy_debug_messenger(RendererVulkan * vulkan);
+static B32 vulkan_compile_shader_wrapper(void* backendData, Arena* arena, StringU8 shaderPath,
+                                         ShaderCompileResult* outResult);
+static void vulkan_merge_shader_results_wrapper(void* backendData, Arena* arena, const ShaderCompileResult* results,
+                                                U32 resultCount, const ShaderCompileRequest* requests,
+                                                U32 requestCount);
 
 struct DxcThreadState {
     IDxcCompiler3* compiler;
@@ -57,7 +66,7 @@ static B32 vulkan_get_dxc_instances(IDxcCompiler3** outCompiler, IDxcUtils** out
     if (!g_tlsDxcState.initialized) {
         HRESULT hr = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&g_tlsDxcState.compiler));
         if (FAILED(hr) || !g_tlsDxcState.compiler) {
-            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create DXC compiler instance (thread {}): {}", 
+            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create DXC compiler instance (thread {}): {}",
                       OS_get_thread_id_u32(), hr);
             return 0;
         }
@@ -68,7 +77,7 @@ static B32 vulkan_get_dxc_instances(IDxcCompiler3** outCompiler, IDxcUtils** out
                 g_tlsDxcState.compiler->Release();
                 g_tlsDxcState.compiler = 0;
             }
-            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create DXC utils instance (thread {}): {}", 
+            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create DXC utils instance (thread {}): {}",
                       OS_get_thread_id_u32(), hr);
             return 0;
         }
@@ -687,11 +696,11 @@ static B32 vulkan_init_defer_memory(RendererVulkan* vulkan) {
     }
 
     vkdefer_init_memory(&vulkan->deferCtx,
-                       VULKAN_FRAME_OVERLAP,
-                       vulkan->deferPerFrameMem,
-                       VKDEFER_PER_FRAME_BYTES,
-                       vulkan->deferGlobalMem,
-                       VKDEFER_GLOBAL_BYTES);
+                        VULKAN_FRAME_OVERLAP,
+                        vulkan->deferPerFrameMem,
+                        VKDEFER_PER_FRAME_BYTES,
+                        vulkan->deferGlobalMem,
+                        VKDEFER_GLOBAL_BYTES);
 
     LOG_DEBUG(VULKAN_LOG_DOMAIN, "VkDefer memory initialized");
     return 1;
@@ -1039,7 +1048,8 @@ static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle windo
             VK_CHECK(vkCreateSemaphore(vulkan->device, &semaphoreInfo, 0, &vulkan->swapchain.imageSemaphores[i]));
         }
 
-        VkImageViewCreateInfo viewInfo = vulkan_image_view_create_info(surfaceFormat.format, rawImages[i], VK_IMAGE_ASPECT_COLOR_BIT);
+        VkImageViewCreateInfo viewInfo = vulkan_image_view_create_info(surfaceFormat.format, rawImages[i],
+                                                                       VK_IMAGE_ASPECT_COLOR_BIT);
 
         VK_CHECK(vkCreateImageView(vulkan->device, &viewInfo, 0, &vulkan->swapchain.images[i].view));
     }
@@ -1057,7 +1067,7 @@ static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle windo
         extent.height,
         1
     };
-        
+
     vulkan->drawImage.imageFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
     vulkan->drawImage.imageExtent = drawImageExtent;
 
@@ -1067,21 +1077,25 @@ static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle windo
     drawImageUsages |= VK_IMAGE_USAGE_STORAGE_BIT;
     drawImageUsages |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-    VkImageCreateInfo rimg_info = vulkan_image_create_info(vulkan->drawImage.imageFormat, drawImageUsages, drawImageExtent);
+    VkImageCreateInfo rimg_info = vulkan_image_create_info(vulkan->drawImage.imageFormat, drawImageUsages,
+                                                           drawImageExtent);
 
     VmaAllocationCreateInfo rimg_allocinfo = {};
     rimg_allocinfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
     rimg_allocinfo.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-    vmaCreateImage(vulkan->allocator, &rimg_info, &rimg_allocinfo, &vulkan->drawImage.image, &vulkan->drawImage.allocation, nullptr);
+    vmaCreateImage(vulkan->allocator, &rimg_info, &rimg_allocinfo, &vulkan->drawImage.image,
+                   &vulkan->drawImage.allocation, nullptr);
 
-    VkImageViewCreateInfo rview_info = vulkan_image_view_create_info(vulkan->drawImage.imageFormat, vulkan->drawImage.image, VK_IMAGE_ASPECT_COLOR_BIT);
+    VkImageViewCreateInfo rview_info = vulkan_image_view_create_info(vulkan->drawImage.imageFormat,
+                                                                     vulkan->drawImage.image,
+                                                                     VK_IMAGE_ASPECT_COLOR_BIT);
 
     VK_CHECK(vkCreateImageView(vulkan->device, &rview_info, nullptr, &vulkan->drawImage.imageView));
 
     vkdefer_destroy_VkImageView(&vulkan->deferCtx.globalBuf, vulkan->drawImage.imageView);
     vkdefer_destroy_VmaImage(&vulkan->deferCtx.globalBuf, vulkan->drawImage.image, vulkan->drawImage.allocation);
-              
+
     return 1;
 }
 
@@ -1205,38 +1219,38 @@ static void vulkan_transition_image(VkCommandBuffer cmd, VkImage image, VkImageL
     vkCmdPipelineBarrier2(cmd, &depInfo);
 }
 
-static void vulkan_copy_image_to_image(VkCommandBuffer cmd, VkImage source, VkImage destination, VkExtent2D srcSize, VkExtent2D dstSize)
-{
-	VkImageBlit2 blitRegion{ .sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2, .pNext = nullptr };
+static void vulkan_copy_image_to_image(VkCommandBuffer cmd, VkImage source, VkImage destination, VkExtent2D srcSize,
+                                       VkExtent2D dstSize) {
+    VkImageBlit2 blitRegion{.sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2, .pNext = nullptr};
 
-	blitRegion.srcOffsets[1].x = SafeCast_U32_S32(srcSize.width);
-	blitRegion.srcOffsets[1].y = SafeCast_U32_S32(srcSize.height);
-	blitRegion.srcOffsets[1].z = 1;
+    blitRegion.srcOffsets[1].x = SafeCast_U32_S32(srcSize.width);
+    blitRegion.srcOffsets[1].y = SafeCast_U32_S32(srcSize.height);
+    blitRegion.srcOffsets[1].z = 1;
 
-	blitRegion.dstOffsets[1].x = SafeCast_U32_S32(dstSize.width);
-	blitRegion.dstOffsets[1].y = SafeCast_U32_S32(dstSize.height);
-	blitRegion.dstOffsets[1].z = 1;
+    blitRegion.dstOffsets[1].x = SafeCast_U32_S32(dstSize.width);
+    blitRegion.dstOffsets[1].y = SafeCast_U32_S32(dstSize.height);
+    blitRegion.dstOffsets[1].z = 1;
 
-	blitRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	blitRegion.srcSubresource.baseArrayLayer = 0;
-	blitRegion.srcSubresource.layerCount = 1;
-	blitRegion.srcSubresource.mipLevel = 0;
+    blitRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    blitRegion.srcSubresource.baseArrayLayer = 0;
+    blitRegion.srcSubresource.layerCount = 1;
+    blitRegion.srcSubresource.mipLevel = 0;
 
-	blitRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	blitRegion.dstSubresource.baseArrayLayer = 0;
-	blitRegion.dstSubresource.layerCount = 1;
-	blitRegion.dstSubresource.mipLevel = 0;
+    blitRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    blitRegion.dstSubresource.baseArrayLayer = 0;
+    blitRegion.dstSubresource.layerCount = 1;
+    blitRegion.dstSubresource.mipLevel = 0;
 
-	VkBlitImageInfo2 blitInfo{ .sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2, .pNext = nullptr };
-	blitInfo.dstImage = destination;
-	blitInfo.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-	blitInfo.srcImage = source;
-	blitInfo.srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-	blitInfo.filter = VK_FILTER_LINEAR;
-	blitInfo.regionCount = 1;
-	blitInfo.pRegions = &blitRegion;
+    VkBlitImageInfo2 blitInfo{.sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2, .pNext = nullptr};
+    blitInfo.dstImage = destination;
+    blitInfo.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    blitInfo.srcImage = source;
+    blitInfo.srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    blitInfo.filter = VK_FILTER_LINEAR;
+    blitInfo.regionCount = 1;
+    blitInfo.pRegions = &blitRegion;
 
-	vkCmdBlitImage2(cmd, &blitInfo);
+    vkCmdBlitImage2(cmd, &blitInfo);
 }
 
 static VkSemaphoreSubmitInfo vulkan_semaphore_submit_info(VkPipelineStageFlags2 stageMask, VkSemaphore semaphore) {
@@ -1295,7 +1309,8 @@ static VkImageCreateInfo vulkan_image_create_info(VkFormat format, VkImageUsageF
     return info;
 }
 
-static VkImageViewCreateInfo vulkan_image_view_create_info(VkFormat format, VkImage image, VkImageAspectFlags aspectFlags) {
+static VkImageViewCreateInfo vulkan_image_view_create_info(VkFormat format, VkImage image,
+                                                           VkImageAspectFlags aspectFlags) {
     VkImageViewCreateInfo info = {};
     info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     info.pNext = nullptr;
@@ -1312,9 +1327,8 @@ static VkImageViewCreateInfo vulkan_image_view_create_info(VkFormat format, VkIm
     return info;
 }
 
-static void vulkan_draw_background(RendererVulkan* vulkan, VkCommandBuffer cmd, Vec3F32 color)
-{
-    VkClearColorValue clearValue = { { color.r, color.g, color.b, 1.0f } };
+static void vulkan_draw_background(RendererVulkan* vulkan, VkCommandBuffer cmd, Vec3F32 color) {
+    VkClearColorValue clearValue = {{color.r, color.g, color.b, 1.0f}};
 
     VkImageSubresourceRange clearRange = vulkan_image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
 
@@ -1368,16 +1382,21 @@ void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, 
 
     VK_CHECK(vkBeginCommandBuffer(frame->commandBuffer, &beginInfo));
 
-    vulkan_transition_image(frame->commandBuffer, vulkan->drawImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+    vulkan_transition_image(frame->commandBuffer, vulkan->drawImage.image, VK_IMAGE_LAYOUT_UNDEFINED,
+                            VK_IMAGE_LAYOUT_GENERAL);
 
     vulkan_draw_background(vulkan, frame->commandBuffer, color);
 
-    vulkan_transition_image(frame->commandBuffer, vulkan->drawImage.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-    vulkan_transition_image(frame->commandBuffer, image->handle, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    vulkan_transition_image(frame->commandBuffer, vulkan->drawImage.image, VK_IMAGE_LAYOUT_GENERAL,
+                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    vulkan_transition_image(frame->commandBuffer, image->handle, VK_IMAGE_LAYOUT_UNDEFINED,
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
-    vulkan_copy_image_to_image(frame->commandBuffer, vulkan->drawImage.image, image->handle, vulkan->drawExtent, vulkan->swapchain.extent);
+    vulkan_copy_image_to_image(frame->commandBuffer, vulkan->drawImage.image, image->handle, vulkan->drawExtent,
+                               vulkan->swapchain.extent);
 
-    vulkan_transition_image(frame->commandBuffer, image->handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    vulkan_transition_image(frame->commandBuffer, image->handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
     VK_CHECK(vkEndCommandBuffer(frame->commandBuffer));
 
@@ -1403,18 +1422,19 @@ void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, 
     vulkan->currentFrameIndex = (vulkan->currentFrameIndex + 1u) % VULKAN_FRAME_OVERLAP;
 }
 
-B32 renderer_vulkan_compile_shader_to_result(RendererVulkan* vulkan, Arena* arena, StringU8 shaderPath, ShaderCompileResult* outResult) {
+B32 renderer_vulkan_compile_shader_to_result(RendererVulkan* vulkan, Arena* arena, StringU8 shaderPath,
+                                             ShaderCompileResult* outResult) {
     if (!vulkan || str8_is_nil(shaderPath) || !outResult) {
         return 0;
     }
-    
+
     MEMSET(outResult, 0, sizeof(ShaderCompileResult));
-    
+
     if (shaderPath.size < 5) {
         return 0;
     }
-    
-    StringU8 suffix = str8((const char*)shaderPath.data + shaderPath.size - 5, 5);
+
+    StringU8 suffix = str8((const char*) shaderPath.data + shaderPath.size - 5, 5);
     if (!str8_equal(suffix, str8(".hlsl"))) {
         return 0;
     }
@@ -1424,15 +1444,15 @@ B32 renderer_vulkan_compile_shader_to_result(RendererVulkan* vulkan, Arena* aren
     if (!vulkan_get_dxc_instances(&dxcCompiler, &dxcUtils)) {
         return 0;
     }
-    
-    OS_Handle shaderFile = OS_file_open((const char*)shaderPath.data, OS_FileOpenMode_Read);
+
+    OS_Handle shaderFile = OS_file_open((const char*) shaderPath.data, OS_FileOpenMode_Read);
     if (!shaderFile.handle) {
         return 0;
     }
-    
+
     OS_FileMapping mapping = OS_file_map_ro(shaderFile);
     OS_file_close(shaderFile);
-    
+
     if (!mapping.ptr || mapping.length == 0) {
         if (mapping.ptr) {
             OS_file_unmap(mapping);
@@ -1441,7 +1461,7 @@ B32 renderer_vulkan_compile_shader_to_result(RendererVulkan* vulkan, Arena* aren
     }
 
     U64 shaderSize = mapping.length;
-    
+
     if (shaderSize > 0xFFFFFFFFULL) {
         OS_file_unmap(mapping);
         return 0;
@@ -1460,18 +1480,18 @@ B32 renderer_vulkan_compile_shader_to_result(RendererVulkan* vulkan, Arena* aren
 
     MEMMOVE(shaderSource, mapping.ptr, shaderSize);
     OS_file_unmap(mapping);
-    
+
     IDxcBlobEncoding* sourceBlob = 0;
-    HRESULT hr = dxcUtils->CreateBlobFromPinned(shaderSource, (U32)shaderSize, DXC_CP_UTF8, &sourceBlob);
+    HRESULT hr = dxcUtils->CreateBlobFromPinned(shaderSource, (U32) shaderSize, DXC_CP_UTF8, &sourceBlob);
     if (FAILED(hr) || !sourceBlob) {
         return 0;
     }
 
     const wchar_t* targetProfile = L"vs_6_0";
-    
+
     if (shaderPath.size >= 8) {
         for (U64 i = 0; i <= shaderPath.size - 8; ++i) {
-            StringU8 substr = str8((const char*)shaderPath.data + i, 8);
+            StringU8 substr = str8((const char*) shaderPath.data + i, 8);
             if (str8_equal(substr, str8("fragment"))) {
                 targetProfile = L"ps_6_0";
                 break;
@@ -1546,10 +1566,10 @@ B32 renderer_vulkan_compile_shader_to_result(RendererVulkan* vulkan, Arena* aren
     spirvBlob->Release();
     compileResult->Release();
 
-    StringU8 basePath = str8((const char*)shaderPath.data, shaderPath.size - 5);
+    StringU8 basePath = str8((const char*) shaderPath.data, shaderPath.size - 5);
     StringU8 outputPath = str8_concat(scratchArena, basePath, str8(".spv"));
 
-    OS_Handle outputFile = OS_file_open((const char*)outputPath.data, OS_FileOpenMode_Create);
+    OS_Handle outputFile = OS_file_open((const char*) outputPath.data, OS_FileOpenMode_Create);
     if (outputFile.handle) {
         RangeU64 writeRange = {0, spirvSize};
         OS_file_write(outputFile, writeRange, spirvCode);
@@ -1567,7 +1587,7 @@ B32 renderer_vulkan_compile_shader_to_result(RendererVulkan* vulkan, Arena* aren
         return 0;
     }
 
-    outResult->module = (void*)shaderModule;
+    outResult->module = (void*) shaderModule;
     outResult->path = shaderPath;
     outResult->valid = 1;
     outResult->handle = 0;
@@ -1575,17 +1595,20 @@ B32 renderer_vulkan_compile_shader_to_result(RendererVulkan* vulkan, Arena* aren
     return 1;
 }
 
-static B32 vulkan_compile_shader_wrapper(void* backendData, Arena* arena, StringU8 shaderPath, ShaderCompileResult* outResult) {
+static B32 vulkan_compile_shader_wrapper(void* backendData, Arena* arena, StringU8 shaderPath,
+                                         ShaderCompileResult* outResult) {
     RendererVulkan* vulkan = (RendererVulkan*) backendData;
     return renderer_vulkan_compile_shader_to_result(vulkan, arena, shaderPath, outResult);
 }
 
-static void vulkan_merge_shader_results_wrapper(void* backendData, Arena* arena, const ShaderCompileResult* results, U32 resultCount, const ShaderCompileRequest* requests, U32 requestCount) {
+static void vulkan_merge_shader_results_wrapper(void* backendData, Arena* arena, const ShaderCompileResult* results,
+                                                U32 resultCount, const ShaderCompileRequest* requests,
+                                                U32 requestCount) {
     RendererVulkan* vulkan = (RendererVulkan*) backendData;
     if (!vulkan || !results || resultCount == 0u) {
         return;
     }
-    
+
     if (vulkan->shaderCount + resultCount > vulkan->shaderCapacity) {
         U32 newCapacity = vulkan->shaderCount + resultCount;
         if (newCapacity < vulkan->shaderCapacity * 2u) {
@@ -1594,32 +1617,34 @@ static void vulkan_merge_shader_results_wrapper(void* backendData, Arena* arena,
         if (newCapacity < 16u) {
             newCapacity = 16u;
         }
-        
-        RendererVulkanShader* newShaders = (RendererVulkanShader*)arena_push(vulkan->arena, 
-            sizeof(RendererVulkanShader) * newCapacity, alignof(RendererVulkanShader));
+
+        RendererVulkanShader* newShaders = (RendererVulkanShader*) arena_push(vulkan->arena,
+                                                                              sizeof(RendererVulkanShader) *
+                                                                              newCapacity,
+                                                                              alignof(RendererVulkanShader));
         if (!newShaders) {
             return;
         }
-        
+
         if (vulkan->shaders) {
             MEMMOVE(newShaders, vulkan->shaders, sizeof(RendererVulkanShader) * vulkan->shaderCount);
         }
         vulkan->shaders = newShaders;
         vulkan->shaderCapacity = newCapacity;
     }
-    
+
     U32 baseIndex = vulkan->shaderCount;
     for (U32 i = 0; i < resultCount; ++i) {
         if (!results[i].valid) {
             continue;
         }
-        
+
         U32 shaderIndex = baseIndex;
         RendererVulkanShader* shader = &vulkan->shaders[shaderIndex];
-        shader->module = (VkShaderModule)results[i].module;
+        shader->module = (VkShaderModule) results[i].module;
         shader->path = str8_cpy(vulkan->arena, results[i].path);
         baseIndex++;
-        
+
         for (U32 reqIdx = 0; reqIdx < requestCount; ++reqIdx) {
             if (str8_equal(requests[reqIdx].shaderPath, results[i].path)) {
                 if (requests[reqIdx].outHandle) {
@@ -1628,9 +1653,9 @@ static void vulkan_merge_shader_results_wrapper(void* backendData, Arena* arena,
                 break;
             }
         }
-        
-        vkdefer_destroy_VkShaderModule(&vulkan->deferCtx.globalBuf, (VkShaderModule)results[i].module);
+
+        vkdefer_destroy_VkShaderModule(&vulkan->deferCtx.globalBuf, (VkShaderModule) results[i].module);
     }
-    
+
     vulkan->shaderCount = baseIndex;
 }

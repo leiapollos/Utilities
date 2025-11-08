@@ -37,19 +37,19 @@ static void renderer_shader_compile_kernel(void* kernelParameters) {
     }
 
     U64 laneCount = spmd_lane_count();
-    
+
     Arena* excludes[1] = {params->arena};
     Temp scratch = get_scratch(excludes, ARRAY_COUNT(excludes));
     DEFER_REF(temp_end(&scratch));
     Arena* scratchArena = scratch.arena;
-    
+
     ShaderCompileResult* localResults = ARENA_PUSH_ARRAY(scratchArena, ShaderCompileResult, params->requestCount);
     U32 localResultCount = 0u;
-    
+
     if (!localResults) {
         return;
     }
-    
+
     RangeU64 range = SPMD_SPLIT_RANGE(params->requestCount);
     for (U64 i = range.min; i < range.max; ++i) {
         const ShaderCompileRequest* request = &params->requests[i];
@@ -59,7 +59,8 @@ static void renderer_shader_compile_kernel(void* kernelParameters) {
 
         if (params->renderer->compileShader) {
             ShaderCompileResult result = {};
-            B32 success = params->renderer->compileShader(params->renderer->backendData, params->arena, request->shaderPath, &result);
+            B32 success = params->renderer->compileShader(params->renderer->backendData, params->arena,
+                                                          request->shaderPath, &result);
             if (success) {
                 localResults[localResultCount] = result;
                 localResultCount++;
@@ -70,7 +71,7 @@ static void renderer_shader_compile_kernel(void* kernelParameters) {
             }
         }
     }
-    
+
     if (localResultCount > 0u && localResultCount <= params->maxResultsPerLane) {
         ShaderCompileResult* sharedResults = &params->perLaneResults[spmd_lane_id() * params->maxResultsPerLane];
         for (U32 i = 0; i < localResultCount; ++i) {
@@ -80,28 +81,28 @@ static void renderer_shader_compile_kernel(void* kernelParameters) {
     } else {
         params->perLaneResultCounts[spmd_lane_id()] = 0u;
     }
-    
+
     SPMD_SYNC();
-    
+
     if (SPMD_IS_ROOT(0)) {
         if (!params->renderer->mergeShaderResults) {
             return;
         }
-        
+
         U32 totalResultCount = 0u;
         for (U64 lane = 0; lane < laneCount; ++lane) {
             totalResultCount += params->perLaneResultCounts[lane];
         }
-        
+
         if (totalResultCount == 0u) {
             return;
         }
-        
+
         ShaderCompileResult* allResults = ARENA_PUSH_ARRAY(scratchArena, ShaderCompileResult, totalResultCount);
         if (!allResults) {
             return;
         }
-        
+
         U32 resultIndex = 0u;
         for (U64 lane = 0; lane < laneCount; ++lane) {
             U32 laneResultCount = params->perLaneResultCounts[lane];
@@ -112,10 +113,11 @@ static void renderer_shader_compile_kernel(void* kernelParameters) {
                 }
             }
         }
-        
-        params->renderer->mergeShaderResults(params->renderer->backendData, params->arena, allResults, resultIndex, params->requests, params->requestCount);
+
+        params->renderer->mergeShaderResults(params->renderer->backendData, params->arena, allResults, resultIndex,
+                                             params->requests, params->requestCount);
     }
-    
+
     SPMD_SYNC();
 }
 
@@ -137,15 +139,17 @@ void renderer_compile_shaders(Renderer* renderer, Arena* arena, JobSystem* jobSy
     }
 
     U32 maxResultsPerLane = requestCount;
-    ShaderCompileResult* perLaneResults = (ShaderCompileResult*)arena_push(arena, 
-        sizeof(ShaderCompileResult) * workerCount * maxResultsPerLane, alignof(ShaderCompileResult));
-    U32* perLaneResultCounts = (U32*)arena_push(arena, 
-        sizeof(U32) * workerCount, alignof(U32));
-    
+    ShaderCompileResult* perLaneResults = (ShaderCompileResult*) arena_push(arena,
+                                                                            sizeof(ShaderCompileResult) * workerCount *
+                                                                            maxResultsPerLane,
+                                                                            alignof(ShaderCompileResult));
+    U32* perLaneResultCounts = (U32*) arena_push(arena,
+                                                 sizeof(U32) * workerCount, alignof(U32));
+
     if (!perLaneResults || !perLaneResultCounts) {
         return;
     }
-    
+
     for (U32 i = 0; i < workerCount; ++i) {
         perLaneResultCounts[i] = 0u;
     }
@@ -160,8 +164,8 @@ void renderer_compile_shaders(Renderer* renderer, Arena* arena, JobSystem* jobSy
     kernelParams.maxResultsPerLane = maxResultsPerLane;
 
     spmd_dispatch(jobSystem, arena,
-        .laneCount = workerCount,
-        .kernel = renderer_shader_compile_kernel,
-        .kernelParameters = &kernelParams
+                  .laneCount = workerCount,
+                  .kernel = renderer_shader_compile_kernel,
+                  .kernelParameters = &kernelParams
     );
 }
