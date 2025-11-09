@@ -301,6 +301,10 @@ void renderer_vulkan_imgui_shutdown(RendererVulkan* vulkan) {
         return;
     }
 
+    if (vulkan->device != VK_NULL_HANDLE) {
+        VK_CHECK(vkDeviceWaitIdle(vulkan->device));
+    }
+
     renderer_vulkan_imgui_set_context(vulkan);
     ImGui_ImplVulkan_Shutdown();
 
