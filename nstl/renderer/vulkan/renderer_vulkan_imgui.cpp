@@ -16,9 +16,7 @@ static void renderer_vulkan_imgui_set_context(RendererVulkan* vulkan) {
 }
 
 static void renderer_vulkan_imgui_check_vk_result(VkResult result) {
-    if (result != VK_SUCCESS) {
-        VK_CHECK(result);
-    }
+    VK_CHECK(result);
 }
 
 static PFN_vkVoidFunction renderer_vulkan_imgui_load_function(const char* functionName, void* userData) {
