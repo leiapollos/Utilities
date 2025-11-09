@@ -35,7 +35,7 @@ struct Renderer {
 
 B32 renderer_init(Arena* arena, Renderer* renderer);
 void renderer_shutdown(Renderer* renderer);
-void renderer_draw_color(Renderer* renderer, OS_WindowHandle window, Vec3F32 color);
+void renderer_draw_color(Renderer* renderer, OS_WindowHandle window, Vec4F32 color);
 void renderer_compile_shaders(Renderer* renderer, Arena* arena, JobSystem* jobSystem,
                               const ShaderCompileRequest* requests, U32 requestCount);
 B32 renderer_imgui_init(Renderer* renderer, OS_WindowHandle window);

@@ -102,7 +102,7 @@ U64 OS_rdtsc_relaxed() {
     return value;
 }
 
-U64 OS_rdtscp_serialized() {
+U64 OS_rdtscp_serialized() { // TODO: refactor.
     U64 value = 0;
 #if defined(COMPILER_CLANG) || defined(COMPILER_GCC)
     __asm__ __volatile__("isb");

@@ -307,14 +307,14 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
 
     app_tests_tick(memory, state, tests, deltaSeconds);
 
-    static Vec4F32 color = { 0.4f, 0.7f, 0.0f, 0.5f };
+    static Vec4F32 drawColor = { 0.4f, 0.7f, 0.0f, 0.5f };
     if (beganImguiFrame) {
         ImGui::ShowDemoWindow(nullptr);
         ImGui::Text("frameTime: %f", deltaSeconds);
         ImGui::Text("FPS: %f", 1.0f / deltaSeconds);
         ImGui::Text("frameNumber: %lld", state->frameCounter);
         {
-            ImGui::ColorEdit4("Color", color.v);
+            ImGui::ColorEdit4("Color", drawColor.v);
 
             static int selected_fish = -1;
             const char* names[] = { "Bream", "Haddock", "Mackerel", "Pollock", "Tilefish" };
@@ -344,11 +344,12 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
         F32 red = CLAMP(sin(x) * 0.5f + 0.5f, 0.3f, 0.7f);
         F32 green = CLAMP(cos(x) * 0.5f + 0.5f, 0.3f, 0.7f);
         F32 blue = CLAMP(sin(x + 0.3f) * 0.5f + 0.5f, 0.3f, 0.7f);
-        Vec3F32 color = {};
+        Vec4F32 color = {};
         color.r = red;
         color.g = green;
         color.b = blue;
-        PLATFORM_RENDERER_CALL(platform, renderer_draw_color, host->renderer, state->windowHandle, color);
+        color.a = 1.0f;
+        PLATFORM_RENDERER_CALL(platform, renderer_draw_color, host->renderer, state->windowHandle, drawColor);
     }
 }
 

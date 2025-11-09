@@ -53,7 +53,11 @@ static B32 vulkan_load_shader_module(RendererVulkan* vulkan, const char* filePat
 static B32 vulkan_init_draw_pipeline(RendererVulkan* vulkan);
 static void vulkan_destroy_draw_pipeline(RendererVulkan* vulkan);
 static B32 vulkan_update_draw_pipeline(RendererVulkan* vulkan);
-static void vulkan_dispatch_gradient(RendererVulkan* vulkan, VkCommandBuffer cmd);
+static void vulkan_dispatch_gradient(RendererVulkan* vulkan, VkCommandBuffer cmd, Vec4F32 color);
+
+struct GradientPushConstants {
+    Vec4F32 tileBorderColor;
+};
 
 struct DxcThreadState {
     IDxcCompiler3* compiler;
@@ -1506,12 +1510,17 @@ static B32 vulkan_init_draw_pipeline(RendererVulkan* vulkan) {
         return 0;
     }
 
+    VkPushConstantRange pushConstantRange = {};
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pushConstantRange.offset = 0u;
+    pushConstantRange.size = sizeof(GradientPushConstants);
+
     VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineLayoutInfo.setLayoutCount = 1u;
     pipelineLayoutInfo.pSetLayouts = &vulkan->drawImageDescriptorLayout;
-    pipelineLayoutInfo.pushConstantRangeCount = 0u;
-    pipelineLayoutInfo.pPushConstantRanges = 0;
+    pipelineLayoutInfo.pushConstantRangeCount = 1u;
+    pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 
     VkResult pipelineLayoutResult = vkCreatePipelineLayout(vulkan->device, &pipelineLayoutInfo, 0,
                                                            &vulkan->gradientPipelineLayout);
@@ -1645,7 +1654,7 @@ static B32 vulkan_update_draw_pipeline(RendererVulkan* vulkan) {
     return 1;
 }
 
-static void vulkan_dispatch_gradient(RendererVulkan* vulkan, VkCommandBuffer cmd) {
+static void vulkan_dispatch_gradient(RendererVulkan* vulkan, VkCommandBuffer cmd, Vec4F32 color) {
     if (!vulkan || cmd == VK_NULL_HANDLE) {
         return;
     }
@@ -1676,10 +1685,20 @@ static void vulkan_dispatch_gradient(RendererVulkan* vulkan, VkCommandBuffer cmd
                             &vulkan->drawImageDescriptorSet,
                             0u,
                             0);
+
+    GradientPushConstants pushConstants = {};
+    pushConstants.tileBorderColor = color;
+
+    vkCmdPushConstants(cmd,
+                       vulkan->gradientPipelineLayout,
+                       VK_SHADER_STAGE_COMPUTE_BIT,
+                       0u,
+                       sizeof(pushConstants),
+                       &pushConstants);
     vkCmdDispatch(cmd, groupCountX, groupCountY, 1u);
 }
 
-static void vulkan_draw_background(RendererVulkan* vulkan, VkCommandBuffer cmd, Vec3F32 color) {
+static void vulkan_draw_background(RendererVulkan* vulkan, VkCommandBuffer cmd, Vec4F32 color) {
     if (!vulkan || cmd == VK_NULL_HANDLE) {
         return;
     }
@@ -1688,18 +1707,18 @@ static void vulkan_draw_background(RendererVulkan* vulkan, VkCommandBuffer cmd, 
         vulkan->gradientPipelineLayout != VK_NULL_HANDLE &&
         vulkan->drawImageDescriptorSet != VK_NULL_HANDLE &&
         vulkan->drawImage.imageView != VK_NULL_HANDLE) {
-        vulkan_dispatch_gradient(vulkan, cmd);
+        vulkan_dispatch_gradient(vulkan, cmd, color);
         return;
     }
 
-    VkClearColorValue clearValue = {{color.r, color.g, color.b, 1.0f}};
+    VkClearColorValue clearValue = {{color.r, color.g, color.b, color.a}};
     VkImageSubresourceRange clearRange = vulkan_image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
 
     vkCmdClearColorImage(cmd, vulkan->drawImage.image, VK_IMAGE_LAYOUT_GENERAL, &clearValue, 1u, &clearRange);
 }
 
 
-void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, Vec3F32 color) {
+void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, Vec4F32 color) {
     if (!vulkan || !window.handle) {
         return;
     }

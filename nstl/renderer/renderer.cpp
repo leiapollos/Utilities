@@ -2,7 +2,7 @@
 // Created by André Leite on 03/11/2025.
 //
 
-void renderer_draw_color(Renderer* renderer, OS_WindowHandle window, Vec3F32 color) {
+void renderer_draw_color(Renderer* renderer, OS_WindowHandle window, Vec4F32 color) {
     if (!renderer || !renderer->backendData) {
         return;
     }

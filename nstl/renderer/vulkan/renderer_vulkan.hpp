@@ -145,7 +145,7 @@ static const char* VALIDATION_LAYERS[] = {
     "VK_LAYER_KHRONOS_validation",
 };
 
-void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, Vec3F32 color);
+void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, Vec4F32 color);
 B32 renderer_vulkan_compile_shader_to_result(RendererVulkan* vulkan, Arena* arena, StringU8 shaderPath,
                                              ShaderCompileResult* outResult);
 B32 renderer_vulkan_imgui_init(RendererVulkan* vulkan, OS_WindowHandle window);

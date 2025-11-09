@@ -1,6 +1,13 @@
 [[vk::binding(0, 0)]]
 RWTexture2D<float4> image;
 
+struct GradientPushConstants {
+    float4 tileBorderColor;
+};
+
+[[vk::push_constant]]
+GradientPushConstants g_pushConstants;
+
 [numthreads(16, 16, 1)]
 void main(uint3 dispatchThreadId : SV_DispatchThreadID,
           uint3 groupThreadId : SV_GroupThreadID) {
@@ -11,13 +18,15 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID,
     image.GetDimensions(width, height);
 
     if ((texelCoord.x < width) && (texelCoord.y < height)) {
-        float4 color = float4(0.0f, 0.0f, 0.0f, 1.0f);
+        float invWidth = (width > 0u) ? (1.0f / (float) width) : 0.0f;
+        float invHeight = (height > 0u) ? (1.0f / (float) height) : 0.0f;
+        float2 uv = float2((float) texelCoord.x * invWidth,
+                           (float) texelCoord.y * invHeight);
+        float4 gradientColor = float4(uv.x, uv.y, 0.0f, 1.0f);
 
-        if ((groupThreadId.x != 0u) && (groupThreadId.y != 0u)) {
-            color.x = (float) texelCoord.x / (float) width;
-            color.y = (float) texelCoord.y / (float) height;
-        }
+        bool onGroupEdge = (groupThreadId.x == 0u) || (groupThreadId.y == 0u);
+        float4 finalColor = onGroupEdge ? g_pushConstants.tileBorderColor : gradientColor;
 
-        image[texelCoord] = color;
+        image[texelCoord] = finalColor;
     }
 }
