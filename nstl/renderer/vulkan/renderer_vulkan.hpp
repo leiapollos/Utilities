@@ -113,6 +113,11 @@ struct RendererVulkan {
 
     RendererVulkanAllocatedImage drawImage;
     VkExtent2D drawExtent;
+    VkDescriptorSetLayout drawImageDescriptorLayout;
+    VkDescriptorPool drawImageDescriptorPool;
+    VkDescriptorSet drawImageDescriptorSet;
+    VkPipelineLayout gradientPipelineLayout;
+    VkPipeline gradientPipeline;
 
     RendererVulkanShader* shaders;
     U32 shaderCount;

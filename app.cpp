@@ -251,7 +251,7 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
                 break;
 
                 case OS_GraphicsEventType_MouseMove: {
-                    LOG_INFO("app", "Mouse moved to ({}, {})", evt->mouse.x, evt->mouse.y);
+                    LOG_DEBUG("app", "Mouse moved to ({}, {})", evt->mouse.x, evt->mouse.y);
                 }
                 break;
 
