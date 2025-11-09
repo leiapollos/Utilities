@@ -3,13 +3,43 @@
 # --- Configuration ---
 BUILD_DIR="build"
 
-# Handle clean-only case
-if [ "${1}" = "clean" ]; then
-    echo "==> Cleaning build directory..."
+clean_partial() {
+    if [ ! -d "${BUILD_DIR}" ]; then
+        echo "==> Build directory '${BUILD_DIR}' not present. Nothing to clean."
+        return 0
+    fi
+
+    echo "==> Cleaning host/module build artifacts..."
+    rm -rf \
+        "${BUILD_DIR}/CMakeFiles/utilities_host.dir" \
+        "${BUILD_DIR}/CMakeFiles/utilities_app.dir" \
+        "${BUILD_DIR}/hot"
+
+    rm -f \
+        "${BUILD_DIR}/utilities_host" \
+        "${BUILD_DIR}/utilities_host.pdb"
+
+    rm -rf "${BUILD_DIR}/utilities_host.dSYM"
+
+    echo "==> Host/module artifacts cleaned. Dear ImGui cache preserved."
+}
+
+clean_hard() {
+    echo "==> Performing hard clean..."
     rm -rf "${BUILD_DIR}"
     echo "==> Build directory cleaned."
-    exit 0
-fi
+}
+
+case "${1}" in
+    clean)
+        clean_partial
+        exit 0
+        ;;
+    hard-clean)
+        clean_hard
+        exit 0
+        ;;
+esac
 
 FLAVOR=${1:-release}
 REQUESTED_TARGET=${2:-all}
@@ -52,10 +82,17 @@ if [[ -n "${LD_FLAGS}" ]]; then
 fi
 
 # --- Execution ---
-if [ "${CLEAN_BUILD}" = "clean" ] || [ "${CLEAN_BUILD}" = "true" ]; then
-    echo "==> Cleaning build directory..."
-    rm -rf "${BUILD_DIR}"
-fi
+case "${CLEAN_BUILD}" in
+    clean)
+        clean_partial
+        ;;
+    hard-clean)
+        clean_hard
+        ;;
+    true)
+        clean_hard
+        ;;
+esac
 echo "==> Ensuring build directory exists..."
 mkdir -p "${BUILD_DIR}"
 

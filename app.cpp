@@ -307,9 +307,33 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
 
     app_tests_tick(memory, state, tests, deltaSeconds);
 
+    static Vec4F32 color = { 0.4f, 0.7f, 0.0f, 0.5f };
     if (beganImguiFrame) {
-        ImGui::SetNextWindowCollapsed(false, ImGuiCond_Appearing);
         ImGui::ShowDemoWindow(nullptr);
+        ImGui::Text("frameTime: %f", deltaSeconds);
+        ImGui::Text("FPS: %f", 1.0f / deltaSeconds);
+        ImGui::Text("frameNumber: %lld", state->frameCounter);
+        {
+            ImGui::ColorEdit4("Color", color.v);
+
+            static int selected_fish = -1;
+            const char* names[] = { "Bream", "Haddock", "Mackerel", "Pollock", "Tilefish" };
+            const char* names2[] = { "Bream2", "Haddock2", "Mackerel2", "Pollock2", "Tilefish2" };
+            static bool toggles[] = { true, false, false, false, false };
+            if (ImGui::Button("Select.."))
+                ImGui::OpenPopup("my_select_popup");
+            if (ImGui::BeginPopup("my_select_popup"))
+            {
+                for (int i = 0; i < IM_ARRAYSIZE(names); i++)
+                    if (ImGui::Selectable(names[i]))
+                        selected_fish = i;
+                ImGui::SeparatorText("Aquarium");
+                for (int i = 0; i < IM_ARRAYSIZE(names2); i++)
+                    if (ImGui::Selectable(names2[i]))
+                        selected_fish = i;
+                ImGui::EndPopup();
+            }
+        }
         renderer_imgui_end_frame(host->renderer);
     }
 

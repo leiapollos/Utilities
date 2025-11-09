@@ -25,12 +25,26 @@ set(VULKAN_SDK_INCLUDE_DIR "${VULKAN_SDK_ROOT}/include")
 set(VULKAN_VMA_INCLUDE_DIR "${SRC_ROOT}/third_party/vulkan_vma")
 set(IMGUI_INCLUDE_DIR "${SRC_ROOT}/third_party/dear_imgui")
 
+set(IMGUI_SOURCES
+    ${IMGUI_INCLUDE_DIR}/imgui_unity.cpp
+)
+
+add_library(dear_imgui STATIC ${IMGUI_SOURCES})
+set_target_properties(dear_imgui PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(dear_imgui
+    PUBLIC
+        ${IMGUI_INCLUDE_DIR}
+    PRIVATE
+        ${VULKAN_SDK_INCLUDE_DIR}
+)
+
 set(HOST_SOURCES
     ${SRC_ROOT}/main.mm
 )
 
 add_executable(utilities_host ${HOST_SOURCES})
 target_include_directories(utilities_host PRIVATE ${SRC_ROOT} ${VULKAN_VMA_INCLUDE_DIR} ${IMGUI_INCLUDE_DIR})
+target_link_libraries(utilities_host PRIVATE dear_imgui)
 
 if(APPLE)
     set(VULKAN_SDK_LIB_DIR "${VULKAN_SDK_ROOT}/macos/lib")
