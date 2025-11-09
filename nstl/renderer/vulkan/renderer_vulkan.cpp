@@ -26,8 +26,10 @@ static VkCommandBufferBeginInfo vulkan_command_buffer_begin_info(VkCommandBuffer
 static VkImageSubresourceRange vulkan_image_subresource_range(VkImageAspectFlags aspectMask);
 static VkImageMemoryBarrier2 vulkan_image_memory_barrier2(VkImage image, VkImageLayout oldLayout,
                                                           VkImageLayout newLayout);
+static VkFormat vulkan_select_draw_image_format(RendererVulkan* vulkan);
 static VkDependencyInfo vulkan_dependency_info(U32 imageMemoryBarrierCount,
                                                const VkImageMemoryBarrier2* pImageMemoryBarriers);
+static void vulkan_reset_draw_image(RendererVulkan* vulkan);
 static void vulkan_transition_image(VkCommandBuffer cmd, VkImage image, VkImageLayout currentLayout,
                                     VkImageLayout newLayout);
 static void vulkan_copy_image_to_image(VkCommandBuffer cmd, VkImage source, VkImage destination, VkExtent2D srcSize,
@@ -1109,7 +1111,13 @@ static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle windo
         1
     };
 
-    vulkan->drawImage.imageFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
+    VkFormat drawImageFormat = vulkan_select_draw_image_format(vulkan);
+    if (drawImageFormat == VK_FORMAT_UNDEFINED) {
+        vulkan_destroy_swapchain(vulkan);
+        return 0;
+    }
+
+    vulkan->drawImage.imageFormat = drawImageFormat;
     vulkan->drawImage.imageExtent = drawImageExtent;
     vulkan->drawExtent.width = drawImageExtent.width;
     vulkan->drawExtent.height = drawImageExtent.height;
@@ -1127,17 +1135,56 @@ static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle windo
     rimg_allocinfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
     rimg_allocinfo.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-    vmaCreateImage(vulkan->allocator, &rimg_info, &rimg_allocinfo, &vulkan->drawImage.image,
-                   &vulkan->drawImage.allocation, nullptr);
+    vulkan->drawImage.image = VK_NULL_HANDLE;
+    vulkan->drawImage.imageView = VK_NULL_HANDLE;
+    vulkan->drawImage.allocation = 0;
+
+    VkResult drawImageResult = vmaCreateImage(vulkan->allocator,
+                                              &rimg_info,
+                                              &rimg_allocinfo,
+                                              &vulkan->drawImage.image,
+                                              &vulkan->drawImage.allocation,
+                                              nullptr);
+    if (drawImageResult != VK_SUCCESS) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN,
+                  "Failed to create draw image (format={}, extent={}x{}): {}",
+                  (U32) vulkan->drawImage.imageFormat,
+                  drawImageExtent.width,
+                  drawImageExtent.height,
+                  drawImageResult);
+        vulkan_reset_draw_image(vulkan);
+        vulkan_destroy_swapchain(vulkan);
+        return 0;
+    }
 
     VkImageViewCreateInfo rview_info = vulkan_image_view_create_info(vulkan->drawImage.imageFormat,
                                                                      vulkan->drawImage.image,
                                                                      VK_IMAGE_ASPECT_COLOR_BIT);
 
-    VK_CHECK(vkCreateImageView(vulkan->device, &rview_info, nullptr, &vulkan->drawImage.imageView));
+    VkResult drawImageViewResult = vkCreateImageView(vulkan->device,
+                                                     &rview_info,
+                                                     nullptr,
+                                                     &vulkan->drawImage.imageView);
+    if (drawImageViewResult != VK_SUCCESS) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN,
+                  "Failed to create draw image view (format={}, extent={}x{}): {}",
+                  (U32) vulkan->drawImage.imageFormat,
+                  drawImageExtent.width,
+                  drawImageExtent.height,
+                  drawImageViewResult);
+        vmaDestroyImage(vulkan->allocator, vulkan->drawImage.image, vulkan->drawImage.allocation);
+        vulkan_reset_draw_image(vulkan);
+        vulkan_destroy_swapchain(vulkan);
+        return 0;
+    }
 
     if (!vulkan_update_draw_pipeline(vulkan)) {
         LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to update draw pipeline descriptors for swapchain image");
+        vkDestroyImageView(vulkan->device, vulkan->drawImage.imageView, nullptr);
+        vmaDestroyImage(vulkan->allocator, vulkan->drawImage.image, vulkan->drawImage.allocation);
+        vulkan_reset_draw_image(vulkan);
+        vulkan_destroy_swapchain(vulkan);
+        return 0;
     }
 
     vkdefer_destroy_VkImageView(&vulkan->deferCtx.globalBuf, vulkan->drawImage.imageView);
@@ -1374,6 +1421,18 @@ static VkImageViewCreateInfo vulkan_image_view_create_info(VkFormat format, VkIm
     info.subresourceRange.aspectMask = aspectFlags;
 
     return info;
+}
+
+static void vulkan_reset_draw_image(RendererVulkan* vulkan) {
+    if (!vulkan) {
+        return;
+    }
+
+    vulkan->drawImage.image = VK_NULL_HANDLE;
+    vulkan->drawImage.imageView = VK_NULL_HANDLE;
+    vulkan->drawImage.allocation = 0;
+    vulkan->drawImage.imageExtent = {};
+    vulkan->drawImage.imageFormat = VK_FORMAT_UNDEFINED;
 }
 
 static B32 vulkan_load_shader_module(RendererVulkan* vulkan, const char* filePath, VkShaderModule* outModule) {
@@ -1654,6 +1713,44 @@ static B32 vulkan_update_draw_pipeline(RendererVulkan* vulkan) {
     return 1;
 }
 
+static VkFormat vulkan_select_draw_image_format(RendererVulkan* vulkan) {
+    if (!vulkan || vulkan->physicalDevice == VK_NULL_HANDLE) {
+        return VK_FORMAT_UNDEFINED;
+    }
+
+    static const VkFormat candidates[] = {
+        VK_FORMAT_R32G32B32A32_SFLOAT,
+        VK_FORMAT_R16G16B16A16_SFLOAT,
+        VK_FORMAT_R16G16B16A16_UNORM,
+        VK_FORMAT_R8G8B8A8_UNORM,
+        VK_FORMAT_B8G8R8A8_UNORM,
+    };
+
+    const VkFormatFeatureFlags requiredFeatures =
+        VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
+        VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+        VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
+        VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+
+    for (U32 i = 0; i < ARRAY_COUNT(candidates); ++i) {
+        VkFormat format = candidates[i];
+        VkFormatProperties props = {};
+        vkGetPhysicalDeviceFormatProperties(vulkan->physicalDevice, format, &props);
+        if ((props.optimalTilingFeatures & requiredFeatures) == requiredFeatures) {
+            if (format != VK_FORMAT_R32G32B32A32_SFLOAT) {
+                LOG_WARNING(VULKAN_LOG_DOMAIN,
+                            "Falling back to draw image format {} due to limited GPU support",
+                            (U32) format);
+            }
+            return format;
+        }
+    }
+
+    LOG_ERROR(VULKAN_LOG_DOMAIN,
+              "Failed to find supported draw image format with storage/color/transfer capabilities");
+    return VK_FORMAT_UNDEFINED;
+}
+
 static void vulkan_dispatch_gradient(RendererVulkan* vulkan, VkCommandBuffer cmd, Vec4F32 color) {
     if (!vulkan || cmd == VK_NULL_HANDLE) {
         return;
@@ -1770,27 +1867,64 @@ void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, 
 
     VK_CHECK(vkBeginCommandBuffer(frame->commandBuffer, &beginInfo));
 
-    vulkan_transition_image(frame->commandBuffer, vulkan->drawImage.image, VK_IMAGE_LAYOUT_UNDEFINED,
-                            VK_IMAGE_LAYOUT_GENERAL);
+    B32 hasDrawImage = (vulkan->drawImage.image != VK_NULL_HANDLE) &&
+                       (vulkan->drawImage.imageView != VK_NULL_HANDLE);
+    VkImageLayout swapchainLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-    vulkan_draw_background(vulkan, frame->commandBuffer, color);
+    if (hasDrawImage) {
+        vulkan_transition_image(frame->commandBuffer,
+                                vulkan->drawImage.image,
+                                VK_IMAGE_LAYOUT_UNDEFINED,
+                                VK_IMAGE_LAYOUT_GENERAL);
 
-    vulkan_transition_image(frame->commandBuffer, vulkan->drawImage.image, VK_IMAGE_LAYOUT_GENERAL,
-                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-    vulkan_transition_image(frame->commandBuffer, image->handle, VK_IMAGE_LAYOUT_UNDEFINED,
-                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        vulkan_draw_background(vulkan, frame->commandBuffer, color);
 
-    vulkan_copy_image_to_image(frame->commandBuffer, vulkan->drawImage.image, image->handle, vulkan->drawExtent,
-                               vulkan->swapchain.extent);
+        vulkan_transition_image(frame->commandBuffer,
+                                vulkan->drawImage.image,
+                                VK_IMAGE_LAYOUT_GENERAL,
+                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        vulkan_transition_image(frame->commandBuffer,
+                                image->handle,
+                                VK_IMAGE_LAYOUT_UNDEFINED,
+                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+        vulkan_copy_image_to_image(frame->commandBuffer,
+                                   vulkan->drawImage.image,
+                                   image->handle,
+                                   vulkan->drawExtent,
+                                   vulkan->swapchain.extent);
+        swapchainLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    } else {
+        VkClearColorValue clearValue = {{color.r, color.g, color.b, color.a}};
+        VkImageSubresourceRange clearRange = vulkan_image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
+
+        vulkan_transition_image(frame->commandBuffer,
+                                image->handle,
+                                VK_IMAGE_LAYOUT_UNDEFINED,
+                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        vkCmdClearColorImage(frame->commandBuffer,
+                             image->handle,
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                             &clearValue,
+                             1u,
+                             &clearRange);
+        swapchainLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    }
 
     if (vulkan->imguiInitialized) {
-        vulkan_transition_image(frame->commandBuffer, image->handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        vulkan_transition_image(frame->commandBuffer,
+                                image->handle,
+                                swapchainLayout,
                                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         renderer_vulkan_imgui_render(vulkan, frame->commandBuffer, image->view, vulkan->swapchain.extent);
-        vulkan_transition_image(frame->commandBuffer, image->handle, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        vulkan_transition_image(frame->commandBuffer,
+                                image->handle,
+                                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                 VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
     } else {
-        vulkan_transition_image(frame->commandBuffer, image->handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        vulkan_transition_image(frame->commandBuffer,
+                                image->handle,
+                                swapchainLayout,
                                 VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
     }
 

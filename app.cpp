@@ -307,11 +307,11 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
 
     app_tests_tick(memory, state, tests, deltaSeconds);
 
-    static Vec4F32 drawColor = { 0.4f, 0.7f, 0.0f, 0.5f };
+    static Vec4F32 drawColor = {{0.4f, 0.7f, 0.0f, 0.5f}};
     if (beganImguiFrame) {
         ImGui::ShowDemoWindow(nullptr);
-        ImGui::Text("frameTime: %f", deltaSeconds);
-        ImGui::Text("FPS: %f", 1.0f / deltaSeconds);
+        ImGui::Text("frameTime: %f", static_cast<double>(deltaSeconds));
+        ImGui::Text("FPS: %f", static_cast<double>(1.0f / deltaSeconds));
         ImGui::Text("frameNumber: %lld", state->frameCounter);
         {
             ImGui::ColorEdit4("Color", drawColor.v);
@@ -333,6 +333,7 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
                         selected_fish = i;
                 ImGui::EndPopup();
             }
+            ImGui::Text("Selected fish index: %d", selected_fish);
         }
         renderer_imgui_end_frame(host->renderer);
     }
