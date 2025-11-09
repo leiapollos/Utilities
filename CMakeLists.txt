@@ -95,7 +95,7 @@ endif()
 set_target_properties(utilities_host PROPERTIES OUTPUT_NAME "utilities_host")
 
 add_library(utilities_app MODULE ${SRC_ROOT}/app.cpp)
-target_include_directories(utilities_app PRIVATE ${SRC_ROOT} ${VULKAN_VMA_INCLUDE_DIR} ${IMGUI_INCLUDE_DIR})
+target_include_directories(utilities_app PRIVATE ${SRC_ROOT} ${VULKAN_SDK_INCLUDE_DIR} ${VULKAN_VMA_INCLUDE_DIR} ${IMGUI_INCLUDE_DIR})
 
 if(APPLE)
     set_target_properties(utilities_app PROPERTIES SUFFIX ".dylib")
