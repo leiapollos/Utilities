@@ -16,6 +16,83 @@ void renderer_draw_color(Renderer* renderer, OS_WindowHandle window, Vec3F32 col
 #endif
 }
 
+B32 renderer_imgui_init(Renderer* renderer, OS_WindowHandle window) {
+    if (!renderer || !renderer->backendData) {
+        return 0;
+    }
+
+#if defined(RENDERER_BACKEND_VULKAN)
+    RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
+    return renderer_vulkan_imgui_init(vulkan, window);
+#else
+    (void) window;
+    return 0;
+#endif
+}
+
+void renderer_imgui_shutdown(Renderer* renderer) {
+    if (!renderer || !renderer->backendData) {
+        return;
+    }
+
+#if defined(RENDERER_BACKEND_VULKAN)
+    RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
+    renderer_vulkan_imgui_shutdown(vulkan);
+#endif
+}
+
+void renderer_imgui_process_events(Renderer* renderer, const OS_GraphicsEvent* events, U32 eventCount) {
+    if (!renderer || !renderer->backendData) {
+        return;
+    }
+
+#if defined(RENDERER_BACKEND_VULKAN)
+    RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
+    renderer_vulkan_imgui_process_events(vulkan, events, eventCount);
+#else
+    (void) events;
+    (void) eventCount;
+#endif
+}
+
+void renderer_imgui_begin_frame(Renderer* renderer, F32 deltaSeconds) {
+    if (!renderer || !renderer->backendData) {
+        return;
+    }
+
+#if defined(RENDERER_BACKEND_VULKAN)
+    RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
+    renderer_vulkan_imgui_begin_frame(vulkan, deltaSeconds);
+#else
+    (void) deltaSeconds;
+#endif
+}
+
+void renderer_imgui_end_frame(Renderer* renderer) {
+    if (!renderer || !renderer->backendData) {
+        return;
+    }
+
+#if defined(RENDERER_BACKEND_VULKAN)
+    RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
+    renderer_vulkan_imgui_end_frame(vulkan);
+#endif
+}
+
+void renderer_imgui_set_window_size(Renderer* renderer, U32 width, U32 height) {
+    if (!renderer || !renderer->backendData) {
+        return;
+    }
+
+#if defined(RENDERER_BACKEND_VULKAN)
+    RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
+    renderer_vulkan_imgui_set_window_size(vulkan, width, height);
+#else
+    (void) width;
+    (void) height;
+#endif
+}
+
 #ifndef SHADER_COMPILE_WORKER_COUNT
 #define SHADER_COMPILE_WORKER_COUNT 10u
 #endif

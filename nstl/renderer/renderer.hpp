@@ -38,3 +38,9 @@ void renderer_shutdown(Renderer* renderer);
 void renderer_draw_color(Renderer* renderer, OS_WindowHandle window, Vec3F32 color);
 void renderer_compile_shaders(Renderer* renderer, Arena* arena, JobSystem* jobSystem,
                               const ShaderCompileRequest* requests, U32 requestCount);
+B32 renderer_imgui_init(Renderer* renderer, OS_WindowHandle window);
+void renderer_imgui_shutdown(Renderer* renderer);
+void renderer_imgui_process_events(Renderer* renderer, const OS_GraphicsEvent* events, U32 eventCount);
+void renderer_imgui_begin_frame(Renderer* renderer, F32 deltaSeconds);
+void renderer_imgui_end_frame(Renderer* renderer);
+void renderer_imgui_set_window_size(Renderer* renderer, U32 width, U32 height);

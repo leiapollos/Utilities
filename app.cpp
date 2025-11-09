@@ -6,6 +6,8 @@
 #include "app_tests.hpp"
 #include "app_state.hpp"
 
+#include "imgui.h"
+
 #include "app_tests.cpp"
 
 #include <dirent.h>
@@ -133,6 +135,8 @@ static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostConte
         totalSize = (totalSize > memory->permanentStorageSize) ? memory->permanentStorageSize : totalSize;
         MEMSET(memory->permanentStorage, 0, totalSize);
         memory->isInitialized = 1;
+        state->imguiEnabled = 1;
+        state->imguiInitialized = 0;
     }
 
     state = app_get_state(memory);
@@ -181,6 +185,13 @@ static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostConte
         state->windowHandle = PLATFORM_OS_CALL(platform, OS_window_create, desc);
     }
 
+    if (state->imguiEnabled && !state->imguiInitialized && host && host->renderer && state->windowHandle.handle) {
+        if (state->desiredWindow.width > 0u && state->desiredWindow.height > 0u) {
+            renderer_imgui_set_window_size(host->renderer, state->desiredWindow.width, state->desiredWindow.height);
+        }
+        state->imguiInitialized = renderer_imgui_init(host->renderer, state->windowHandle);
+    }
+
     if (host && host->renderer) {
         app_compile_shaders_from_folder(platform, memory, host);
     }
@@ -216,7 +227,15 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
 
     state->frameCounter += 1ull;
 
+    if (state->imguiEnabled && !state->imguiInitialized && host && host->renderer && state->windowHandle.handle) {
+        state->imguiInitialized = renderer_imgui_init(host->renderer, state->windowHandle);
+    }
+
     if (input) {
+        if (input->eventCount > 0u && state->imguiEnabled && state->imguiInitialized && host && host->renderer) {
+            renderer_imgui_process_events(host->renderer, input->events, input->eventCount);
+        }
+
         for (U32 eventIndex = 0; eventIndex < input->eventCount; ++eventIndex) {
             const OS_GraphicsEvent* evt = input->events + eventIndex;
             if (!evt) {
@@ -231,6 +250,11 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
                     if (evt->windowEvent.width != 0u && evt->windowEvent.height != 0u) {
                         state->desiredWindow.width = evt->windowEvent.width;
                         state->desiredWindow.height = evt->windowEvent.height;
+                        if (state->imguiEnabled && host && host->renderer && state->imguiInitialized) {
+                            renderer_imgui_set_window_size(host->renderer,
+                                                           state->desiredWindow.width,
+                                                           state->desiredWindow.height);
+                        }
                     }
                 }
                 break;
@@ -268,7 +292,26 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
         }
     }
 
+    if (state->imguiEnabled && host && host->renderer &&
+        state->desiredWindow.width > 0u && state->desiredWindow.height > 0u) {
+        renderer_imgui_set_window_size(host->renderer,
+                                       state->desiredWindow.width,
+                                       state->desiredWindow.height);
+    }
+
+    B32 beganImguiFrame = 0;
+    if (state->imguiEnabled && state->imguiInitialized && host && host->renderer) {
+        renderer_imgui_begin_frame(host->renderer, deltaSeconds);
+        beganImguiFrame = 1;
+    }
+
     app_tests_tick(memory, state, tests, deltaSeconds);
+
+    if (beganImguiFrame) {
+        ImGui::SetNextWindowCollapsed(false, ImGuiCond_Appearing);
+        ImGui::ShowDemoWindow(nullptr);
+        renderer_imgui_end_frame(host->renderer);
+    }
 
     if (host && host->renderer && state->windowHandle.handle) {
         U64 frame = state->frameCounter;
@@ -286,13 +329,17 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
 }
 
 static void app_shutdown(AppPlatform* platform, AppMemory* memory, AppHostContext* host) {
-    (void) host;
     if (!memory || !memory->permanentStorage) {
         return;
     }
 
     AppCoreState* state = app_get_state(memory);
     AppTestsState* tests = app_get_tests(state);
+
+    if (state->imguiInitialized && host && host->renderer) {
+        renderer_imgui_shutdown(host->renderer);
+        state->imguiInitialized = 0;
+    }
 
     app_tests_shutdown(memory, state, tests);
 

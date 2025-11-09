@@ -143,6 +143,16 @@ B32 renderer_init(Arena* arena, Renderer* renderer) {
     vulkan->gradientPipelineLayout = VK_NULL_HANDLE;
     vulkan->gradientPipeline = VK_NULL_HANDLE;
 
+    vulkan->imguiDescriptorPool = VK_NULL_HANDLE;
+    vulkan->imguiContext = 0;
+    vulkan->imguiWindow.handle = 0;
+    MEMSET(&vulkan->imguiPipelineInfo, 0, sizeof(vulkan->imguiPipelineInfo));
+    vulkan->imguiWindowExtent.width = 0;
+    vulkan->imguiWindowExtent.height = 0;
+    vulkan->imguiColorAttachmentFormats[0] = VK_FORMAT_UNDEFINED;
+    vulkan->imguiMinImageCount = 0u;
+    vulkan->imguiInitialized = 0;
+
     vulkan->shaders = 0;
     vulkan->shaderCount = 0u;
     vulkan->shaderCapacity = 0u;
@@ -187,13 +197,16 @@ void renderer_shutdown(Renderer* renderer) {
     RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
 
     if (vulkan->device != VK_NULL_HANDLE) {
-        vulkan_destroy_draw_pipeline(vulkan);
         vkDeviceWaitIdle(vulkan->device);
-        vkdefer_shutdown(&vulkan->deferCtx);
+        renderer_vulkan_imgui_shutdown(vulkan);
+        vulkan_destroy_draw_pipeline(vulkan);
     }
 
     vulkan_destroy_swapchain(vulkan);
     vulkan_destroy_frames(vulkan);
+    if (vulkan->device != VK_NULL_HANDLE) {
+        vkdefer_shutdown(&vulkan->deferCtx);
+    }
     vulkan_destroy_device(vulkan);
     vulkan_destroy_debug_messenger(vulkan);
     vulkan_destroy_surface(vulkan);
@@ -577,6 +590,7 @@ static B32 vulkan_create_device(Arena* arena, RendererVulkan* vulkan) {
 #endif
         "VK_KHR_swapchain",
         "VK_KHR_synchronization2",
+        "VK_KHR_dynamic_rendering",
     };
     const U32 DESIRED_DEVICE_EXTENSION_COUNT = sizeof(DESIRED_DEVICE_EXTENSIONS) / sizeof(DESIRED_DEVICE_EXTENSIONS[0]);
 
@@ -607,9 +621,14 @@ static B32 vulkan_create_device(Arena* arena, RendererVulkan* vulkan) {
     sync2Features.pNext = 0;
     sync2Features.synchronization2 = VK_TRUE;
 
+    VkPhysicalDeviceDynamicRenderingFeaturesKHR dynamicRenderingFeatures = {};
+    dynamicRenderingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR;
+    dynamicRenderingFeatures.pNext = &sync2Features;
+    dynamicRenderingFeatures.dynamicRendering = VK_TRUE;
+
     VkDeviceCreateInfo createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    createInfo.pNext = &sync2Features;
+    createInfo.pNext = &dynamicRenderingFeatures;
     createInfo.pQueueCreateInfos = &queueCreateInfo;
     createInfo.queueCreateInfoCount = 1;
     createInfo.pEnabledFeatures = &deviceFeatures;
@@ -1086,7 +1105,7 @@ static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle windo
         1
     };
 
-    vulkan->drawImage.imageFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    vulkan->drawImage.imageFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
     vulkan->drawImage.imageExtent = drawImageExtent;
     vulkan->drawExtent.width = drawImageExtent.width;
     vulkan->drawExtent.height = drawImageExtent.height;
@@ -1119,6 +1138,8 @@ static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle windo
 
     vkdefer_destroy_VkImageView(&vulkan->deferCtx.globalBuf, vulkan->drawImage.imageView);
     vkdefer_destroy_VmaImage(&vulkan->deferCtx.globalBuf, vulkan->drawImage.image, vulkan->drawImage.allocation);
+
+    renderer_vulkan_imgui_on_swapchain_updated(vulkan);
 
     return 1;
 }
@@ -1452,7 +1473,7 @@ static B32 vulkan_init_draw_pipeline(RendererVulkan* vulkan) {
 
     VkDescriptorPoolCreateInfo poolInfo = {};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.flags = 0;
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     poolInfo.maxSets = 1u;
     poolInfo.poolSizeCount = 1u;
     poolInfo.pPoolSizes = &poolSize;
@@ -1693,6 +1714,12 @@ void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, 
         }
     }
 
+    if (!vulkan->imguiInitialized && window.handle) {
+        if (renderer_vulkan_imgui_init(vulkan, window)) {
+            renderer_vulkan_imgui_on_swapchain_updated(vulkan);
+        }
+    }
+
     RendererVulkanFrame* frame = &vulkan->frames[vulkan->currentFrameIndex];
 
     VK_CHECK(vkWaitForFences(vulkan->device, 1, &frame->renderFence, VK_TRUE, SECONDS_TO_NANOSECONDS(1)));
@@ -1737,8 +1764,16 @@ void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, 
     vulkan_copy_image_to_image(frame->commandBuffer, vulkan->drawImage.image, image->handle, vulkan->drawExtent,
                                vulkan->swapchain.extent);
 
-    vulkan_transition_image(frame->commandBuffer, image->handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    if (vulkan->imguiInitialized) {
+        vulkan_transition_image(frame->commandBuffer, image->handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        renderer_vulkan_imgui_render(vulkan, frame->commandBuffer, image->view, vulkan->swapchain.extent);
+        vulkan_transition_image(frame->commandBuffer, image->handle, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    } else {
+        vulkan_transition_image(frame->commandBuffer, image->handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    }
 
     VK_CHECK(vkEndCommandBuffer(frame->commandBuffer));
 

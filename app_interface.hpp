@@ -59,7 +59,13 @@ struct PlatformOSApi {
 
 #define PLATFORM_RENDERER_FUNCTIONS(X) \
     X(renderer_compile_shaders) \
-    X(renderer_draw_color)
+    X(renderer_draw_color) \
+    X(renderer_imgui_init) \
+    X(renderer_imgui_shutdown) \
+    X(renderer_imgui_process_events) \
+    X(renderer_imgui_begin_frame) \
+    X(renderer_imgui_end_frame) \
+    X(renderer_imgui_set_window_size)
 
 struct PlatformRendererApi {
 #define PLATFORM_DECLARE_RENDERER_FN(name) decltype(&name) name;
