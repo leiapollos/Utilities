@@ -29,6 +29,7 @@ struct AppTestsState {
     F32 lastPositionSum;
     U64 jobDispatchCount;
     F32 chunkSums[APP_MAX_JOB_SLOTS + 1u];
+    Vec4F32 drawColor;
 };
 
 struct EntityJobParams {
