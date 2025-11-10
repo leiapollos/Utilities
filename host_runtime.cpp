@@ -37,6 +37,39 @@ struct ProgramMemory {
     U64 transientSize;
 };
 
+#if !defined(UTILITIES_ICD_FILENAME)
+#define UTILITIES_ICD_FILENAME ""
+#endif
+
+void host_apply_environment_defaults(void) {
+#if defined(PLATFORM_OS_MACOS)
+    StringU8 icdEnvName = str8("VK_ICD_FILENAMES");
+    const char* icdEnvRaw = getenv((const char*) icdEnvName.data);
+    StringU8 icdEnvValue = STR8_NIL;
+    if (icdEnvRaw) {
+        icdEnvValue = str8(icdEnvRaw);
+    }
+
+    StringU8 icdFilename = str8(UTILITIES_ICD_FILENAME);
+
+    if ((str8_is_nil(icdEnvValue) || str8_is_empty(icdEnvValue)) && !str8_is_empty(icdFilename)) {
+        Temp scratch = get_scratch(0, 0);
+        if (scratch.arena) {
+            DEFER_REF(temp_end(&scratch));
+            StringU8 execDir = OS_get_executable_directory(scratch.arena);
+            if (!str8_is_nil(execDir) && execDir.size > 0) {
+                StringU8 separator = str8("/");
+                StringU8 pieces[] = {execDir, separator, icdFilename};
+                StringU8 icdPath = str8_concat_n(scratch.arena, pieces, ARRAY_COUNT(pieces));
+                if (!str8_is_nil(icdPath) && icdPath.size > 0) {
+                    OS_set_environment_variable(icdEnvName, icdPath);
+                }
+            }
+        }
+    }
+#endif
+}
+
 #define HOT_MODULE_PATH_MAX 256
 #define HOT_MODULE_HISTORY_MAX 32
 #define HOST_EVENT_CAP 64
@@ -352,7 +385,7 @@ static B32 host_load_module(HostState* state, B32 isReload) {
 
     LOG_INFO("host", "Attempting to dlopen '{}'", loadPath);
 
-    void* handle = dlopen(loadPath, RTLD_LAZY | RTLD_LOCAL);
+    void* handle = dlopen(loadPath, RTLD_NOW | RTLD_LOCAL);
     if (!handle) {
         const char* errorStr = dlerror();
         LOG_ERROR("host", "dlopen failed: {}", errorStr ? errorStr : "<unknown>");

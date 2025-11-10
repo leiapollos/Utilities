@@ -30,6 +30,9 @@ set(IMGUI_SOURCES
 )
 
 add_library(dear_imgui STATIC ${IMGUI_SOURCES})
+if(CMAKE_INTERPROCEDURAL_OPTIMIZATION)
+    set_property(TARGET dear_imgui PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)
+endif()
 set_target_properties(dear_imgui PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(dear_imgui
     PUBLIC
@@ -43,12 +46,14 @@ set(HOST_SOURCES
 )
 
 add_executable(utilities_host ${HOST_SOURCES})
+if(CMAKE_INTERPROCEDURAL_OPTIMIZATION)
+    set_property(TARGET utilities_host PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)
+endif()
 target_include_directories(utilities_host PRIVATE ${SRC_ROOT} ${VULKAN_VMA_INCLUDE_DIR} ${IMGUI_INCLUDE_DIR})
 target_link_libraries(utilities_host PRIVATE dear_imgui)
 
 if(APPLE)
     set(VULKAN_SDK_LIB_DIR "${VULKAN_SDK_ROOT}/macos/lib")
-    set(VULKAN_SDK_BIN_DIR "${VULKAN_SDK_ROOT}/macos/bin")
 
     add_library(VulkanSDK::Vulkan SHARED IMPORTED)
     set_target_properties(VulkanSDK::Vulkan PROPERTIES
@@ -57,22 +62,33 @@ if(APPLE)
         INTERFACE_INCLUDE_DIRECTORIES "${VULKAN_SDK_INCLUDE_DIR}"
     )
 
-    set(VULKAN_SDK_RUNTIME_LIBS
-        "${VULKAN_SDK_LIB_DIR}/libvulkan.dylib"
-        "${VULKAN_SDK_LIB_DIR}/libvulkan.1.dylib"
-        "${VULKAN_SDK_LIB_DIR}/libMoltenVK.dylib"
-        "${VULKAN_SDK_LIB_DIR}/libdxcompiler.dylib"
-    )
-
     add_library(VulkanSDK::DxcCompiler SHARED IMPORTED)
     set_target_properties(VulkanSDK::DxcCompiler PROPERTIES
         IMPORTED_LOCATION "${VULKAN_SDK_LIB_DIR}/libdxcompiler.dylib"
         INTERFACE_INCLUDE_DIRECTORIES "${VULKAN_SDK_INCLUDE_DIR}"
     )
 
-    target_link_libraries(utilities_host PRIVATE "-framework Cocoa" "-framework QuartzCore" "-framework Metal")
-    target_link_libraries(utilities_host PRIVATE VulkanSDK::Vulkan VulkanSDK::DxcCompiler)
-    
+    target_link_libraries(utilities_host PRIVATE
+        "-framework Cocoa"
+        "-framework QuartzCore"
+        "-framework Metal"
+        VulkanSDK::Vulkan
+        VulkanSDK::DxcCompiler
+    )
+
+    set(VULKAN_ICD_SOURCE "${VULKAN_SDK_ROOT}/macos/share/vulkan/icd.d/MoltenVK_icd.json")
+    if(NOT EXISTS "${VULKAN_ICD_SOURCE}")
+        message(FATAL_ERROR "MoltenVK ICD file not found at ${VULKAN_ICD_SOURCE}")
+    endif()
+
+    file(READ "${VULKAN_ICD_SOURCE}" VULKAN_ICD_CONTENT)
+    string(REGEX REPLACE "\"[^\"]*/libMoltenVK\\.dylib\"" "\"./libMoltenVK.dylib\"" VULKAN_ICD_CONTENT "${VULKAN_ICD_CONTENT}")
+
+    set(VULKAN_ICD_JSON "${CMAKE_BINARY_DIR}/MoltenVK_icd.json")
+    file(WRITE "${VULKAN_ICD_JSON}" "${VULKAN_ICD_CONTENT}")
+    set_property(DIRECTORY APPEND PROPERTY ADDITIONAL_MAKE_CLEAN_FILES "${VULKAN_ICD_JSON}")
+    target_compile_definitions(utilities_host PRIVATE UTILITIES_ICD_FILENAME=\"MoltenVK_icd.json\")
+
     set_target_properties(utilities_host PROPERTIES
         BUILD_RPATH "@loader_path"
     )
@@ -81,7 +97,15 @@ if(APPLE)
         COMMAND install_name_tool -delete_rpath "${VULKAN_SDK_LIB_DIR}" "$<TARGET_FILE:utilities_host>" 2>/dev/null || true
     )
 
-    foreach(vulkanBinary IN LISTS VULKAN_SDK_RUNTIME_LIBS)
+    set(VULKAN_HOST_RUNTIME_FILES
+        "${VULKAN_SDK_LIB_DIR}/libvulkan.dylib"
+        "${VULKAN_SDK_LIB_DIR}/libvulkan.1.dylib"
+        "${VULKAN_SDK_LIB_DIR}/libMoltenVK.dylib"
+        "${VULKAN_SDK_LIB_DIR}/libdxcompiler.dylib"
+        "${VULKAN_ICD_JSON}"
+    )
+
+    foreach(vulkanBinary IN LISTS VULKAN_HOST_RUNTIME_FILES)
         add_custom_command(TARGET utilities_host POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${vulkanBinary}"
@@ -89,7 +113,7 @@ if(APPLE)
         )
     endforeach()
 
-    install(FILES ${VULKAN_SDK_RUNTIME_LIBS} DESTINATION bin)
+    install(FILES ${VULKAN_HOST_RUNTIME_FILES} DESTINATION bin)
 endif()
 
 set_target_properties(utilities_host PROPERTIES OUTPUT_NAME "utilities_host")

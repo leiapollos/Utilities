@@ -72,6 +72,17 @@ StringU8 OS_get_executable_directory(Arena* arena) {
     return str8_cpy(arena, directory);
 }
 
+void OS_set_environment_variable(StringU8 name, StringU8 value) {
+    if (str8_is_nil(name) || str8_is_empty(name)) {
+        return;
+    }
+    if (str8_is_nil(value)) {
+        return;
+    }
+
+    setenv((const char*) name.data, (const char*) value.data, 1);
+}
+
 
 // ////////////////////////
 // Time

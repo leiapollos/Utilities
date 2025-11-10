@@ -22,6 +22,12 @@ StringU8 OS_get_executable_directory(Arena* arena);
 
 
 // ////////////////////////
+// Environment
+
+void OS_set_environment_variable(StringU8 name, StringU8 value);
+
+
+// ////////////////////////
 // Time
 U64 OS_get_time_microseconds();
 U64 OS_get_time_nanoseconds();
