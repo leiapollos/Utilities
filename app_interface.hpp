@@ -24,6 +24,13 @@
     X(OS_commit) \
     X(OS_decommit) \
     X(OS_release) \
+    X(OS_set_environment_variable) \
+    X(OS_get_environment_variable) \
+    X(OS_execute) \
+    X(OS_library_open) \
+    X(OS_library_close) \
+    X(OS_library_load_symbol) \
+    X(OS_library_last_error) \
     X(OS_get_time_microseconds) \
     X(OS_get_time_nanoseconds) \
     X(OS_sleep_milliseconds) \
@@ -82,6 +89,7 @@ struct AppHostContext {
     void* userData;
     U32 logicalCoreCount;
     Renderer* renderer;
+    Arena* frameArena;
 };
 
 struct AppInput {

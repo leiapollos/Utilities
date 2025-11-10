@@ -25,7 +25,7 @@ StringU8 OS_get_executable_directory(Arena* arena);
 // Environment
 
 void OS_set_environment_variable(StringU8 name, StringU8 value);
-
+StringU8 OS_get_environment_variable(Arena* arena, StringU8 name);
 
 // ////////////////////////
 // Time
@@ -59,6 +59,17 @@ void OS_release(void* addr, U64 size);
 struct OS_Handle {
     U64* handle;
 };
+
+typedef struct OS_SharedLibrary {
+    void* handle;
+} OS_SharedLibrary;
+
+B32 OS_library_open(StringU8 path, OS_SharedLibrary* outLibrary);
+void OS_library_close(OS_SharedLibrary library);
+void* OS_library_load_symbol(OS_SharedLibrary library, StringU8 symbolName);
+StringU8 OS_library_last_error(Arena* arena);
+
+S32 OS_execute(StringU8 command);
 
 typedef void OS_ThreadFunc(void* ptr);
 

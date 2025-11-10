@@ -2,6 +2,8 @@
 // Created by André Leite on 26/07/2025.
 //
 
+#include <dlfcn.h>
+
 // ////////////////////////
 // Globals
 
@@ -81,6 +83,76 @@ void OS_set_environment_variable(StringU8 name, StringU8 value) {
     }
 
     setenv((const char*) name.data, (const char*) value.data, 1);
+}
+
+StringU8 OS_get_environment_variable(Arena* arena, StringU8 name) {
+    if (!arena || !name.data || name.size == 0) {
+        return STR8_NIL;
+    }
+
+    const char* rawValue = getenv((const char*) name.data);
+    if (!rawValue) {
+        return STR8_NIL;
+    }
+
+    return str8_cpy(arena, str8(rawValue));
+}
+
+
+B32 OS_library_open(StringU8 path, OS_SharedLibrary* outLibrary) {
+    if (!outLibrary) {
+        return 0;
+    }
+
+    outLibrary->handle = 0;
+    if (!path.data || path.size == 0) {
+        return 0;
+    }
+
+    void* handle = dlopen((const char*) path.data, RTLD_NOW | RTLD_LOCAL);
+    if (!handle) {
+        return 0;
+    }
+
+    outLibrary->handle = handle;
+    return 1;
+}
+
+void OS_library_close(OS_SharedLibrary library) {
+    if (!library.handle) {
+        return;
+    }
+
+    dlclose(library.handle);
+}
+
+void* OS_library_load_symbol(OS_SharedLibrary library, StringU8 symbolName) {
+    if (!library.handle || !symbolName.data || symbolName.size == 0) {
+        return 0;
+    }
+
+    return dlsym(library.handle, (const char*) symbolName.data);
+}
+
+StringU8 OS_library_last_error(Arena* arena) {
+    const char* error = dlerror();
+    if (!error) {
+        return STR8_NIL;
+    }
+
+    if (!arena) {
+        return str8(error);
+    }
+
+    return str8_cpy(arena, str8(error));
+}
+
+S32 OS_execute(StringU8 command) {
+    if (!command.data || command.size == 0) {
+        return -1;
+    }
+
+    return (S32) system((const char*) command.data);
 }
 
 

@@ -44,6 +44,10 @@ Arena* arena_alloc_(const ArenaParameters& parameters) {
 }
 
 void arena_release(Arena* arena) {
+    if (!arena) {
+        return;
+    }
+
     for (Arena* n = arena->current,* prev = 0; n != 0; n = prev) {
         prev = n->prev;
         OS_release(n, n->reserved);
@@ -110,6 +114,10 @@ void* arena_push(Arena* arena, U64 size, U64 alignment) {
 }
 
 void arena_pop_to(Arena* arena, U64 pos) {
+    if (!arena) {
+        return;
+    }
+
     U64 absolutePos = pos + ARENA_HEADER_SIZE;
     Arena* current = arena->current;
 
@@ -126,6 +134,10 @@ void arena_pop_to(Arena* arena, U64 pos) {
 }
 
 U64 arena_get_pos(Arena* arena) {
+    if (!arena) {
+        return 0;
+    }
+
     return (arena->current->startPos + arena->current->pos) - ARENA_HEADER_SIZE;
 }
 
