@@ -12,8 +12,8 @@ struct StringU8 {
     U64 size;
 };
 
-static const StringU8 STR8_NIL = {(U8*)0, 0};
-static const StringU8 STR8_EMPTY = {(U8*)"", 0};
+extern StringU8 STR8_NIL;
+extern StringU8 STR8_EMPTY;
 
 StringU8 str8(U8* source, U64 size);
 StringU8 str8(const char* source, U64 size);

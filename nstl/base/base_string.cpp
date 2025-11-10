@@ -2,6 +2,9 @@
 // Created by André Leite on 15/10/2025.
 //
 
+READ_ONLY StringU8 STR8_NIL = {(U8*)0, 0};
+READ_ONLY StringU8 STR8_EMPTY = {(U8*)"", 0};
+
 // ////////////////////////
 // String
 
