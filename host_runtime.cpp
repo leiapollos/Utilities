@@ -88,6 +88,67 @@ static PlatformRendererApi host_build_renderer_api(void) {
     return api;
 }
 
+static B32 renderer_imgui_init_stub(Renderer* renderer, OS_WindowHandle window) {
+    (void) renderer;
+    (void) window;
+    return 1;
+}
+
+static void renderer_imgui_shutdown_stub(Renderer* renderer) {
+    (void) renderer;
+}
+
+static void renderer_imgui_process_events_stub(Renderer* renderer, const OS_GraphicsEvent* events, U32 eventCount) {
+    (void) renderer;
+    (void) events;
+    (void) eventCount;
+}
+
+static void renderer_imgui_begin_frame_stub(Renderer* renderer, F32 deltaSeconds) {
+    (void) renderer;
+    (void) deltaSeconds;
+}
+
+static void renderer_imgui_end_frame_stub(Renderer* renderer) {
+    (void) renderer;
+}
+
+static void renderer_imgui_set_window_size_stub(Renderer* renderer, U32 width, U32 height) {
+    (void) renderer;
+    (void) width;
+    (void) height;
+}
+
+static PlatformRendererApi host_build_renderer_api_imgui_stub(void) {
+    PlatformRendererApi api = host_build_renderer_api();
+    api.renderer_imgui_init = renderer_imgui_init_stub;
+    api.renderer_imgui_shutdown = renderer_imgui_shutdown_stub;
+    api.renderer_imgui_process_events = renderer_imgui_process_events_stub;
+    api.renderer_imgui_begin_frame = renderer_imgui_begin_frame_stub;
+    api.renderer_imgui_end_frame = renderer_imgui_end_frame_stub;
+    api.renderer_imgui_set_window_size = renderer_imgui_set_window_size_stub;
+    return api;
+}
+
+static B32 host_should_enable_imgui(void) {
+    Temp scratch = get_scratch(0, 0);
+    if (!scratch.arena) {
+        return 1;
+    }
+    DEFER_REF(temp_end(&scratch));
+
+    StringU8 value = OS_get_environment_variable(scratch.arena, str8("UTILITIES_IMGUI"));
+    if (value.size == 0) {
+        return 1;
+    }
+
+    U8 first = value.data[0];
+    if (first == '0' || first == 'f' || first == 'F' || first == 'n' || first == 'N') {
+        return 0;
+    }
+    return 1;
+}
+
 struct HostState {
     LoadedModule module;
     AppMemory memory;
@@ -97,6 +158,9 @@ struct HostState {
     Arena* pathArena;
     AppHostContext hostContext;
     AppPlatform platformAPI;
+    PlatformRendererApi rendererApiReal;
+    PlatformRendererApi rendererApiImguiStub;
+    B32 imguiEnabled;
     AppInput input;
     Renderer renderer;
     B32 graphicsInitialized;
@@ -110,6 +174,13 @@ struct HostState {
     U32 retiredModuleCount;
     B32 buildFailed;
 };
+
+static void host_set_imgui_enabled(HostState* state, B32 enabled) {
+    ASSERT_ALWAYS(state != 0);
+    PlatformRendererApi* target = enabled ? &state->rendererApiReal : &state->rendererApiImguiStub;
+    state->platformAPI.renderer = *target;
+    state->imguiEnabled = enabled ? 1 : 0;
+}
 
 static B32 host_allocate_memory(HostState* state);
 static void host_release_memory(HostState* state);
@@ -126,14 +197,14 @@ static void host_update_input(HostState* state, F32 deltaSeconds);
 static void host_cleanup_retired_modules(HostState* state);
 
 static B32 host_init(HostState* state) {
-    if (!state) {
-        return 0;
-    }
+    ASSERT_ALWAYS(state != 0);
 
     MEMSET(state, 0, sizeof(*state));
     host_apply_environment_defaults();
 
-    if (!host_allocate_memory(state)) {
+    B32 memoryOk = host_allocate_memory(state);
+    ASSERT_ALWAYS(memoryOk);
+    if (!memoryOk) {
         return 0;
     }
 
@@ -152,39 +223,46 @@ static B32 host_init(HostState* state) {
     state->sourceTimestamp = initialSourceInfo.exists ? initialSourceInfo.lastWriteTimestampNs : 0;
     state->buildFailed = 0;
 
-    if (!host_ensure_graphics_initialized(state)) {
-        LOG_ERROR("host", "Failed to initialize graphics before loading module");
+    if (!host_should_enable_imgui()) {
+        host_set_imgui_enabled(state, 0);
     }
 
-    if (!host_load_module(state, 0)) {
+    B32 graphicsOk = host_ensure_graphics_initialized(state);
+    ASSERT_ALWAYS(graphicsOk);
+    if (!graphicsOk) {
+        LOG_ERROR("host", "Failed to initialize graphics before loading module");
+        return 0;
+    }
+
+    B32 loadOk = host_load_module(state, 0);
+    ASSERT_ALWAYS(loadOk);
+    if (!loadOk) {
         LOG_ERROR("host", "Initial module load failed");
+        return 0;
     }
 
     return 1;
 }
 
 static void host_update(HostState* state, F32 deltaSeconds) {
-    if (!state) {
-        return;
-    }
+    ASSERT_ALWAYS(state != 0);
+    ASSERT_ALWAYS(state->frameArena != 0);
 
     arena_pop_to(state->frameArena, 0);
 
     host_try_reload_module(state);
     host_update_input(state, deltaSeconds);
 
-    if (state->module.isValid && state->module.exports.update) {
-        state->module.exports.update(&state->platformAPI, &state->memory, &state->hostContext, &state->input,
-                                     deltaSeconds);
-    } else {
-        OS_sleep_milliseconds(100);
-    }
+    ASSERT_ALWAYS(state->module.isValid);
+    ASSERT_ALWAYS(state->module.exports.update != 0);
+    ASSERT_ALWAYS(state->memory.isInitialized);
+
+    state->module.exports.update(&state->platformAPI, &state->memory, &state->hostContext, &state->input,
+                                 deltaSeconds);
 }
 
 static void host_shutdown(HostState* state) {
-    if (!state) {
-        return;
-    }
+    ASSERT_ALWAYS(state != 0);
 
     host_unload_module(state, 1, 0);
 
@@ -314,7 +392,9 @@ static B32 host_allocate_memory(HostState* state) {
 
     state->platformAPI.userData = state;
     state->platformAPI.os = host_build_os_api();
-    state->platformAPI.renderer = host_build_renderer_api();
+    state->rendererApiReal = host_build_renderer_api();
+    state->rendererApiImguiStub = host_build_renderer_api_imgui_stub();
+    host_set_imgui_enabled(state, 1);
 
     MEMSET(&state->input, 0, sizeof(state->input));
     state->input.eventCount = 0;
@@ -422,11 +502,10 @@ static B32 host_validate_module_exports(HostState* state, const AppModuleExports
 }
 
 static B32 host_load_module(HostState* state, B32 isReload) {
-    if (!state) {
-        return 0;
-    }
+    ASSERT_ALWAYS(state != 0);
 
     Temp scratch = get_scratch(0, 0);
+    ASSERT_ALWAYS(scratch.arena != 0);
     if (!scratch.arena) {
         return 0;
     }
@@ -537,7 +616,8 @@ static B32 host_load_module(HostState* state, B32 isReload) {
 }
 
 static void host_unload_module(HostState* state, B32 callShutdown, B32 retainHandle) {
-    if (!state || !state->module.library.handle) {
+    ASSERT_ALWAYS(state != 0);
+    if (!state->module.library.handle) {
         return;
     }
 
@@ -584,6 +664,8 @@ static void host_try_build_module(HostState* state) {
 }
 
 static void host_try_reload_module(HostState* state) {
+    ASSERT_ALWAYS(state != 0);
+
     host_try_build_module(state);
 
     if (state->buildFailed) {
@@ -596,6 +678,7 @@ static void host_try_reload_module(HostState* state) {
     } else {
         scratch = get_scratch(0, 0);
     }
+    ASSERT_ALWAYS(scratch.arena != 0);
     if (!scratch.arena) {
         return;
     }
@@ -624,9 +707,7 @@ static void host_try_reload_module(HostState* state) {
 }
 
 static void host_cleanup_retired_modules(HostState* state) {
-    if (!state) {
-        return;
-    }
+    ASSERT_ALWAYS(state != 0);
 
     for (U32 index = 0; index < state->retiredModuleCount; ++index) {
         OS_SharedLibrary library = state->retiredModules[index];
@@ -648,9 +729,7 @@ static void host_cleanup_retired_modules(HostState* state) {
 // Host Graphics & Input
 
 static B32 host_ensure_graphics_initialized(HostState* state) {
-    if (!state) {
-        return 0;
-    }
+    ASSERT_ALWAYS(state != 0);
 
     if (state->graphicsInitialized) {
         return 1;
@@ -673,26 +752,19 @@ static B32 host_ensure_graphics_initialized(HostState* state) {
 }
 
 static void host_update_input(HostState* state, F32 deltaSeconds) {
-    if (!state) {
-        return;
-    }
+    ASSERT_ALWAYS(state != 0);
+    ASSERT_ALWAYS(state->frameArena != 0);
+    ASSERT_ALWAYS(state->graphicsInitialized);
 
     AppInput* input = &state->input;
     input->deltaSeconds = deltaSeconds;
     input->events = 0;
     input->eventCount = 0;
 
-    if (!state->graphicsInitialized) {
-        return;
-    }
+    ASSERT_ALWAYS(PLATFORM_OS_FN(&state->platformAPI, OS_graphics_pump_events) != 0);
+    PLATFORM_OS_CALL(&state->platformAPI, OS_graphics_pump_events);
 
-    if (PLATFORM_OS_FN(&state->platformAPI, OS_graphics_pump_events)) {
-        PLATFORM_OS_CALL(&state->platformAPI, OS_graphics_pump_events);
-    }
-
-    if (!PLATFORM_OS_FN(&state->platformAPI, OS_graphics_poll_events)) {
-        return;
-    }
+    ASSERT_ALWAYS(PLATFORM_OS_FN(&state->platformAPI, OS_graphics_poll_events) != 0);
 
     Arena* arena = state->frameArena;
     OS_GraphicsEvent* firstEvent = 0;

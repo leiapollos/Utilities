@@ -23,9 +23,10 @@ static U32 app_select_worker_count(const AppHostContext* host);
 static void app_compile_shaders_from_folder(AppPlatform* platform, AppMemory* memory, AppHostContext* host);
 
 static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostContext* host) {
-    if (!memory) {
-        return 0;
-    }
+    ASSERT_ALWAYS(platform != 0);
+    ASSERT_ALWAYS(memory != 0);
+    ASSERT_ALWAYS(host != 0);
+    ASSERT_ALWAYS(memory->permanentStorage != 0);
 
     AppCoreState* state = app_get_state(memory);
     B32 needsReset = (!memory->isInitialized) || (state->version != APP_CORE_STATE_VERSION);
@@ -35,8 +36,6 @@ static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostConte
         totalSize = (totalSize > memory->permanentStorageSize) ? memory->permanentStorageSize : totalSize;
         MEMSET(memory->permanentStorage, 0, totalSize);
         memory->isInitialized = 1;
-        state->imguiEnabled = 1;
-        state->imguiInitialized = 0;
     }
 
     state = app_get_state(memory);
@@ -63,7 +62,7 @@ static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostConte
         state->jobSystem = job_system_create(memory->programArena, state->workerCount);
         if (!state->jobSystem) {
             LOG_ERROR("jobs", "Failed to create job system (workers={})", state->workerCount);
-            state->workerCount = 0;
+            ASSERT_ALWAYS(state->jobSystem != 0);
         } else {
             LOG_INFO("jobs", "Job system ready (workers={})", state->workerCount);
         }
@@ -73,11 +72,9 @@ static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostConte
         app_tests_initialize(memory, state, tests);
     }
 
-    if (host) {
-        host->reloadCount = state->reloadCount;
-    }
+    host->reloadCount = state->reloadCount;
 
-    if (platform && !state->windowHandle.handle) {
+    if (!state->windowHandle.handle) {
         OS_WindowDesc desc = {};
         desc.title = state->desiredWindow.title;
         desc.width = state->desiredWindow.width;
@@ -85,186 +82,186 @@ static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostConte
         state->windowHandle = PLATFORM_OS_CALL(platform, OS_window_create, desc);
     }
 
-    if (state->imguiEnabled && !state->imguiInitialized && host && host->renderer && state->windowHandle.handle) {
-        if (state->desiredWindow.width > 0u && state->desiredWindow.height > 0u) {
-            renderer_imgui_set_window_size(host->renderer, state->desiredWindow.width, state->desiredWindow.height);
-        }
-        state->imguiInitialized = renderer_imgui_init(host->renderer, state->windowHandle);
+    ASSERT_ALWAYS(state->windowHandle.handle != 0);
+    ASSERT_ALWAYS(host->renderer != 0);
+
+    if (state->desiredWindow.width > 0u && state->desiredWindow.height > 0u) {
+        PLATFORM_RENDERER_CALL(platform,
+                               renderer_imgui_set_window_size,
+                               host->renderer,
+                               state->desiredWindow.width,
+                               state->desiredWindow.height);
     }
 
-    if (host && host->renderer) {
-        app_compile_shaders_from_folder(platform, memory, host);
-    }
+    B32 imguiInitOk = PLATFORM_RENDERER_CALL(platform,
+                                             renderer_imgui_init,
+                                             host->renderer,
+                                             state->windowHandle);
+    ASSERT_ALWAYS(imguiInitOk != 0);
+
+    app_compile_shaders_from_folder(platform, memory, host);
 
     return 1;
 }
 
 static void app_reload(AppPlatform* platform, AppMemory* memory, AppHostContext* host) {
-    if (!memory) {
-        return;
-    }
+    ASSERT_ALWAYS(platform != 0);
+    ASSERT_ALWAYS(memory != 0);
+    ASSERT_ALWAYS(host != 0);
 
     AppCoreState* state = app_get_state(memory);
     app_assign_tests_state(state);
     AppTestsState* tests = app_get_tests(state);
 
     state->reloadCount += 1;
-    if (host) {
-        host->reloadCount = state->reloadCount;
-    }
+    host->reloadCount = state->reloadCount;
 
     app_tests_reload(memory, state, tests);
 }
 
 static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext* host, const AppInput* input,
                        F32 deltaSeconds) {
-    if (!memory || !memory->permanentStorage) {
-        return;
-    }
+    ASSERT_ALWAYS(platform != 0);
+    ASSERT_ALWAYS(memory != 0);
+    ASSERT_ALWAYS(memory->permanentStorage != 0);
+    ASSERT_ALWAYS(memory->isInitialized != 0);
+    ASSERT_ALWAYS(host != 0);
+    ASSERT_ALWAYS(host->renderer != 0);
+    ASSERT_ALWAYS(input != 0);
 
     AppCoreState* state = app_get_state(memory);
     AppTestsState* tests = app_get_tests(state);
 
     state->frameCounter += 1ull;
 
-    if (state->imguiEnabled && !state->imguiInitialized && host && host->renderer && state->windowHandle.handle) {
-        state->imguiInitialized = renderer_imgui_init(host->renderer, state->windowHandle);
-    }
+    PLATFORM_RENDERER_CALL(platform,
+                           renderer_imgui_process_events,
+                           host->renderer,
+                           input->events,
+                           input->eventCount);
 
-    if (input) {
-        if (input->eventCount > 0u && state->imguiEnabled && state->imguiInitialized && host && host->renderer) {
-            renderer_imgui_process_events(host->renderer, input->events, input->eventCount);
-        }
+    for (U32 eventIndex = 0; eventIndex < input->eventCount; ++eventIndex) {
+        const OS_GraphicsEvent* evt = input->events + eventIndex;
+        ASSERT_ALWAYS(evt != 0);
 
-        for (U32 eventIndex = 0; eventIndex < input->eventCount; ++eventIndex) {
-            const OS_GraphicsEvent* evt = input->events + eventIndex;
-            if (!evt) {
-                continue;
+        switch (evt->type) {
+            case OS_GraphicsEventType_WindowShown: {
+                if (!state->windowHandle.handle) {
+                    state->windowHandle = evt->window;
+                }
+                if (evt->windowEvent.width != 0u && evt->windowEvent.height != 0u) {
+                    state->desiredWindow.width = evt->windowEvent.width;
+                    state->desiredWindow.height = evt->windowEvent.height;
+                    PLATFORM_RENDERER_CALL(platform,
+                                           renderer_imgui_set_window_size,
+                                           host->renderer,
+                                           state->desiredWindow.width,
+                                           state->desiredWindow.height);
+                }
             }
+            break;
 
-            switch (evt->type) {
-                case OS_GraphicsEventType_WindowShown: {
-                    if (!state->windowHandle.handle) {
-                        state->windowHandle = evt->window;
-                    }
-                    if (evt->windowEvent.width != 0u && evt->windowEvent.height != 0u) {
-                        state->desiredWindow.width = evt->windowEvent.width;
-                        state->desiredWindow.height = evt->windowEvent.height;
-                        if (state->imguiEnabled && host && host->renderer && state->imguiInitialized) {
-                            renderer_imgui_set_window_size(host->renderer,
-                                                           state->desiredWindow.width,
-                                                           state->desiredWindow.height);
-                        }
-                    }
+            case OS_GraphicsEventType_WindowClosed:
+            case OS_GraphicsEventType_WindowDestroyed: {
+                if (state->windowHandle.handle == evt->window.handle) {
+                    OS_WindowHandle closedHandle = state->windowHandle;
+                    state->windowHandle.handle = 0;
+                    host->shouldQuit = 1;
+                    PLATFORM_OS_CALL(platform, OS_window_destroy, closedHandle);
+                    return;
                 }
-                break;
-
-                case OS_GraphicsEventType_WindowClosed:
-                case OS_GraphicsEventType_WindowDestroyed: {
-                    if (state->windowHandle.handle == evt->window.handle) {
-                        OS_WindowHandle closedHandle = state->windowHandle;
-                        state->windowHandle.handle = 0;
-                        if (host) {
-                            host->shouldQuit = 1;
-                        }
-                        if (platform) {
-                            PLATFORM_OS_CALL(platform, OS_window_destroy, closedHandle);
-                        }
-                    }
-                }
-                break;
-
-                case OS_GraphicsEventType_MouseMove: {
-                    LOG_DEBUG("app", "Mouse moved to ({}, {})", evt->mouse.x, evt->mouse.y);
-                }
-                break;
-
-                case OS_GraphicsEventType_MouseButtonDown:
-                case OS_GraphicsEventType_MouseButtonUp:
-                case OS_GraphicsEventType_MouseScroll:
-                case OS_GraphicsEventType_KeyDown:
-                case OS_GraphicsEventType_KeyUp:
-                case OS_GraphicsEventType_TextInput:
-                default: {
-                }
-                    break;
             }
+            break;
+
+            case OS_GraphicsEventType_MouseMove: {
+                LOG_DEBUG("app", "Mouse moved to ({}, {})", evt->mouse.x, evt->mouse.y);
+            }
+            break;
+
+            case OS_GraphicsEventType_MouseButtonDown:
+            case OS_GraphicsEventType_MouseButtonUp:
+            case OS_GraphicsEventType_MouseScroll:
+            case OS_GraphicsEventType_KeyDown:
+            case OS_GraphicsEventType_KeyUp:
+            case OS_GraphicsEventType_TextInput:
+            default: {
+            }
+                break;
         }
     }
 
-    if (state->imguiEnabled && host && host->renderer &&
-        state->desiredWindow.width > 0u && state->desiredWindow.height > 0u) {
-        renderer_imgui_set_window_size(host->renderer,
-                                       state->desiredWindow.width,
-                                       state->desiredWindow.height);
-    }
+    ASSERT_ALWAYS(state->windowHandle.handle != 0);
 
-    B32 beganImguiFrame = 0;
-    if (state->imguiEnabled && state->imguiInitialized && host && host->renderer) {
-        renderer_imgui_begin_frame(host->renderer, deltaSeconds);
-        beganImguiFrame = 1;
-    }
+    PLATFORM_RENDERER_CALL(platform,
+                           renderer_imgui_set_window_size,
+                           host->renderer,
+                           state->desiredWindow.width,
+                           state->desiredWindow.height);
 
     app_tests_tick(memory, state, tests, deltaSeconds);
 
-    if (beganImguiFrame) {
-        ImGui::ShowDemoWindow(nullptr);
-        ImGui::Text("frameTime: %f", static_cast<double>(deltaSeconds));
-        ImGui::Text("FPS: %f", static_cast<double>(1.0f / deltaSeconds));
-        ImGui::Text("frameNumber: %lld", state->frameCounter);
+    PLATFORM_RENDERER_CALL(platform,
+                           renderer_imgui_begin_frame,
+                           host->renderer,
+                           deltaSeconds);
+
+    ImGui::ShowDemoWindow(nullptr);
+    ImGui::Text("frameTime: %f", static_cast<double>(deltaSeconds));
+    ImGui::Text("FPS: %f", static_cast<double>(1.0f / deltaSeconds));
+    ImGui::Text("frameNumber: %lld", state->frameCounter);
+    {
+        ImGui::ColorEdit4("Color", tests->drawColor.v);
+
+        static int selected_fish = -1;
+        const char* names[] = { "Bream", "Haddock", "Mackerel", "Pollock", "Tilefish" };
+        const char* names2[] = { "Bream2", "Haddock2", "Mackerel2", "Pollock2", "Tilefish2" };
+        static bool toggles[] = { true, false, false, false, false };
+        if (ImGui::Button("Select.."))
+            ImGui::OpenPopup("my_select_popup");
+        if (ImGui::BeginPopup("my_select_popup"))
         {
-            ImGui::ColorEdit4("Color", tests->drawColor.v);
-
-            static int selected_fish = -1;
-            const char* names[] = { "Bream", "Haddock", "Mackerel", "Pollock", "Tilefish" };
-            const char* names2[] = { "Bream2", "Haddock2", "Mackerel2", "Pollock2", "Tilefish2" };
-            static bool toggles[] = { true, false, false, false, false };
-            if (ImGui::Button("Select.."))
-                ImGui::OpenPopup("my_select_popup");
-            if (ImGui::BeginPopup("my_select_popup"))
-            {
-                for (int i = 0; i < IM_ARRAYSIZE(names); i++)
-                    if (ImGui::Selectable(names[i]))
-                        selected_fish = i;
-                ImGui::SeparatorText("Aquarium");
-                for (int i = 0; i < IM_ARRAYSIZE(names2); i++)
-                    if (ImGui::Selectable(names2[i]))
-                        selected_fish = i;
-                ImGui::EndPopup();
-            }
-            ImGui::Text("Selected fish index: %d", selected_fish);
+            for (int i = 0; i < IM_ARRAYSIZE(names); i++)
+                if (ImGui::Selectable(names[i]))
+                    selected_fish = i;
+            ImGui::SeparatorText("Aquarium");
+            for (int i = 0; i < IM_ARRAYSIZE(names2); i++)
+                if (ImGui::Selectable(names2[i]))
+                    selected_fish = i;
+            ImGui::EndPopup();
         }
-        renderer_imgui_end_frame(host->renderer);
+        ImGui::Text("Selected fish index: %d", selected_fish);
     }
+    PLATFORM_RENDERER_CALL(platform,
+                           renderer_imgui_end_frame,
+                           host->renderer);
 
-    if (host && host->renderer && state->windowHandle.handle) {
-        U64 frame = state->frameCounter;
-        F32 velocity = 0.05f;
-        F32 x = frame * velocity;
-        F32 red = CLAMP(sin(x) * 0.5f + 0.5f, 0.3f, 0.7f);
-        F32 green = CLAMP(cos(x) * 0.5f + 0.5f, 0.3f, 0.7f);
-        F32 blue = CLAMP(sin(x + 0.3f) * 0.5f + 0.5f, 0.3f, 0.7f);
-        Vec4F32 color = {};
-        color.r = red;
-        color.g = green;
-        color.b = blue;
-        color.a = 1.0f;
-        PLATFORM_RENDERER_CALL(platform, renderer_draw_color, host->renderer, state->windowHandle, tests->drawColor);
-    }
+    U64 frame = state->frameCounter;
+    F32 velocity = 0.05f;
+    F32 x = frame * velocity;
+    F32 red = CLAMP(sin(x) * 0.5f + 0.5f, 0.3f, 0.7f);
+    F32 green = CLAMP(cos(x) * 0.5f + 0.5f, 0.3f, 0.7f);
+    F32 blue = CLAMP(sin(x + 0.3f) * 0.5f + 0.5f, 0.3f, 0.7f);
+    Vec4F32 color = {};
+    color.r = red;
+    color.g = green;
+    color.b = blue;
+    color.a = 1.0f;
+    PLATFORM_RENDERER_CALL(platform, renderer_draw_color, host->renderer, state->windowHandle, tests->drawColor);
 }
 
 static void app_shutdown(AppPlatform* platform, AppMemory* memory, AppHostContext* host) {
-    if (!memory || !memory->permanentStorage) {
-        return;
-    }
+    ASSERT_ALWAYS(platform != 0);
+    ASSERT_ALWAYS(memory != 0);
+    ASSERT_ALWAYS(memory->permanentStorage != 0);
+    ASSERT_ALWAYS(host != 0);
+    ASSERT_ALWAYS(host->renderer != 0);
 
     AppCoreState* state = app_get_state(memory);
     AppTestsState* tests = app_get_tests(state);
 
-    if (state->imguiInitialized && host && host->renderer) {
-        renderer_imgui_shutdown(host->renderer);
-        state->imguiInitialized = 0;
-    }
+    PLATFORM_RENDERER_CALL(platform,
+                           renderer_imgui_shutdown,
+                           host->renderer);
 
     app_tests_shutdown(memory, state, tests);
 
@@ -274,7 +271,7 @@ static void app_shutdown(AppPlatform* platform, AppMemory* memory, AppHostContex
         state->workerCount = 0;
     }
 
-    if (platform && state->windowHandle.handle) {
+    if (state->windowHandle.handle) {
         PLATFORM_OS_CALL(platform, OS_window_destroy, state->windowHandle);
         state->windowHandle.handle = 0;
     }
@@ -295,46 +292,45 @@ static AppCoreState* app_get_state(AppMemory* memory) {
 }
 
 static void app_assign_tests_state(AppCoreState* state) {
-    if (!state) {
-        return;
-    }
+    ASSERT_ALWAYS(state != 0);
     U8* base = (U8*) state;
     state->tests = (AppTestsState*) (base + sizeof(AppCoreState));
 }
 
 static AppTestsState* app_get_tests(AppCoreState* state) {
-    return state ? state->tests : 0;
+    ASSERT_ALWAYS(state != 0);
+    return state->tests;
 }
 
 static U32 app_select_worker_count(const AppHostContext* host) {
-    U32 logicalCores = 1u;
-    if (host && host->logicalCoreCount > 0u) {
-        logicalCores = host->logicalCoreCount;
+    ASSERT_ALWAYS(host != 0);
+    U32 logicalCores = host->logicalCoreCount;
+    if (logicalCores == 0u) {
+        ASSERT_ALWAYS(logicalCores != 0u);
+        logicalCores = 1u;
     }
     U32 workers = (logicalCores > 1u) ? (logicalCores - 1u) : 1u;
     return workers;
 }
 
 static void app_compile_shaders_from_folder(AppPlatform* platform, AppMemory* memory, AppHostContext* host) {
-    if (!memory || !host || !host->renderer || !host->renderer->backendData) {
-        return;
-    }
+    ASSERT_ALWAYS(platform != 0);
+    ASSERT_ALWAYS(memory != 0);
+    ASSERT_ALWAYS(host != 0);
+    ASSERT_ALWAYS(host->renderer != 0);
+    ASSERT_ALWAYS(host->renderer->backendData != 0);
 
     AppCoreState* state = app_get_state(memory);
-    if (!state->jobSystem) {
-        return;
-    }
+    ASSERT_ALWAYS(state->jobSystem != 0);
 
     Temp scratch = get_scratch(0, 0);
+    ASSERT_ALWAYS(scratch.arena != 0);
     DEFER_REF(temp_end(&scratch));
     Arena* arena = scratch.arena;
 
     StringU8 shadersDir = str8("shaders");
     DIR* dir = opendir((const char*) shadersDir.data);
-    if (!dir) {
-        LOG_WARNING("app", "Failed to open shaders directory");
-        return;
-    }
+    ASSERT_ALWAYS(dir != 0);
 
     Str8List shaderFiles = {};
     str8list_init(&shaderFiles, arena, 16u);
@@ -366,18 +362,13 @@ static void app_compile_shaders_from_folder(AppPlatform* platform, AppMemory* me
     }
     closedir(dir);
 
-    if (shaderFiles.count == 0u) {
-        LOG_INFO("app", "No shader files found in shaders directory");
-        return;
-    }
+    ASSERT_ALWAYS(shaderFiles.count > 0u);
 
     ShaderCompileRequest* requests = ARENA_PUSH_ARRAY(arena, ShaderCompileRequest, shaderFiles.count);
     ShaderHandle* handles = ARENA_PUSH_ARRAY(arena, ShaderHandle, shaderFiles.count);
 
-    if (!requests || !handles) {
-        LOG_ERROR("app", "Failed to allocate shader compile requests");
-        return;
-    }
+    ASSERT_ALWAYS(requests != 0);
+    ASSERT_ALWAYS(handles != 0);
 
     for (U64 i = 0u; i < shaderFiles.count; ++i) {
         requests[i].shaderPath = str8_cpy(arena, shaderFiles.items[i]);
@@ -392,10 +383,7 @@ static void app_compile_shaders_from_folder(AppPlatform* platform, AppMemory* me
 
 
 APP_MODULE_EXPORT B32 app_get_entry_points(AppModuleExports* outExports) {
-    if (!outExports) {
-        return 0;
-    }
-
+    ASSERT_ALWAYS(outExports != 0);
     MEMSET(outExports, 0, sizeof(AppModuleExports));
     outExports->interfaceVersion = APP_INTERFACE_VERSION;
     outExports->requiredPermanentMemory = app_total_permanent_size();

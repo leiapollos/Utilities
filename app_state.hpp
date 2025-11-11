@@ -14,8 +14,6 @@ struct AppCoreState {
     OS_WindowHandle windowHandle;
     U64 frameCounter;
     U32 reloadCount;
-    B32 imguiEnabled;
-    B32 imguiInitialized;
 
     JobSystem* jobSystem;
     U32 workerCount;
