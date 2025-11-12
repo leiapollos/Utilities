@@ -245,6 +245,211 @@ static void os_push_mouse_event(NSEvent* event, enum OS_GraphicsEventType type) 
     os_push_graphics_event(graphicsEvent);
 }
 
+static enum OS_KeyCode os_key_code_from_character_(unichar c) {
+    if (c >= 'a' && c <= 'z') {
+        return (enum OS_KeyCode)(OS_KeyCode_A + (c - 'a'));
+    }
+    if (c >= 'A' && c <= 'Z') {
+        return (enum OS_KeyCode)(OS_KeyCode_A + (c - 'A'));
+    }
+    if (c >= '0' && c <= '9') {
+        return (enum OS_KeyCode)(OS_KeyCode_0 + (c - '0'));
+    }
+
+    switch (c) {
+        case '-':
+        case '_':
+            return OS_KeyCode_Minus;
+        case '=':
+        case '+':
+            return OS_KeyCode_Equal;
+        case '[':
+        case '{':
+            return OS_KeyCode_LeftBracket;
+        case ']':
+        case '}':
+            return OS_KeyCode_RightBracket;
+        case ';':
+        case ':':
+            return OS_KeyCode_Semicolon;
+        case '\'':
+        case '"':
+            return OS_KeyCode_Apostrophe;
+        case ',':
+        case '<':
+            return OS_KeyCode_Comma;
+        case '.':
+        case '>':
+            return OS_KeyCode_Period;
+        case '/':
+        case '?':
+            return OS_KeyCode_Slash;
+        case '\\':
+        case '|':
+            return OS_KeyCode_Backslash;
+        case '`':
+        case '~':
+            return OS_KeyCode_GraveAccent;
+        case ' ':
+            return OS_KeyCode_Space;
+
+        case NSEnterCharacter:
+        case NSCarriageReturnCharacter:
+        case NSNewlineCharacter:
+            return OS_KeyCode_Enter;
+
+        case NSTabCharacter:
+        case NSBackTabCharacter:
+            return OS_KeyCode_Tab;
+
+        case NSBackspaceCharacter:
+            return OS_KeyCode_Backspace;
+
+        case NSDeleteCharacter:
+            return OS_KeyCode_Delete;
+
+        case NSUpArrowFunctionKey:
+            return OS_KeyCode_UpArrow;
+        case NSDownArrowFunctionKey:
+            return OS_KeyCode_DownArrow;
+        case NSLeftArrowFunctionKey:
+            return OS_KeyCode_LeftArrow;
+        case NSRightArrowFunctionKey:
+            return OS_KeyCode_RightArrow;
+        case NSHomeFunctionKey:
+            return OS_KeyCode_Home;
+        case NSEndFunctionKey:
+            return OS_KeyCode_End;
+        case NSPageUpFunctionKey:
+            return OS_KeyCode_PageUp;
+        case NSPageDownFunctionKey:
+            return OS_KeyCode_PageDown;
+        case NSDeleteFunctionKey:
+            return OS_KeyCode_Delete;
+
+        case NSF1FunctionKey:
+            return OS_KeyCode_F1;
+        case NSF2FunctionKey:
+            return OS_KeyCode_F2;
+        case NSF3FunctionKey:
+            return OS_KeyCode_F3;
+        case NSF4FunctionKey:
+            return OS_KeyCode_F4;
+        case NSF5FunctionKey:
+            return OS_KeyCode_F5;
+        case NSF6FunctionKey:
+            return OS_KeyCode_F6;
+        case NSF7FunctionKey:
+            return OS_KeyCode_F7;
+        case NSF8FunctionKey:
+            return OS_KeyCode_F8;
+        case NSF9FunctionKey:
+            return OS_KeyCode_F9;
+        case NSF10FunctionKey:
+            return OS_KeyCode_F10;
+        case NSF11FunctionKey:
+            return OS_KeyCode_F11;
+        case NSF12FunctionKey:
+            return OS_KeyCode_F12;
+
+        case 0x2318: /* Command (\u2318) */
+            return OS_KeyCode_Super;
+        case 0x2325: /* Option (\u2325) */
+            return OS_KeyCode_Alt;
+        case 0x2303: /* Control (\u2303) */
+            return OS_KeyCode_Control;
+        case 0x21E7: /* Shift (\u21E7) */
+            return OS_KeyCode_Shift;
+        case 0x21EA: /* Caps Lock (\u21EA) */
+            return OS_KeyCode_CapsLock;
+        default:
+            break;
+    }
+
+    return OS_KeyCode_None;
+}
+
+static enum OS_KeyCode os_key_code_from_characters_(NSString* characters) {
+    if (!characters || [characters length] == 0) {
+        return OS_KeyCode_None;
+    }
+
+    unichar first = [characters characterAtIndex:0];
+    enum OS_KeyCode key = os_key_code_from_character_(first);
+    if (key != OS_KeyCode_None) {
+        return key;
+    }
+
+    NSString* lowercase = [characters lowercaseString];
+    if (lowercase && [lowercase length] > 0) {
+        unichar lowered = [lowercase characterAtIndex:0];
+        if (lowered != first) {
+            key = os_key_code_from_character_(lowered);
+            if (key != OS_KeyCode_None) {
+                return key;
+            }
+        }
+    }
+
+    return OS_KeyCode_None;
+}
+
+static enum OS_KeyCode os_key_code_from_mac_virtual_key_(U16 keyCode) {
+    enum MacVirtualKey {
+        MacVirtualKey_Return        = 0x24,
+        MacVirtualKey_Tab           = 0x30,
+        MacVirtualKey_Space         = 0x31,
+        MacVirtualKey_Delete        = 0x33,
+        MacVirtualKey_Escape        = 0x35,
+        MacVirtualKey_CapsLock      = 0x39,
+        MacVirtualKey_LeftCommand   = 0x37,
+        MacVirtualKey_RightCommand  = 0x36,
+        MacVirtualKey_LeftShift     = 0x38,
+        MacVirtualKey_RightShift    = 0x3C,
+        MacVirtualKey_LeftOption    = 0x3A,
+        MacVirtualKey_RightOption   = 0x3D,
+        MacVirtualKey_LeftControl   = 0x3B,
+        MacVirtualKey_RightControl  = 0x3E,
+    };
+
+    switch (keyCode) {
+        case MacVirtualKey_Return:       return OS_KeyCode_Enter;
+        case MacVirtualKey_Tab:          return OS_KeyCode_Tab;
+        case MacVirtualKey_Space:        return OS_KeyCode_Space;
+        case MacVirtualKey_Delete:       return OS_KeyCode_Backspace;
+        case MacVirtualKey_Escape:       return OS_KeyCode_Escape;
+        case MacVirtualKey_CapsLock:     return OS_KeyCode_CapsLock;
+        case MacVirtualKey_LeftCommand:  return OS_KeyCode_LeftSuper;
+        case MacVirtualKey_RightCommand: return OS_KeyCode_RightSuper;
+        case MacVirtualKey_LeftShift:    return OS_KeyCode_LeftShift;
+        case MacVirtualKey_RightShift:   return OS_KeyCode_RightShift;
+        case MacVirtualKey_LeftOption:   return OS_KeyCode_LeftAlt;
+        case MacVirtualKey_RightOption:  return OS_KeyCode_RightAlt;
+        case MacVirtualKey_LeftControl:  return OS_KeyCode_LeftControl;
+        case MacVirtualKey_RightControl: return OS_KeyCode_RightControl;
+        default:
+            return OS_KeyCode_None;
+    }
+}
+
+static enum OS_KeyCode os_translate_macos_event_key_(NSEvent* event) {
+    if (!event) {
+        return OS_KeyCode_None;
+    }
+
+    enum OS_KeyCode key = os_key_code_from_characters_([event charactersIgnoringModifiers]);
+    if (key != OS_KeyCode_None) {
+        return key;
+    }
+
+    key = os_key_code_from_characters_([event characters]);
+    if (key != OS_KeyCode_None) {
+        return key;
+    }
+
+    return os_key_code_from_mac_virtual_key_((U16) [event keyCode]);
+}
+
 static void os_push_key_event(NSEvent* event, enum OS_GraphicsEventType type) {
     OS_GraphicsEvent graphicsEvent = {};
     graphicsEvent.type = type;
@@ -252,7 +457,7 @@ static void os_push_key_event(NSEvent* event, enum OS_GraphicsEventType type) {
     if (!graphicsEvent.window.handle) {
         return;
     }
-    graphicsEvent.key.scanCode = (U32) [event keyCode];
+    graphicsEvent.key.keyCode = os_translate_macos_event_key_(event);
     graphicsEvent.key.modifiers = os_translate_modifier_flags([event modifierFlags]);
     graphicsEvent.key.isRepeat = ([event isARepeat] != 0) ? 1 : 0;
     graphicsEvent.key.character = 0;

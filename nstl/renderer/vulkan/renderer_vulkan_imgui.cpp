@@ -1,13 +1,5 @@
 #include "renderer_vulkan.hpp"
-
-#include "imgui.h"
 #include "backends/imgui_impl_vulkan.h"
-
-#include <float.h>
-
-#if defined(PLATFORM_OS_MACOS)
-#include <Carbon/Carbon.h>
-#endif
 
 static void renderer_vulkan_imgui_set_context(RendererVulkan* vulkan) {
     if (vulkan && vulkan->imguiContext) {
@@ -88,86 +80,107 @@ static B32 renderer_vulkan_imgui_event_matches_window(RendererVulkan* vulkan, co
     return (event->window.handle == vulkan->imguiWindow.handle) ? 1 : 0;
 }
 
-#if defined(PLATFORM_OS_MACOS)
-static ImGuiKey renderer_vulkan_imgui_translate_scancode_mac(U32 scanCode) {
-    switch (scanCode) {
-        case kVK_ANSI_A: return ImGuiKey_A;
-        case kVK_ANSI_S: return ImGuiKey_S;
-        case kVK_ANSI_D: return ImGuiKey_D;
-        case kVK_ANSI_F: return ImGuiKey_F;
-        case kVK_ANSI_H: return ImGuiKey_H;
-        case kVK_ANSI_G: return ImGuiKey_G;
-        case kVK_ANSI_Z: return ImGuiKey_Z;
-        case kVK_ANSI_X: return ImGuiKey_X;
-        case kVK_ANSI_C: return ImGuiKey_C;
-        case kVK_ANSI_V: return ImGuiKey_V;
-        case kVK_ANSI_B: return ImGuiKey_B;
-        case kVK_ANSI_Q: return ImGuiKey_Q;
-        case kVK_ANSI_W: return ImGuiKey_W;
-        case kVK_ANSI_E: return ImGuiKey_E;
-        case kVK_ANSI_R: return ImGuiKey_R;
-        case kVK_ANSI_Y: return ImGuiKey_Y;
-        case kVK_ANSI_T: return ImGuiKey_T;
-        case kVK_ANSI_1: return ImGuiKey_1;
-        case kVK_ANSI_2: return ImGuiKey_2;
-        case kVK_ANSI_3: return ImGuiKey_3;
-        case kVK_ANSI_4: return ImGuiKey_4;
-        case kVK_ANSI_5: return ImGuiKey_5;
-        case kVK_ANSI_6: return ImGuiKey_6;
-        case kVK_ANSI_7: return ImGuiKey_7;
-        case kVK_ANSI_8: return ImGuiKey_8;
-        case kVK_ANSI_9: return ImGuiKey_9;
-        case kVK_ANSI_0: return ImGuiKey_0;
-        case kVK_ANSI_Minus: return ImGuiKey_Minus;
-        case kVK_ANSI_Equal: return ImGuiKey_Equal;
-        case kVK_ANSI_LeftBracket: return ImGuiKey_LeftBracket;
-        case kVK_ANSI_RightBracket: return ImGuiKey_RightBracket;
-        case kVK_ANSI_Semicolon: return ImGuiKey_Semicolon;
-        case kVK_ANSI_Quote: return ImGuiKey_Apostrophe;
-        case kVK_ANSI_Comma: return ImGuiKey_Comma;
-        case kVK_ANSI_Period: return ImGuiKey_Period;
-        case kVK_ANSI_Slash: return ImGuiKey_Slash;
-        case kVK_ANSI_Backslash: return ImGuiKey_Backslash;
-        case kVK_ANSI_Grave: return ImGuiKey_GraveAccent;
-        case kVK_Return: return ImGuiKey_Enter;
-        case kVK_Tab: return ImGuiKey_Tab;
-        case kVK_Space: return ImGuiKey_Space;
-        case kVK_Delete: return ImGuiKey_Backspace;
-        case kVK_Escape: return ImGuiKey_Escape;
-        case kVK_CapsLock: return ImGuiKey_CapsLock;
-        case kVK_Control: return ImGuiKey_LeftCtrl;
-        case kVK_Shift: return ImGuiKey_LeftShift;
-        case kVK_Option: return ImGuiKey_LeftAlt;
-        case kVK_Command: return ImGuiKey_LeftSuper;
-        case kVK_RightControl: return ImGuiKey_RightCtrl;
-        case kVK_RightShift: return ImGuiKey_RightShift;
-        case kVK_RightOption: return ImGuiKey_RightAlt;
-        case kVK_RightCommand: return ImGuiKey_RightSuper;
-        case kVK_F1: return ImGuiKey_F1;
-        case kVK_F2: return ImGuiKey_F2;
-        case kVK_F3: return ImGuiKey_F3;
-        case kVK_F4: return ImGuiKey_F4;
-        case kVK_F5: return ImGuiKey_F5;
-        case kVK_F6: return ImGuiKey_F6;
-        case kVK_F7: return ImGuiKey_F7;
-        case kVK_F8: return ImGuiKey_F8;
-        case kVK_F9: return ImGuiKey_F9;
-        case kVK_F10: return ImGuiKey_F10;
-        case kVK_F11: return ImGuiKey_F11;
-        case kVK_F12: return ImGuiKey_F12;
-        case kVK_Home: return ImGuiKey_Home;
-        case kVK_End: return ImGuiKey_End;
-        case kVK_PageUp: return ImGuiKey_PageUp;
-        case kVK_PageDown: return ImGuiKey_PageDown;
-        case kVK_LeftArrow: return ImGuiKey_LeftArrow;
-        case kVK_RightArrow: return ImGuiKey_RightArrow;
-        case kVK_DownArrow: return ImGuiKey_DownArrow;
-        case kVK_UpArrow: return ImGuiKey_UpArrow;
+static ImGuiKey renderer_vulkan_imgui_translate_os_keycode_to_imgui_key_(enum OS_KeyCode keyCode) {
+    switch (keyCode) {
+        case OS_KeyCode_A: return ImGuiKey_A;
+        case OS_KeyCode_B: return ImGuiKey_B;
+        case OS_KeyCode_C: return ImGuiKey_C;
+        case OS_KeyCode_D: return ImGuiKey_D;
+        case OS_KeyCode_E: return ImGuiKey_E;
+        case OS_KeyCode_F: return ImGuiKey_F;
+        case OS_KeyCode_G: return ImGuiKey_G;
+        case OS_KeyCode_H: return ImGuiKey_H;
+        case OS_KeyCode_I: return ImGuiKey_I;
+        case OS_KeyCode_J: return ImGuiKey_J;
+        case OS_KeyCode_K: return ImGuiKey_K;
+        case OS_KeyCode_L: return ImGuiKey_L;
+        case OS_KeyCode_M: return ImGuiKey_M;
+        case OS_KeyCode_N: return ImGuiKey_N;
+        case OS_KeyCode_O: return ImGuiKey_O;
+        case OS_KeyCode_P: return ImGuiKey_P;
+        case OS_KeyCode_Q: return ImGuiKey_Q;
+        case OS_KeyCode_R: return ImGuiKey_R;
+        case OS_KeyCode_S: return ImGuiKey_S;
+        case OS_KeyCode_T: return ImGuiKey_T;
+        case OS_KeyCode_U: return ImGuiKey_U;
+        case OS_KeyCode_V: return ImGuiKey_V;
+        case OS_KeyCode_W: return ImGuiKey_W;
+        case OS_KeyCode_X: return ImGuiKey_X;
+        case OS_KeyCode_Y: return ImGuiKey_Y;
+        case OS_KeyCode_Z: return ImGuiKey_Z;
+        
+        case OS_KeyCode_0: return ImGuiKey_0;
+        case OS_KeyCode_1: return ImGuiKey_1;
+        case OS_KeyCode_2: return ImGuiKey_2;
+        case OS_KeyCode_3: return ImGuiKey_3;
+        case OS_KeyCode_4: return ImGuiKey_4;
+        case OS_KeyCode_5: return ImGuiKey_5;
+        case OS_KeyCode_6: return ImGuiKey_6;
+        case OS_KeyCode_7: return ImGuiKey_7;
+        case OS_KeyCode_8: return ImGuiKey_8;
+        case OS_KeyCode_9: return ImGuiKey_9;
+        
+        case OS_KeyCode_Minus: return ImGuiKey_Minus;
+        case OS_KeyCode_Equal: return ImGuiKey_Equal;
+        case OS_KeyCode_LeftBracket: return ImGuiKey_LeftBracket;
+        case OS_KeyCode_RightBracket: return ImGuiKey_RightBracket;
+        case OS_KeyCode_Semicolon: return ImGuiKey_Semicolon;
+        case OS_KeyCode_Apostrophe: return ImGuiKey_Apostrophe;
+        case OS_KeyCode_Comma: return ImGuiKey_Comma;
+        case OS_KeyCode_Period: return ImGuiKey_Period;
+        case OS_KeyCode_Slash: return ImGuiKey_Slash;
+        case OS_KeyCode_Backslash: return ImGuiKey_Backslash;
+        case OS_KeyCode_GraveAccent: return ImGuiKey_GraveAccent;
+        
+        case OS_KeyCode_F1: return ImGuiKey_F1;
+        case OS_KeyCode_F2: return ImGuiKey_F2;
+        case OS_KeyCode_F3: return ImGuiKey_F3;
+        case OS_KeyCode_F4: return ImGuiKey_F4;
+        case OS_KeyCode_F5: return ImGuiKey_F5;
+        case OS_KeyCode_F6: return ImGuiKey_F6;
+        case OS_KeyCode_F7: return ImGuiKey_F7;
+        case OS_KeyCode_F8: return ImGuiKey_F8;
+        case OS_KeyCode_F9: return ImGuiKey_F9;
+        case OS_KeyCode_F10: return ImGuiKey_F10;
+        case OS_KeyCode_F11: return ImGuiKey_F11;
+        case OS_KeyCode_F12: return ImGuiKey_F12;
+        
+        case OS_KeyCode_Escape: return ImGuiKey_Escape;
+        case OS_KeyCode_Tab: return ImGuiKey_Tab;
+        case OS_KeyCode_CapsLock: return ImGuiKey_CapsLock;
+        case OS_KeyCode_Space: return ImGuiKey_Space;
+        case OS_KeyCode_Enter: return ImGuiKey_Enter;
+        case OS_KeyCode_Backspace: return ImGuiKey_Backspace;
+        case OS_KeyCode_Delete: return ImGuiKey_Delete;
+        
+        case OS_KeyCode_LeftArrow: return ImGuiKey_LeftArrow;
+        case OS_KeyCode_RightArrow: return ImGuiKey_RightArrow;
+        case OS_KeyCode_UpArrow: return ImGuiKey_UpArrow;
+        case OS_KeyCode_DownArrow: return ImGuiKey_DownArrow;
+        
+        case OS_KeyCode_Home: return ImGuiKey_Home;
+        case OS_KeyCode_End: return ImGuiKey_End;
+        case OS_KeyCode_PageUp: return ImGuiKey_PageUp;
+        case OS_KeyCode_PageDown: return ImGuiKey_PageDown;
+        
+        case OS_KeyCode_LeftShift: return ImGuiKey_LeftShift;
+        case OS_KeyCode_RightShift: return ImGuiKey_RightShift;
+        case OS_KeyCode_LeftControl: return ImGuiKey_LeftCtrl;
+        case OS_KeyCode_RightControl: return ImGuiKey_RightCtrl;
+        case OS_KeyCode_LeftAlt: return ImGuiKey_LeftAlt;
+        case OS_KeyCode_RightAlt: return ImGuiKey_RightAlt;
+        case OS_KeyCode_LeftSuper: return ImGuiKey_LeftSuper;
+        case OS_KeyCode_RightSuper: return ImGuiKey_RightSuper;
+        
+        case OS_KeyCode_Shift: return ImGuiKey_LeftShift;
+        case OS_KeyCode_Control: return ImGuiKey_LeftCtrl;
+        case OS_KeyCode_Alt: return ImGuiKey_LeftAlt;
+        case OS_KeyCode_Super: return ImGuiKey_LeftSuper;
+        
         default:
             return ImGuiKey_None;
     }
 }
-#endif
 
 static void renderer_vulkan_imgui_compute_display_info(RendererVulkan* vulkan,
                                                        F32* outFramebufferWidth,
@@ -408,15 +421,11 @@ void renderer_vulkan_imgui_process_events(RendererVulkan* vulkan, const OS_Graph
             case OS_GraphicsEventType_KeyDown:
             case OS_GraphicsEventType_KeyUp: {
                 B32 isDown = (evt->type == OS_GraphicsEventType_KeyDown) ? 1 : 0;
-#if defined(PLATFORM_OS_MACOS)
-                ImGuiKey key = renderer_vulkan_imgui_translate_scancode_mac(evt->key.scanCode);
+                ImGuiKey key = renderer_vulkan_imgui_translate_os_keycode_to_imgui_key_(evt->key.keyCode);
                 if (key != ImGuiKey_None) {
                     io.AddKeyEvent(key, isDown != 0);
-                    io.SetKeyEventNativeData(key, (int) evt->key.scanCode, 0);
+                    io.SetKeyEventNativeData(key, (int) evt->key.keyCode, 0);
                 }
-#else
-                (void) isDown;
-#endif
                 renderer_vulkan_imgui_update_modifier_keys(&io, evt->key.modifiers);
             } break;
 
