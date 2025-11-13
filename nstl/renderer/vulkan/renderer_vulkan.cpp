@@ -2,10 +2,6 @@
 // Created by André Leite on 03/11/2025.
 //
 
-#include <stdlib.h>
-#include <unistd.h>
-#include <sys/stat.h>
-
 static B32 vulkan_check_validation_layer_support(Arena * arena);
 static B32 vulkan_check_extension_support(Arena* arena, const char* extensionName);
 static B32 vulkan_create_instance(Arena * arena, RendererVulkan * vulkan);
