@@ -191,3 +191,13 @@ void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, 
 
     vulkan_end_frame(vulkan);
 }
+
+void renderer_vulkan_on_window_resized(RendererVulkan* vulkan, U32 width, U32 height) {
+    if (!vulkan || vulkan->device.device == VK_NULL_HANDLE) {
+        return;
+    }
+
+    vkDeviceWaitIdle(vulkan->device.device);
+    vulkan_destroy_swapchain(&vulkan->swapchain, vulkan->device.device);
+    vulkan_destroy_draw_image(vulkan);
+}

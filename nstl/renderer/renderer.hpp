@@ -44,3 +44,4 @@ void renderer_imgui_process_events(Renderer* renderer, const OS_GraphicsEvent* e
 void renderer_imgui_begin_frame(Renderer* renderer, F32 deltaSeconds);
 void renderer_imgui_end_frame(Renderer* renderer);
 void renderer_imgui_set_window_size(Renderer* renderer, U32 width, U32 height);
+void renderer_on_window_resized(Renderer* renderer, U32 width, U32 height);

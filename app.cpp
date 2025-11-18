@@ -173,6 +173,19 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
             }
             break;
 
+            case OS_GraphicsEventType_WindowResized: {
+                if (state->windowHandle.handle == evt->window.handle) {
+                    state->desiredWindow.width = evt->windowEvent.width;
+                    state->desiredWindow.height = evt->windowEvent.height;
+                    PLATFORM_RENDERER_CALL(platform,
+                                           renderer_on_window_resized,
+                                           host->renderer,
+                                           state->desiredWindow.width,
+                                           state->desiredWindow.height);
+                }
+            }
+            break;
+
             case OS_GraphicsEventType_MouseMove: {
                 LOG_DEBUG("app", "Mouse moved to ({}, {})", evt->mouse.x, evt->mouse.y);
             }

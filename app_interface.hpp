@@ -72,7 +72,8 @@ struct PlatformOSApi {
     X(renderer_imgui_process_events) \
     X(renderer_imgui_begin_frame) \
     X(renderer_imgui_end_frame) \
-    X(renderer_imgui_set_window_size)
+    X(renderer_imgui_set_window_size) \
+    X(renderer_on_window_resized)
 
 struct PlatformRendererApi {
 #define PLATFORM_DECLARE_RENDERER_FN(name) decltype(&name) name;

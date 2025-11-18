@@ -23,3 +23,4 @@ void renderer_vulkan_imgui_on_swapchain_updated(RendererVulkan* vulkan);
 void renderer_vulkan_imgui_render(RendererVulkan* vulkan, VkCommandBuffer cmd, VkImageView targetImageView,
                                   VkExtent2D extent);
 void renderer_vulkan_imgui_set_window_size(RendererVulkan* vulkan, U32 width, U32 height);
+void renderer_vulkan_on_window_resized(RendererVulkan* vulkan, U32 width, U32 height);

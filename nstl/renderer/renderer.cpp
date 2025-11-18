@@ -93,6 +93,20 @@ void renderer_imgui_set_window_size(Renderer* renderer, U32 width, U32 height) {
 #endif
 }
 
+void renderer_on_window_resized(Renderer* renderer, U32 width, U32 height) {
+    if (!renderer || !renderer->backendData) {
+        return;
+    }
+
+#if defined(RENDERER_BACKEND_VULKAN)
+    RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
+    renderer_vulkan_on_window_resized(vulkan, width, height);
+#else
+    (void) width;
+    (void) height;
+#endif
+}
+
 #ifndef SHADER_COMPILE_WORKER_COUNT
 #define SHADER_COMPILE_WORKER_COUNT 10u
 #endif

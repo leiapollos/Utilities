@@ -361,6 +361,14 @@ void renderer_vulkan_imgui_process_events(RendererVulkan* vulkan, const OS_Graph
                 vulkan->imguiWindow.handle = 0;
             } break;
 
+            case OS_GraphicsEventType_WindowFocused: {
+                io.AddFocusEvent(true);
+            } break;
+
+            case OS_GraphicsEventType_WindowUnfocused: {
+                io.AddFocusEvent(false);
+            } break;
+
             case OS_GraphicsEventType_MouseMove: {
                 F32 framebufferWidth = 0.0f;
                 F32 framebufferHeight = 0.0f;

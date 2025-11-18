@@ -572,6 +572,37 @@ static void os_process_nsevent(NSEvent* event) {
         entity = 0;
     }
 }
+
+- (void)windowDidResize:(NSNotification *)notification {
+    OS_MACOS_GraphicsEntity* localEntity = entity;
+    if (!localEntity) {
+        return;
+    }
+    if (localEntity->type != OS_MACOS_GraphicsEntityType_Window) {
+        return;
+    }
+
+    NSWindow* window = localEntity->window.window;
+    if (window) {
+        os_push_window_event(localEntity, OS_GraphicsEventType_WindowResized, window);
+    }
+}
+
+- (void)windowDidBecomeKey:(NSNotification *)notification {
+    OS_MACOS_GraphicsEntity* localEntity = entity;
+    if (!localEntity || localEntity->type != OS_MACOS_GraphicsEntityType_Window) {
+        return;
+    }
+    os_push_window_event(localEntity, OS_GraphicsEventType_WindowFocused, localEntity->window.window);
+}
+
+- (void)windowDidResignKey:(NSNotification *)notification {
+    OS_MACOS_GraphicsEntity* localEntity = entity;
+    if (!localEntity || localEntity->type != OS_MACOS_GraphicsEntityType_Window) {
+        return;
+    }
+    os_push_window_event(localEntity, OS_GraphicsEventType_WindowUnfocused, localEntity->window.window);
+}
 @end
 
 static OS_MACOS_GraphicsEntity* alloc_OS_graphics_entity() {
@@ -702,6 +733,7 @@ OS_WindowHandle OS_window_create(OS_WindowDesc desc) {
         CGFloat scaleFactor = (screen) ? [screen backingScaleFactor] : 1.0;
         [metalLayer setContentsScale:scaleFactor];
         [contentView setLayer:metalLayer];
+        [contentView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
 
         [window setContentView:contentView];
         [contentView release];
