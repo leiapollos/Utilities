@@ -190,5 +190,8 @@ void* OS_window_get_native_handle(OS_WindowHandle window);
 B32 OS_window_is_open(OS_WindowHandle window);
 OS_WindowSurfaceInfo OS_window_get_surface_info(OS_WindowHandle window);
 U32 OS_graphics_poll_events(OS_GraphicsEvent* outEvents, U32 maxEvents);
-B32 OS_graphics_pump_events();
 
+typedef void (*OS_WindowResizeCallback)(OS_WindowHandle window, U32 width, U32 height, void* userData);
+void OS_set_window_resize_callback(OS_WindowResizeCallback callback, void* userData);
+
+B32 OS_graphics_pump_events();

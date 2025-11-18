@@ -244,6 +244,27 @@ static B32 host_init(HostState* state) {
     return 1;
 }
 
+static void host_window_resize_callback(OS_WindowHandle window, U32 width, U32 height, void* userData) {
+    HostState* state = (HostState*) userData;
+    if (!state || !state->module.isValid || !state->module.exports.update) {
+        return;
+    }
+
+    AppInput input = {};
+    input.deltaSeconds = 0.016f;
+    
+    OS_GraphicsEvent resizeEvent = {};
+    resizeEvent.type = OS_GraphicsEventType_WindowResized;
+    resizeEvent.window = window;
+    resizeEvent.windowEvent.width = width;
+    resizeEvent.windowEvent.height = height;
+    
+    input.events = &resizeEvent;
+    input.eventCount = 1;
+
+    state->module.exports.update(&state->platformAPI, &state->memory, &state->hostContext, &input, input.deltaSeconds);
+}
+
 static void host_update(HostState* state, F32 deltaSeconds) {
     ASSERT_ALWAYS(state != 0);
     ASSERT_ALWAYS(state->frameArena != 0);
@@ -401,6 +422,8 @@ static B32 host_allocate_memory(HostState* state) {
     state->input.deltaSeconds = 0.0f;
 
     state->graphicsInitialized = 0;
+
+    OS_set_window_resize_callback(host_window_resize_callback, state);
 
     return 1;
 }

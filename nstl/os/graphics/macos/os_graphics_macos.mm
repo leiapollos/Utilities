@@ -527,6 +527,9 @@ static void os_process_nsevent(NSEvent* event) {
     }
 }
 
+static OS_WindowResizeCallback g_os_window_resize_callback = 0;
+static void* g_os_window_resize_callback_user_data = 0;
+
 @interface OS_MacOS_WindowDelegate : NSObject <NSWindowDelegate>
 {
 @public
@@ -585,6 +588,11 @@ static void os_process_nsevent(NSEvent* event) {
     NSWindow* window = localEntity->window.window;
     if (window) {
         os_push_window_event(localEntity, OS_GraphicsEventType_WindowResized, window);
+        if (g_os_window_resize_callback) {
+            CGSize size = [window contentView].frame.size;
+            OS_WindowHandle handle = os_make_window_handle_from_entity(localEntity);
+            g_os_window_resize_callback(handle, (U32)size.width, (U32)size.height, g_os_window_resize_callback_user_data);
+        }
     }
 }
 
@@ -604,6 +612,11 @@ static void os_process_nsevent(NSEvent* event) {
     os_push_window_event(localEntity, OS_GraphicsEventType_WindowUnfocused, localEntity->window.window);
 }
 @end
+
+void OS_set_window_resize_callback(OS_WindowResizeCallback callback, void* userData) {
+    g_os_window_resize_callback = callback;
+    g_os_window_resize_callback_user_data = userData;
+}
 
 static OS_MACOS_GraphicsEntity* alloc_OS_graphics_entity() {
     OS_MACOS_GraphicsEntity* entity = g_OS_MacOSGraphicsState.freeEntities;
