@@ -104,7 +104,6 @@ struct RendererVulkan {
     B32 validationLayersEnabled;
     VkSurfaceKHR surface;
     RendererVulkanSwapchain swapchain;
-    U32 swapchainImageIndex;
     RendererVulkanFrame frames[VULKAN_FRAME_OVERLAP];
     U32 currentFrameIndex;
 

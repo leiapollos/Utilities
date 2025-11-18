@@ -15,7 +15,7 @@ static void vulkan_shutdown_defer(RendererVulkan * vulkan);
 static B32 vulkan_create_surface(OS_WindowHandle window, RendererVulkan* vulkan);
 static void vulkan_destroy_surface(RendererVulkan * vulkan);
 static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle window);
-static void vulkan_destroy_swapchain(RendererVulkan * vulkan);
+static void vulkan_destroy_swapchain(RendererVulkanSwapchain* swapchain, VkDevice device);
 static VkSemaphoreCreateInfo vulkan_semaphore_create_info(VkSemaphoreCreateFlags flags);
 static VkFenceCreateInfo vulkan_fence_create_info(VkFenceCreateFlags flags);
 static VkCommandBufferBeginInfo vulkan_command_buffer_begin_info(VkCommandBufferUsageFlags flags);
@@ -49,7 +49,6 @@ static void vulkan_merge_shader_results_wrapper(void* backendData, Arena* arena,
                                                 U32 requestCount);
 static B32 vulkan_load_shader_module(RendererVulkan* vulkan, const char* filePath, VkShaderModule* outModule);
 static B32 vulkan_init_draw_pipeline(RendererVulkan* vulkan);
-static void vulkan_destroy_draw_pipeline(RendererVulkan* vulkan);
 static B32 vulkan_update_draw_pipeline(RendererVulkan* vulkan);
 static void vulkan_dispatch_gradient(RendererVulkan* vulkan, VkCommandBuffer cmd, Vec4F32 color);
 
@@ -128,7 +127,6 @@ B32 renderer_init(Arena* arena, Renderer* renderer) {
     vulkan->swapchain.imageCapacity = 0u;
     vulkan->swapchain.format = {};
     vulkan->swapchain.extent = {};
-    vulkan->swapchainImageIndex = 0u;
     vulkan->currentFrameIndex = 0u;
     vulkan->allocator = 0;
     vulkan->deferPerFrameMem = 0;
@@ -201,10 +199,9 @@ void renderer_shutdown(Renderer* renderer) {
     if (vulkan->device != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(vulkan->device);
         renderer_vulkan_imgui_shutdown(vulkan);
-        vulkan_destroy_draw_pipeline(vulkan);
     }
 
-    vulkan_destroy_swapchain(vulkan);
+    vulkan_destroy_swapchain(&vulkan->swapchain, vulkan->device);
     vulkan_destroy_frames(vulkan);
     if (vulkan->device != VK_NULL_HANDLE) {
         vkdefer_shutdown(&vulkan->deferCtx);
@@ -1046,7 +1043,7 @@ static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle windo
     VK_CHECK(vkCreateSwapchainKHR(vulkan->device, &createInfo, 0, &vulkan->swapchain.handle));
 
     if (oldSwapchain != VK_NULL_HANDLE) {
-        vulkan_destroy_swapchain(vulkan);
+        vulkan_destroy_swapchain(&vulkan->swapchain, vulkan->device);
     }
 
     U32 retrievedImageCount = 0;
@@ -1096,7 +1093,6 @@ static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle windo
     vulkan->swapchain.imageCount = retrievedImageCount;
     vulkan->swapchain.format = surfaceFormat;
     vulkan->swapchain.extent = extent;
-    vulkan->swapchainImageIndex = 0u;
 
     LOG_DEBUG(VULKAN_LOG_DOMAIN, "Swapchain created with {} images ({}x{})",
               retrievedImageCount, extent.width, extent.height);
@@ -1109,7 +1105,7 @@ static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle windo
 
     VkFormat drawImageFormat = vulkan_select_draw_image_format(vulkan);
     if (drawImageFormat == VK_FORMAT_UNDEFINED) {
-        vulkan_destroy_swapchain(vulkan);
+        vulkan_destroy_swapchain(&vulkan->swapchain, vulkan->device);
         return 0;
     }
 
@@ -1149,7 +1145,7 @@ static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle windo
                   drawImageExtent.height,
                   drawImageResult);
         vulkan_reset_draw_image(vulkan);
-        vulkan_destroy_swapchain(vulkan);
+        vulkan_destroy_swapchain(&vulkan->swapchain, vulkan->device);
         return 0;
     }
 
@@ -1170,7 +1166,7 @@ static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle windo
                   drawImageViewResult);
         vmaDestroyImage(vulkan->allocator, vulkan->drawImage.image, vulkan->drawImage.allocation);
         vulkan_reset_draw_image(vulkan);
-        vulkan_destroy_swapchain(vulkan);
+        vulkan_destroy_swapchain(&vulkan->swapchain, vulkan->device);
         return 0;
     }
 
@@ -1179,7 +1175,7 @@ static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle windo
         vkDestroyImageView(vulkan->device, vulkan->drawImage.imageView, nullptr);
         vmaDestroyImage(vulkan->allocator, vulkan->drawImage.image, vulkan->drawImage.allocation);
         vulkan_reset_draw_image(vulkan);
-        vulkan_destroy_swapchain(vulkan);
+        vulkan_destroy_swapchain(&vulkan->swapchain, vulkan->device);
         return 0;
     }
 
@@ -1191,40 +1187,39 @@ static B32 vulkan_create_swapchain(RendererVulkan* vulkan, OS_WindowHandle windo
     return 1;
 }
 
-static void vulkan_destroy_swapchain(RendererVulkan* vulkan) {
-    if (!vulkan || vulkan->device == VK_NULL_HANDLE) {
+static void vulkan_destroy_swapchain(RendererVulkanSwapchain* swapchain, VkDevice device) {
+    if (!swapchain || device == VK_NULL_HANDLE) {
         return;
     }
 
-    if (vulkan->swapchain.images) {
-        for (U32 i = 0; i < vulkan->swapchain.imageCount; ++i) {
-            if (vulkan->swapchain.images[i].view != VK_NULL_HANDLE) {
-                vkDestroyImageView(vulkan->device, vulkan->swapchain.images[i].view, 0);
-                vulkan->swapchain.images[i].view = VK_NULL_HANDLE;
+    if (swapchain->images) {
+        for (U32 i = 0; i < swapchain->imageCount; ++i) {
+            if (swapchain->images[i].view != VK_NULL_HANDLE) {
+                vkDestroyImageView(device, swapchain->images[i].view, 0);
+                swapchain->images[i].view = VK_NULL_HANDLE;
             }
-            vulkan->swapchain.images[i].handle = VK_NULL_HANDLE;
-            vulkan->swapchain.images[i].layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            swapchain->images[i].handle = VK_NULL_HANDLE;
+            swapchain->images[i].layout = VK_IMAGE_LAYOUT_UNDEFINED;
         }
     }
 
-    if (vulkan->swapchain.imageSemaphores) {
-        for (U32 i = 0; i < vulkan->swapchain.imageCount; ++i) {
-            if (vulkan->swapchain.imageSemaphores[i] != VK_NULL_HANDLE) {
-                vkDestroySemaphore(vulkan->device, vulkan->swapchain.imageSemaphores[i], 0);
-                vulkan->swapchain.imageSemaphores[i] = VK_NULL_HANDLE;
+    if (swapchain->imageSemaphores) {
+        for (U32 i = 0; i < swapchain->imageCount; ++i) {
+            if (swapchain->imageSemaphores[i] != VK_NULL_HANDLE) {
+                vkDestroySemaphore(device, swapchain->imageSemaphores[i], 0);
+                swapchain->imageSemaphores[i] = VK_NULL_HANDLE;
             }
         }
     }
 
-    if (vulkan->swapchain.handle != VK_NULL_HANDLE) {
-        vkDestroySwapchainKHR(vulkan->device, vulkan->swapchain.handle, 0);
-        vulkan->swapchain.handle = VK_NULL_HANDLE;
+    if (swapchain->handle != VK_NULL_HANDLE) {
+        vkDestroySwapchainKHR(device, swapchain->handle, 0);
+        swapchain->handle = VK_NULL_HANDLE;
     }
 
-    vulkan->swapchain.imageCount = 0u;
-    vulkan->swapchain.extent = {};
-    vulkan->swapchain.format = {};
-    vulkan->swapchainImageIndex = 0u;
+    swapchain->imageCount = 0u;
+    swapchain->extent = {};
+    swapchain->format = {};
 
     LOG_DEBUG(VULKAN_LOG_DOMAIN, "Swapchain destroyed");
 }
@@ -1506,177 +1501,169 @@ static B32 vulkan_init_draw_pipeline(RendererVulkan* vulkan) {
         return 1;
     }
 
-    VkDescriptorSetLayoutBinding binding = {};
-    binding.binding = 0u;
-    binding.descriptorCount = 1u;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    binding.pImmutableSamplers = 0;
-
-    VkDescriptorSetLayoutCreateInfo descriptorLayoutInfo = {};
-    descriptorLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    descriptorLayoutInfo.bindingCount = 1u;
-    descriptorLayoutInfo.pBindings = &binding;
-
-    VkResult descriptorLayoutResult = vkCreateDescriptorSetLayout(vulkan->device, &descriptorLayoutInfo, 0,
-                                                        &vulkan->drawImageDescriptorLayout);
-    if (descriptorLayoutResult != VK_SUCCESS) {
-        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create draw image descriptor set layout: {}", descriptorLayoutResult);
-        vulkan->drawImageDescriptorLayout = VK_NULL_HANDLE;
-        return 0;
-    }
-
-    VkDescriptorPoolSize poolSize = {};
-    poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    poolSize.descriptorCount = 1u;
-
-    VkDescriptorPoolCreateInfo poolInfo = {};
-    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    poolInfo.maxSets = 1u;
-    poolInfo.poolSizeCount = 1u;
-    poolInfo.pPoolSizes = &poolSize;
-
-    VkResult poolResult = vkCreateDescriptorPool(vulkan->device, &poolInfo, 0,
-                                                 &vulkan->drawImageDescriptorPool);
-    if (poolResult != VK_SUCCESS) {
-        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create draw image descriptor pool: {}", poolResult);
-        vkDestroyDescriptorSetLayout(vulkan->device, vulkan->drawImageDescriptorLayout, 0);
-        vulkan->drawImageDescriptorLayout = VK_NULL_HANDLE;
-        vulkan->drawImageDescriptorPool = VK_NULL_HANDLE;
-        return 0;
-    }
-
-    VkDescriptorSetAllocateInfo allocInfo = {};
-    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    allocInfo.descriptorPool = vulkan->drawImageDescriptorPool;
-    allocInfo.descriptorSetCount = 1u;
-    allocInfo.pSetLayouts = &vulkan->drawImageDescriptorLayout;
-
-    VkResult allocResult = vkAllocateDescriptorSets(vulkan->device, &allocInfo,
-                                                    &vulkan->drawImageDescriptorSet);
-    if (allocResult != VK_SUCCESS) {
-        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to allocate draw image descriptor set: {}", allocResult);
-        vkDestroyDescriptorPool(vulkan->device, vulkan->drawImageDescriptorPool, 0);
-        vkDestroyDescriptorSetLayout(vulkan->device, vulkan->drawImageDescriptorLayout, 0);
-        vulkan->drawImageDescriptorPool = VK_NULL_HANDLE;
-        vulkan->drawImageDescriptorLayout = VK_NULL_HANDLE;
-        vulkan->drawImageDescriptorSet = VK_NULL_HANDLE;
-        return 0;
-    }
-
-    VkPushConstantRange pushConstantRange = {};
-    pushConstantRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    pushConstantRange.offset = 0u;
-    pushConstantRange.size = sizeof(GradientPushConstants);
-
-    VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
-    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 1u;
-    pipelineLayoutInfo.pSetLayouts = &vulkan->drawImageDescriptorLayout;
-    pipelineLayoutInfo.pushConstantRangeCount = 1u;
-    pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
-
-    VkResult pipelineLayoutResult = vkCreatePipelineLayout(vulkan->device, &pipelineLayoutInfo, 0,
-                                                           &vulkan->gradientPipelineLayout);
-    if (pipelineLayoutResult != VK_SUCCESS) {
-        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create gradient pipeline layout: {}", pipelineLayoutResult);
-        vkFreeDescriptorSets(vulkan->device, vulkan->drawImageDescriptorPool, 1u, &vulkan->drawImageDescriptorSet);
-        vkDestroyDescriptorPool(vulkan->device, vulkan->drawImageDescriptorPool, 0);
-        vkDestroyDescriptorSetLayout(vulkan->device, vulkan->drawImageDescriptorLayout, 0);
-        vulkan->drawImageDescriptorSet = VK_NULL_HANDLE;
-        vulkan->drawImageDescriptorPool = VK_NULL_HANDLE;
-        vulkan->drawImageDescriptorLayout = VK_NULL_HANDLE;
-        return 0;
-    }
-
-    const char* shaderFilePath = "shaders/gradient.comp.spv";
+    VkDescriptorSetLayout descriptorLayout = VK_NULL_HANDLE;
+    VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
+    VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+    VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+    VkPipeline pipeline = VK_NULL_HANDLE;
     VkShaderModule shaderModule = VK_NULL_HANDLE;
-    if (!vulkan_load_shader_module(vulkan, shaderFilePath, &shaderModule)) {
-        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to load gradient compute shader module '{}'", shaderFilePath);
-        vkDestroyPipelineLayout(vulkan->device, vulkan->gradientPipelineLayout, 0);
-        vkFreeDescriptorSets(vulkan->device, vulkan->drawImageDescriptorPool, 1u, &vulkan->drawImageDescriptorSet);
-        vkDestroyDescriptorPool(vulkan->device, vulkan->drawImageDescriptorPool, 0);
-        vkDestroyDescriptorSetLayout(vulkan->device, vulkan->drawImageDescriptorLayout, 0);
-        vulkan->gradientPipelineLayout = VK_NULL_HANDLE;
-        vulkan->drawImageDescriptorSet = VK_NULL_HANDLE;
-        vulkan->drawImageDescriptorPool = VK_NULL_HANDLE;
-        vulkan->drawImageDescriptorLayout = VK_NULL_HANDLE;
+    B32 success = 0;
+
+    do {
+        VkDescriptorSetLayoutBinding binding = {};
+        binding.binding = 0u;
+        binding.descriptorCount = 1u;
+        binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        binding.pImmutableSamplers = 0;
+
+        VkDescriptorSetLayoutCreateInfo descriptorLayoutInfo = {};
+        descriptorLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        descriptorLayoutInfo.bindingCount = 1u;
+        descriptorLayoutInfo.pBindings = &binding;
+
+        VkResult descriptorLayoutResult =
+            vkCreateDescriptorSetLayout(vulkan->device, &descriptorLayoutInfo, 0, &descriptorLayout);
+        if (descriptorLayoutResult != VK_SUCCESS) {
+            LOG_ERROR(VULKAN_LOG_DOMAIN,
+                      "Failed to create draw image descriptor set layout: {}",
+                      descriptorLayoutResult);
+            break;
+        }
+
+        VkDescriptorPoolSize poolSize = {};
+        poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        poolSize.descriptorCount = 1u;
+
+        VkDescriptorPoolCreateInfo poolInfo = {};
+        poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+        poolInfo.maxSets = 1u;
+        poolInfo.poolSizeCount = 1u;
+        poolInfo.pPoolSizes = &poolSize;
+
+        VkResult poolResult = vkCreateDescriptorPool(vulkan->device, &poolInfo, 0, &descriptorPool);
+        if (poolResult != VK_SUCCESS) {
+            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create draw image descriptor pool: {}", poolResult);
+            break;
+        }
+
+        VkDescriptorSetAllocateInfo allocInfo = {};
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = descriptorPool;
+        allocInfo.descriptorSetCount = 1u;
+        allocInfo.pSetLayouts = &descriptorLayout;
+
+        VkResult allocResult = vkAllocateDescriptorSets(vulkan->device, &allocInfo, &descriptorSet);
+        if (allocResult != VK_SUCCESS) {
+            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to allocate draw image descriptor set: {}", allocResult);
+            break;
+        }
+
+        VkPushConstantRange pushConstantRange = {};
+        pushConstantRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pushConstantRange.offset = 0u;
+        pushConstantRange.size = sizeof(GradientPushConstants);
+
+        VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
+        pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pipelineLayoutInfo.setLayoutCount = 1u;
+        pipelineLayoutInfo.pSetLayouts = &descriptorLayout;
+        pipelineLayoutInfo.pushConstantRangeCount = 1u;
+        pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
+
+        VkResult pipelineLayoutResult =
+            vkCreatePipelineLayout(vulkan->device, &pipelineLayoutInfo, 0, &pipelineLayout);
+        if (pipelineLayoutResult != VK_SUCCESS) {
+            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create gradient pipeline layout: {}", pipelineLayoutResult);
+            break;
+        }
+
+        const char* shaderFilePath = "shaders/gradient.comp.spv";
+        if (!vulkan_load_shader_module(vulkan, shaderFilePath, &shaderModule)) {
+            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to load gradient compute shader module '{}'", shaderFilePath);
+            break;
+        }
+
+        VkPipelineShaderStageCreateInfo stageInfo = {};
+        stageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        stageInfo.module = shaderModule;
+        stageInfo.pName = "main";
+        stageInfo.pSpecializationInfo = 0;
+
+        VkComputePipelineCreateInfo pipelineInfo = {};
+        pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        pipelineInfo.pNext = 0;
+        pipelineInfo.layout = pipelineLayout;
+        pipelineInfo.stage = stageInfo;
+        pipelineInfo.flags = 0;
+        pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
+        pipelineInfo.basePipelineIndex = -1;
+
+        VkResult pipelineResult = vkCreateComputePipelines(vulkan->device,
+                                                           VK_NULL_HANDLE,
+                                                           1u,
+                                                           &pipelineInfo,
+                                                           0,
+                                                           &pipeline);
+        if (pipelineResult != VK_SUCCESS) {
+            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create gradient compute pipeline: {}", pipelineResult);
+            break;
+        }
+
+        success = 1;
+    } while (0);
+
+    if (shaderModule != VK_NULL_HANDLE) {
+        vkDestroyShaderModule(vulkan->device, shaderModule, 0);
+        shaderModule = VK_NULL_HANDLE;
+    }
+
+    if (!success) {
+        if (pipeline != VK_NULL_HANDLE) {
+            vkDestroyPipeline(vulkan->device, pipeline, 0);
+            pipeline = VK_NULL_HANDLE;
+        }
+
+        if (pipelineLayout != VK_NULL_HANDLE) {
+            vkDestroyPipelineLayout(vulkan->device, pipelineLayout, 0);
+            pipelineLayout = VK_NULL_HANDLE;
+        }
+
+        if (descriptorSet != VK_NULL_HANDLE && descriptorPool != VK_NULL_HANDLE) {
+            vkFreeDescriptorSets(vulkan->device, descriptorPool, 1u, &descriptorSet);
+            descriptorSet = VK_NULL_HANDLE;
+        }
+
+        if (descriptorPool != VK_NULL_HANDLE) {
+            vkDestroyDescriptorPool(vulkan->device, descriptorPool, 0);
+            descriptorPool = VK_NULL_HANDLE;
+        }
+
+        if (descriptorLayout != VK_NULL_HANDLE) {
+            vkDestroyDescriptorSetLayout(vulkan->device, descriptorLayout, 0);
+            descriptorLayout = VK_NULL_HANDLE;
+        }
+
         return 0;
     }
 
-    VkPipelineShaderStageCreateInfo stageInfo = {};
-    stageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    stageInfo.module = shaderModule;
-    stageInfo.pName = "main";
-    stageInfo.pSpecializationInfo = 0;
+    vulkan->drawImageDescriptorLayout = descriptorLayout;
+    vulkan->drawImageDescriptorPool = descriptorPool;
+    vulkan->drawImageDescriptorSet = descriptorSet;
+    vulkan->gradientPipelineLayout = pipelineLayout;
+    vulkan->gradientPipeline = pipeline;
 
-    VkComputePipelineCreateInfo pipelineInfo = {};
-    pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    pipelineInfo.pNext = 0;
-    pipelineInfo.layout = vulkan->gradientPipelineLayout;
-    pipelineInfo.stage = stageInfo;
-    pipelineInfo.flags = 0;
-    pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
-    pipelineInfo.basePipelineIndex = -1;
-
-    VkResult pipelineResult = vkCreateComputePipelines(vulkan->device,
-                                                       VK_NULL_HANDLE,
-                                                       1u,
-                                                       &pipelineInfo,
-                                                       0,
-                                                       &vulkan->gradientPipeline);
-    vkDestroyShaderModule(vulkan->device, shaderModule, 0);
-
-    if (pipelineResult != VK_SUCCESS) {
-        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create gradient compute pipeline: {}", pipelineResult);
-        vkDestroyPipelineLayout(vulkan->device, vulkan->gradientPipelineLayout, 0);
-        vkFreeDescriptorSets(vulkan->device, vulkan->drawImageDescriptorPool, 1u, &vulkan->drawImageDescriptorSet);
-        vkDestroyDescriptorPool(vulkan->device, vulkan->drawImageDescriptorPool, 0);
-        vkDestroyDescriptorSetLayout(vulkan->device, vulkan->drawImageDescriptorLayout, 0);
-        vulkan->gradientPipeline = VK_NULL_HANDLE;
-        vulkan->gradientPipelineLayout = VK_NULL_HANDLE;
-        vulkan->drawImageDescriptorSet = VK_NULL_HANDLE;
-        vulkan->drawImageDescriptorPool = VK_NULL_HANDLE;
-        vulkan->drawImageDescriptorLayout = VK_NULL_HANDLE;
-        return 0;
-    }
+    vkdefer_destroy_VkDescriptorSetLayout(&vulkan->deferCtx.globalBuf, vulkan->drawImageDescriptorLayout);
+    vkdefer_destroy_VkDescriptorPool(&vulkan->deferCtx.globalBuf, vulkan->drawImageDescriptorPool);
+    vkdefer_free_descriptor_set(&vulkan->deferCtx.globalBuf,
+                                vulkan->drawImageDescriptorPool,
+                                vulkan->drawImageDescriptorSet);
+    vkdefer_destroy_VkPipelineLayout(&vulkan->deferCtx.globalBuf, vulkan->gradientPipelineLayout);
+    vkdefer_destroy_VkPipeline(&vulkan->deferCtx.globalBuf, vulkan->gradientPipeline);
 
     return 1;
-}
-
-static void vulkan_destroy_draw_pipeline(RendererVulkan* vulkan) {
-    if (!vulkan) {
-        return;
-    }
-
-    if (vulkan->gradientPipeline != VK_NULL_HANDLE) {
-        vkdefer_destroy_VkPipeline(&vulkan->deferCtx.globalBuf, vulkan->gradientPipeline);
-        vulkan->gradientPipeline = VK_NULL_HANDLE;
-    }
-
-    if (vulkan->gradientPipelineLayout != VK_NULL_HANDLE) {
-        vkdefer_destroy_VkPipelineLayout(&vulkan->deferCtx.globalBuf, vulkan->gradientPipelineLayout);
-        vulkan->gradientPipelineLayout = VK_NULL_HANDLE;
-    }
-
-    if (vulkan->drawImageDescriptorSet != VK_NULL_HANDLE && vulkan->drawImageDescriptorPool != VK_NULL_HANDLE) {
-        vkdefer_free_descriptor_set(&vulkan->deferCtx.globalBuf,
-                                    vulkan->drawImageDescriptorPool,
-                                    vulkan->drawImageDescriptorSet);
-        vulkan->drawImageDescriptorSet = VK_NULL_HANDLE;
-    }
-
-    if (vulkan->drawImageDescriptorPool != VK_NULL_HANDLE) {
-        vkdefer_destroy_VkDescriptorPool(&vulkan->deferCtx.globalBuf, vulkan->drawImageDescriptorPool);
-        vulkan->drawImageDescriptorPool = VK_NULL_HANDLE;
-    }
-
-    if (vulkan->drawImageDescriptorLayout != VK_NULL_HANDLE) {
-        vkdefer_destroy_VkDescriptorSetLayout(&vulkan->deferCtx.globalBuf, vulkan->drawImageDescriptorLayout);
-        vulkan->drawImageDescriptorLayout = VK_NULL_HANDLE;
-    }
 }
 
 static B32 vulkan_update_draw_pipeline(RendererVulkan* vulkan) {
