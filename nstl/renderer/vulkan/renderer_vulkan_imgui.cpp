@@ -38,7 +38,7 @@ static B32 renderer_vulkan_imgui_create_descriptor_pool(RendererVulkan* vulkan) 
     poolInfo.poolSizeCount = ARRAY_COUNT(poolSizes);
     poolInfo.pPoolSizes = poolSizes;
 
-    VkResult result = vkCreateDescriptorPool(vulkan->device, &poolInfo, 0, &vulkan->imguiDescriptorPool);
+    VkResult result = vkCreateDescriptorPool(vulkan->device.device, &poolInfo, 0, &vulkan->imguiDescriptorPool);
     if (result != VK_SUCCESS) {
         LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create ImGui descriptor pool (vkCreateDescriptorPool = {})", result);
         vulkan->imguiDescriptorPool = VK_NULL_HANDLE;
@@ -241,7 +241,7 @@ static void renderer_vulkan_imgui_compute_display_info(RendererVulkan* vulkan,
 }
 
 B32 renderer_vulkan_imgui_init(RendererVulkan* vulkan, OS_WindowHandle window) {
-    if (!vulkan || vulkan->device == VK_NULL_HANDLE || vulkan->graphicsQueue == VK_NULL_HANDLE) {
+    if (!vulkan || vulkan->device.device == VK_NULL_HANDLE || vulkan->device.graphicsQueue == VK_NULL_HANDLE) {
         return 0;
     }
 
@@ -272,15 +272,15 @@ B32 renderer_vulkan_imgui_init(RendererVulkan* vulkan, OS_WindowHandle window) {
     vulkan->imguiPipelineInfo.depthAttachmentFormat = VK_FORMAT_UNDEFINED;
     vulkan->imguiPipelineInfo.stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
 
-    ImGui_ImplVulkan_LoadFunctions(VK_API_VERSION_1_4, renderer_vulkan_imgui_load_function, vulkan->instance);
+    ImGui_ImplVulkan_LoadFunctions(VK_API_VERSION_1_4, renderer_vulkan_imgui_load_function, vulkan->device.instance);
 
     ImGui_ImplVulkan_InitInfo initInfo = {};
     initInfo.ApiVersion = VK_API_VERSION_1_4;
-    initInfo.Instance = vulkan->instance;
-    initInfo.PhysicalDevice = vulkan->physicalDevice;
-    initInfo.Device = vulkan->device;
-    initInfo.QueueFamily = vulkan->graphicsQueueFamilyIndex;
-    initInfo.Queue = vulkan->graphicsQueue;
+    initInfo.Instance = vulkan->device.instance;
+    initInfo.PhysicalDevice = vulkan->device.physicalDevice;
+    initInfo.Device = vulkan->device.device;
+    initInfo.QueueFamily = vulkan->device.graphicsQueueFamilyIndex;
+    initInfo.Queue = vulkan->device.graphicsQueue;
     initInfo.DescriptorPool = vulkan->imguiDescriptorPool;
     initInfo.DescriptorPoolSize = 0;
     initInfo.MinImageCount = (vulkan->swapchain.imageCount > 0u) ? vulkan->swapchain.imageCount : VULKAN_FRAME_OVERLAP;
@@ -296,7 +296,7 @@ B32 renderer_vulkan_imgui_init(RendererVulkan* vulkan, OS_WindowHandle window) {
 
     if (!ImGui_ImplVulkan_Init(&initInfo)) {
         LOG_ERROR(VULKAN_LOG_DOMAIN, "ImGui_ImplVulkan_Init failed");
-        vkDestroyDescriptorPool(vulkan->device, vulkan->imguiDescriptorPool, 0);
+        vkDestroyDescriptorPool(vulkan->device.device, vulkan->imguiDescriptorPool, 0);
         vulkan->imguiDescriptorPool = VK_NULL_HANDLE;
         vulkan->imguiContext = 0;
         ImGui::DestroyContext();
@@ -314,15 +314,15 @@ void renderer_vulkan_imgui_shutdown(RendererVulkan* vulkan) {
         return;
     }
 
-    if (vulkan->device != VK_NULL_HANDLE) {
-        VK_CHECK(vkDeviceWaitIdle(vulkan->device));
+    if (vulkan->device.device != VK_NULL_HANDLE) {
+        VK_CHECK(vkDeviceWaitIdle(vulkan->device.device));
     }
 
     renderer_vulkan_imgui_set_context(vulkan);
     ImGui_ImplVulkan_Shutdown();
 
     if (vulkan->imguiDescriptorPool != VK_NULL_HANDLE) {
-        vkDestroyDescriptorPool(vulkan->device, vulkan->imguiDescriptorPool, 0);
+        vkDestroyDescriptorPool(vulkan->device.device, vulkan->imguiDescriptorPool, 0);
         vulkan->imguiDescriptorPool = VK_NULL_HANDLE;
     }
 
@@ -559,4 +559,3 @@ void renderer_vulkan_imgui_set_window_size(RendererVulkan* vulkan, U32 width, U3
     vulkan->imguiWindowExtent.width = width;
     vulkan->imguiWindowExtent.height = height;
 }
-

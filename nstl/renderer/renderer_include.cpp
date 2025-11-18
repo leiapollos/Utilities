@@ -6,7 +6,6 @@
 
 #if defined(RENDERER_BACKEND_VULKAN)
 #include "vulkan/renderer_vulkan.cpp"
-#include "vulkan/renderer_vulkan_imgui.cpp"
 #elif defined(RENDERER_BACKEND_METAL)
 #error "not supported"
 #elif defined(RENDERER_BACKEND_OPENGL)
