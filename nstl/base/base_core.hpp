@@ -254,16 +254,14 @@ struct DeferGuard {
 
 #define DEFER_UNIQ(prefix) NAME_CONCAT(prefix, __COUNTER__)
 
-#define DEFER_IMPL(ID, CAP, CODE)                                         \
-    auto NAME_CONCAT(ID, _lam) = CAP() { \
-        CODE;  \
-    };                        \
-    defer_fn NAME_CONCAT(ID, _fn) = [](void* _ctx) {                     \
-        typedef decltype(NAME_CONCAT(ID, _lam))                          \
-        NAME_CONCAT(ID, _lam_t);                                      \
-        (*static_cast<NAME_CONCAT(ID, _lam_t)*>(_ctx))();                \
-    };                                                                     \
-    DeferGuard NAME_CONCAT(ID, _g)(NAME_CONCAT(ID, _fn), &NAME_CONCAT(ID, _lam))
+#define DEFER_STRUCT_IMPL(ID, CAP, ...) \
+    auto NAME_CONCAT(ID, _lam) = CAP() { __VA_ARGS__; }; \
+    struct NAME_CONCAT(ID, _Thunk) { \
+        static void call(void* ctx) { \
+            (*static_cast<decltype(NAME_CONCAT(ID, _lam))*>(ctx))(); \
+        } \
+    }; \
+    DeferGuard NAME_CONCAT(ID, _g)(&NAME_CONCAT(ID, _Thunk)::call, &NAME_CONCAT(ID, _lam))
 
-#define DEFER(CODE) DEFER_IMPL(DEFER_UNIQ(__defer_), [=], CODE)
-#define DEFER_REF(CODE) DEFER_IMPL(DEFER_UNIQ(__defer_), [&], CODE)
+#define DEFER(...) DEFER_STRUCT_IMPL(DEFER_UNIQ(__defer_), [=], __VA_ARGS__)
+#define DEFER_REF(...) DEFER_STRUCT_IMPL(DEFER_UNIQ(__defer_), [&], __VA_ARGS__)
