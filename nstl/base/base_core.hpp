@@ -239,16 +239,10 @@ typedef void (*defer_fn)(void*);
 struct DeferGuard {
     defer_fn fn;
     void* ctx;
-    bool active;
 
-    DeferGuard(defer_fn f, void* c) : fn(f), ctx(c), active(true) {}
+    DeferGuard(defer_fn f, void* c) : fn(f), ctx(c) {}
     ~DeferGuard() {
-        if (active && fn) {
-            fn(ctx);
-        }
-    }
-    void dismiss() {
-        active = false;
+        fn(ctx);
     }
 };
 
