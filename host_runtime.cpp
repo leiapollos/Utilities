@@ -3,7 +3,6 @@
 //
 
 #include "nstl/base/base_include.hpp"
-#include "nstl/base/base_log.hpp"
 #include "nstl/os/os_include.hpp"
 #include "app_interface.hpp"
 
