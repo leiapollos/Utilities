@@ -11,25 +11,26 @@
 
 #include "lexer.hpp"
 #include "lexer.cpp"
+#include "parser.hpp"
+#include "parser.cpp"
 
 int main() {
     OS_init();
     Arena* arena = arena_alloc();
-    StringU8 source = str8("struct Foo { int x; };");
+    StringU8 source = str8("@sum_type Event { WindowResize { width: U32, height: U32 }, Quit }");
     
-    printf("Testing lexer with source: %.*s\n", (int)source.size, source.data);
+    printf("Testing parser with source: %.*s\n", (int)source.size, source.data);
     
     Lexer lexer;
     lexer_init(&lexer, arena, source, str8("test.meta"));
     
-    for(;;) {
-        Token t = lexer_next_token(&lexer);
-        printf("Token: %s", token_kind_name(t.kind));
-        if (t.kind == TokenKind_Identifier || t.kind == TokenKind_String || t.kind == TokenKind_Number) {
-             printf(" '%.*s'", (int)t.text.size, t.text.data);
-        }
-        printf("\n");
-        if(t.kind == TokenKind_EOF) break;
-    }
+    Parser parser;
+    MEMSET(&parser, 0, sizeof(parser));
+    parser.arena = arena;
+    parser.lexer = &lexer;
+    
+    ASTFile* file = parser_parse_file(&parser);
+    ast_print_file(file);
+    
     return 0;
 }
