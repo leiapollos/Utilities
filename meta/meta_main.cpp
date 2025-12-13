@@ -13,6 +13,8 @@
 #include "lexer.cpp"
 #include "parser.hpp"
 #include "parser.cpp"
+#include "generator.hpp"
+#include "generator.cpp"
 
 int main() {
     OS_init();
@@ -31,6 +33,14 @@ int main() {
     
     ASTFile* file = parser_parse_file(&parser);
     ast_print_file(file);
+    
+    printf("\n--- Generating Code ---\n");
+    Generator gen;
+    generator_init(&gen, arena);
+    generator_generate_file(&gen, file);
+    
+    StringU8 output = generator_get_output(&gen);
+    printf("%.*s\n", (int)output.size, output.data);
     
     return 0;
 }
