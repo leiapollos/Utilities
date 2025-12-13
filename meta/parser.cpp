@@ -122,6 +122,7 @@ static ASTVariant* parse_variant(Parser* parser) {
     
     ASTVariant* variant = ARENA_PUSH_STRUCT(parser->arena, ASTVariant);
     MEMSET(variant, 0, sizeof(ASTVariant));
+    variant->name = nameTok.text;
     
     Token peek = lexer_peek_token(parser->lexer);
     if (peek.kind == TokenKind_OpenBrace) {
