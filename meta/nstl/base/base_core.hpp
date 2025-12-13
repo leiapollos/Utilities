@@ -149,6 +149,18 @@ struct RangeU64 {
 
 
 // ////////////////////////
+// Singly-Linked List Helpers
+
+#define SLIST_APPEND(head, tail, node) \
+    do { \
+        (node)->next = 0; \
+        if ((tail)) { (tail)->next = (node); } \
+        else { (head) = (node); } \
+        (tail) = (node); \
+    } while(0)
+
+
+// ////////////////////////
 // Defer (C++ RAII helper)
 
 typedef void (*defer_fn)(void*);
