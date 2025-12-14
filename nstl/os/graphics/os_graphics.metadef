@@ -1,0 +1,33 @@
+//
+// OS Graphics Events - Sum Type Definition
+// This file is processed by metagen to generate os_graphics.generated.hpp
+//
+
+@sum_type OS_GraphicsEvent {
+    @common {
+        window: OS_WindowHandle,
+    }
+    
+    // Empty/None variant
+    None,
+    
+    // Window events
+    WindowShown { width: U32, height: U32 },
+    WindowClosed,
+    WindowResized { width: U32, height: U32 },
+    WindowFocused,
+    WindowUnfocused,
+    WindowDestroyed,
+    
+    // Keyboard events
+    KeyDown { keyCode: OS_KeyCode, modifiers: U32, character: U32, isRepeat: B32 },
+    KeyUp { keyCode: OS_KeyCode, modifiers: U32 },
+    TextInput { codepoint: U32, modifiers: U32 },
+    
+    // Mouse events
+    MouseButtonDown { x: F32, y: F32, button: OS_MouseButton, modifiers: U32, clickCount: U32 },
+    MouseButtonUp { x: F32, y: F32, button: OS_MouseButton, modifiers: U32 },
+    MouseMove { x: F32, y: F32, deltaX: F32, deltaY: F32, globalX: F32, globalY: F32, modifiers: U32, isInWindow: B32 },
+    MouseScroll { x: F32, y: F32, deltaX: F32, deltaY: F32, modifiers: U32 },
+}
+
