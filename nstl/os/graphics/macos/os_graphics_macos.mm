@@ -179,32 +179,55 @@ static OS_WindowHandle os_window_handle_from_event(NSEvent* event) {
     return os_make_window_handle_from_nswindow(window);
 }
 
-static void os_push_window_event(OS_MACOS_GraphicsEntity* entity, enum OS_GraphicsEventType type, NSWindow* window) {
-    OS_GraphicsEvent event = {};
-    event.type = type;
-    event.window = os_make_window_handle_from_entity(entity);
-
+static void os_push_window_event(OS_MACOS_GraphicsEntity* entity, OS_GraphicsEvent_Tag tag, NSWindow* window) {
+    OS_WindowHandle handle = os_make_window_handle_from_entity(entity);
+    
+    U32 width = 0;
+    U32 height = 0;
     if (window) {
         NSRect frame = [window frame];
-        event.windowEvent.width = (U32) frame.size.width;
-        event.windowEvent.height = (U32) frame.size.height;
+        width = (U32) frame.size.width;
+        height = (U32) frame.size.height;
+    }
+    
+    OS_GraphicsEvent event = {};
+    switch (tag) {
+        case OS_GraphicsEvent_Tag_WindowShown:
+            event = OS_GraphicsEvent::window_shown(handle, width, height);
+            break;
+        case OS_GraphicsEvent_Tag_WindowClosed:
+            event = OS_GraphicsEvent::window_closed(handle);
+            break;
+        case OS_GraphicsEvent_Tag_WindowResized:
+            event = OS_GraphicsEvent::window_resized(handle, width, height);
+            break;
+        case OS_GraphicsEvent_Tag_WindowFocused:
+            event = OS_GraphicsEvent::window_focused(handle);
+            break;
+        case OS_GraphicsEvent_Tag_WindowUnfocused:
+            event = OS_GraphicsEvent::window_unfocused(handle);
+            break;
+        case OS_GraphicsEvent_Tag_WindowDestroyed:
+            event = OS_GraphicsEvent::window_destroyed(handle);
+            break;
+        default:
+            event = OS_GraphicsEvent::none(handle);
+            break;
     }
 
     os_push_graphics_event(event);
 }
 
-static void os_push_mouse_event(NSEvent* event, enum OS_GraphicsEventType type) {
-    OS_GraphicsEvent graphicsEvent = {};
-    graphicsEvent.type = type;
-    graphicsEvent.window = os_window_handle_from_event(event);
+static void os_push_mouse_event(NSEvent* event, OS_GraphicsEvent_Tag tag) {
+    OS_WindowHandle handle = os_window_handle_from_event(event);
 
     NSWindow* window = [event window];
-    if (!window && graphicsEvent.window.handle) {
-        OS_MACOS_GraphicsEntity* entity = (OS_MACOS_GraphicsEntity*) graphicsEvent.window.handle;
+    if (!window && handle.handle) {
+        OS_MACOS_GraphicsEntity* entity = (OS_MACOS_GraphicsEntity*) handle.handle;
         window = entity->window.window;
     }
 
-    if (!graphicsEvent.window.handle) {
+    if (!handle.handle) {
         return;
     }
 
@@ -223,23 +246,40 @@ static void os_push_mouse_event(NSEvent* event, enum OS_GraphicsEventType type) 
         }
     }
 
-    graphicsEvent.mouse.x = (F32) localPoint.x;
-    graphicsEvent.mouse.y = (F32) localPoint.y;
-    graphicsEvent.mouse.deltaX = (F32) [event deltaX];
-    graphicsEvent.mouse.deltaY = (F32) [event deltaY];
-    graphicsEvent.mouse.modifiers = os_translate_modifier_flags([event modifierFlags]);
-    graphicsEvent.mouse.button = os_translate_mouse_button_from_event(event);
-
-    graphicsEvent.mouse.globalX = (F32) screenPoint.x;
-    graphicsEvent.mouse.globalY = (F32) screenPoint.y;
-    graphicsEvent.mouse.isInWindow = isInWindow;
-
-    if (type == OS_GraphicsEventType_MouseScroll) {
-        graphicsEvent.mouse.deltaX = (F32) [event scrollingDeltaX];
-        graphicsEvent.mouse.deltaY = (F32) [event scrollingDeltaY];
-        graphicsEvent.mouse.clickCount = 0;
-    } else if (type == OS_GraphicsEventType_MouseButtonDown || type == OS_GraphicsEventType_MouseButtonUp) {
-        graphicsEvent.mouse.clickCount = (U32) [event clickCount];
+    F32 x = (F32) localPoint.x;
+    F32 y = (F32) localPoint.y;
+    F32 deltaX = (F32) [event deltaX];
+    F32 deltaY = (F32) [event deltaY];
+    F32 globalX = (F32) screenPoint.x;
+    F32 globalY = (F32) screenPoint.y;
+    U32 modifiers = os_translate_modifier_flags([event modifierFlags]);
+    enum OS_MouseButton button = os_translate_mouse_button_from_event(event);
+    
+    OS_GraphicsEvent graphicsEvent = {};
+    
+    switch (tag) {
+        case OS_GraphicsEvent_Tag_MouseScroll: {
+            F32 scrollDeltaX = (F32) [event scrollingDeltaX];
+            F32 scrollDeltaY = (F32) [event scrollingDeltaY];
+            graphicsEvent = OS_GraphicsEvent::mouse_scroll(handle, x, y, scrollDeltaX, scrollDeltaY, modifiers);
+        } break;
+        
+        case OS_GraphicsEvent_Tag_MouseButtonDown: {
+            U32 clickCount = (U32) [event clickCount];
+            graphicsEvent = OS_GraphicsEvent::mouse_button_down(handle, x, y, button, modifiers, clickCount);
+        } break;
+        
+        case OS_GraphicsEvent_Tag_MouseButtonUp: {
+            graphicsEvent = OS_GraphicsEvent::mouse_button_up(handle, x, y, button, modifiers);
+        } break;
+        
+        case OS_GraphicsEvent_Tag_MouseMove: {
+            graphicsEvent = OS_GraphicsEvent::mouse_move(handle, x, y, deltaX, deltaY, globalX, globalY, modifiers, isInWindow);
+        } break;
+        
+        default:
+            graphicsEvent = OS_GraphicsEvent::none(handle);
+            break;
     }
 
     os_push_graphics_event(graphicsEvent);
@@ -450,34 +490,38 @@ static enum OS_KeyCode os_translate_macos_event_key_(NSEvent* event) {
     return os_key_code_from_mac_virtual_key_((U16) [event keyCode]);
 }
 
-static void os_push_key_event(NSEvent* event, enum OS_GraphicsEventType type) {
-    OS_GraphicsEvent graphicsEvent = {};
-    graphicsEvent.type = type;
-    graphicsEvent.window = os_window_handle_from_event(event);
-    if (!graphicsEvent.window.handle) {
+static void os_push_key_event(NSEvent* event, OS_GraphicsEvent_Tag tag) {
+    OS_WindowHandle handle = os_window_handle_from_event(event);
+    if (!handle.handle) {
         return;
     }
-    graphicsEvent.key.keyCode = os_translate_macos_event_key_(event);
-    graphicsEvent.key.modifiers = os_translate_modifier_flags([event modifierFlags]);
-    graphicsEvent.key.isRepeat = ([event isARepeat] != 0) ? 1 : 0;
-    graphicsEvent.key.character = 0;
+    
+    enum OS_KeyCode keyCode = os_translate_macos_event_key_(event);
+    U32 modifiers = os_translate_modifier_flags([event modifierFlags]);
+    B32 isRepeat = ([event isARepeat] != 0) ? 1 : 0;
+    U32 character = 0;
 
     NSString* characters = [event characters];
     if (characters && [characters length] > 0) {
         unichar code = [characters characterAtIndex:0];
-        graphicsEvent.key.character = (U32) code;
+        character = (U32) code;
     }
 
+    OS_GraphicsEvent graphicsEvent = {};
+    if (tag == OS_GraphicsEvent_Tag_KeyDown) {
+        graphicsEvent = OS_GraphicsEvent::key_down(handle, keyCode, modifiers, character, isRepeat);
+    } else if (tag == OS_GraphicsEvent_Tag_KeyUp) {
+        graphicsEvent = OS_GraphicsEvent::key_up(handle, keyCode, modifiers);
+    } else {
+        graphicsEvent = OS_GraphicsEvent::none(handle);
+    }
+    
     os_push_graphics_event(graphicsEvent);
 
-    if (type == OS_GraphicsEventType_KeyDown && characters && [characters length] > 0) {
+    if (tag == OS_GraphicsEvent_Tag_KeyDown && characters && [characters length] > 0) {
         for (NSUInteger index = 0; index < [characters length]; ++index) {
             unichar code = [characters characterAtIndex:index];
-            OS_GraphicsEvent textEvent = {};
-            textEvent.type = OS_GraphicsEventType_TextInput;
-            textEvent.window = graphicsEvent.window;
-            textEvent.text.codepoint = (U32) code;
-            textEvent.text.modifiers = graphicsEvent.key.modifiers;
+            OS_GraphicsEvent textEvent = OS_GraphicsEvent::text_input(handle, (U32)code, modifiers);
             os_push_graphics_event(textEvent);
         }
     }
@@ -494,32 +538,32 @@ static void os_process_nsevent(NSEvent* event) {
         case NSEventTypeLeftMouseDown:
         case NSEventTypeRightMouseDown:
         case NSEventTypeOtherMouseDown:
-            os_push_mouse_event(event, OS_GraphicsEventType_MouseButtonDown);
+            os_push_mouse_event(event, OS_GraphicsEvent_Tag_MouseButtonDown);
             break;
 
         case NSEventTypeLeftMouseUp:
         case NSEventTypeRightMouseUp:
         case NSEventTypeOtherMouseUp:
-            os_push_mouse_event(event, OS_GraphicsEventType_MouseButtonUp);
+            os_push_mouse_event(event, OS_GraphicsEvent_Tag_MouseButtonUp);
             break;
 
         case NSEventTypeMouseMoved:
         case NSEventTypeLeftMouseDragged:
         case NSEventTypeRightMouseDragged:
         case NSEventTypeOtherMouseDragged:
-            os_push_mouse_event(event, OS_GraphicsEventType_MouseMove);
+            os_push_mouse_event(event, OS_GraphicsEvent_Tag_MouseMove);
             break;
 
         case NSEventTypeScrollWheel:
-            os_push_mouse_event(event, OS_GraphicsEventType_MouseScroll);
+            os_push_mouse_event(event, OS_GraphicsEvent_Tag_MouseScroll);
             break;
 
         case NSEventTypeKeyDown:
-            os_push_key_event(event, OS_GraphicsEventType_KeyDown);
+            os_push_key_event(event, OS_GraphicsEvent_Tag_KeyDown);
             break;
 
         case NSEventTypeKeyUp:
-            os_push_key_event(event, OS_GraphicsEventType_KeyUp);
+            os_push_key_event(event, OS_GraphicsEvent_Tag_KeyUp);
             break;
 
         default:
@@ -559,7 +603,7 @@ static void* g_os_window_resize_callback_user_data = 0;
 
     NSWindow* window = localEntity->window.window;
     if (window) {
-        os_push_window_event(localEntity, OS_GraphicsEventType_WindowClosed, window);
+        os_push_window_event(localEntity, OS_GraphicsEvent_Tag_WindowClosed, window);
         localEntity->window.window = 0;
         [window setDelegate:nil];
         [window orderOut:nil];
@@ -587,7 +631,7 @@ static void* g_os_window_resize_callback_user_data = 0;
 
     NSWindow* window = localEntity->window.window;
     if (window) {
-        os_push_window_event(localEntity, OS_GraphicsEventType_WindowResized, window);
+        os_push_window_event(localEntity, OS_GraphicsEvent_Tag_WindowResized, window);
         if (g_os_window_resize_callback) {
             CGSize size = [window contentView].frame.size;
             OS_WindowHandle handle = os_make_window_handle_from_entity(localEntity);
@@ -601,7 +645,7 @@ static void* g_os_window_resize_callback_user_data = 0;
     if (!localEntity || localEntity->type != OS_MACOS_GraphicsEntityType_Window) {
         return;
     }
-    os_push_window_event(localEntity, OS_GraphicsEventType_WindowFocused, localEntity->window.window);
+    os_push_window_event(localEntity, OS_GraphicsEvent_Tag_WindowFocused, localEntity->window.window);
 }
 
 - (void)windowDidResignKey:(NSNotification *)notification {
@@ -609,7 +653,7 @@ static void* g_os_window_resize_callback_user_data = 0;
     if (!localEntity || localEntity->type != OS_MACOS_GraphicsEntityType_Window) {
         return;
     }
-    os_push_window_event(localEntity, OS_GraphicsEventType_WindowUnfocused, localEntity->window.window);
+    os_push_window_event(localEntity, OS_GraphicsEvent_Tag_WindowUnfocused, localEntity->window.window);
 }
 @end
 
@@ -760,7 +804,7 @@ OS_WindowHandle OS_window_create(OS_WindowDesc desc) {
 
         entity->window.window = [window retain];
 
-        os_push_window_event(entity, OS_GraphicsEventType_WindowShown, window);
+        os_push_window_event(entity, OS_GraphicsEvent_Tag_WindowShown, window);
     }
 
     OS_WindowHandle handle = {(U64*) entity};
@@ -777,15 +821,9 @@ void OS_window_destroy(OS_WindowHandle windowHandle) {
         return;
     }
 
-    U32 windowWidth = 0;
-    U32 windowHeight = 0;
-
     @autoreleasepool {
         if (entity->window.window) {
             NSWindow* window = entity->window.window;
-            NSRect frame = [window frame];
-            windowWidth = (U32) frame.size.width;
-            windowHeight = (U32) frame.size.height;
             [window close];
             if (entity->window.window) {
                 [window orderOut:nil];
@@ -801,11 +839,8 @@ void OS_window_destroy(OS_WindowHandle windowHandle) {
         }
     }
 
-    OS_GraphicsEvent destroyEvent = {};
-    destroyEvent.type = OS_GraphicsEventType_WindowDestroyed;
-    destroyEvent.window = os_make_window_handle_from_entity(entity);
-    destroyEvent.windowEvent.width = windowWidth;
-    destroyEvent.windowEvent.height = windowHeight;
+    OS_WindowHandle handle = os_make_window_handle_from_entity(entity);
+    OS_GraphicsEvent destroyEvent = OS_GraphicsEvent::window_destroyed(handle);
     os_push_graphics_event(destroyEvent);
 
     entity->type = OS_MACOS_GraphicsEntityType_Invalid;

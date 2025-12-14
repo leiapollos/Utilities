@@ -95,68 +95,11 @@ enum OS_KeyCode {
     OS_KeyCode_RightSuper,
 };
 
-enum OS_GraphicsEventType {
-    OS_GraphicsEventType_None = 0,
-    OS_GraphicsEventType_WindowShown,
-    OS_GraphicsEventType_WindowClosed,
-    OS_GraphicsEventType_WindowResized,
-    OS_GraphicsEventType_WindowFocused,
-    OS_GraphicsEventType_WindowUnfocused,
-    OS_GraphicsEventType_WindowDestroyed,
-    OS_GraphicsEventType_KeyDown,
-    OS_GraphicsEventType_KeyUp,
-    OS_GraphicsEventType_TextInput,
-    OS_GraphicsEventType_MouseButtonDown,
-    OS_GraphicsEventType_MouseButtonUp,
-    OS_GraphicsEventType_MouseMove,
-    OS_GraphicsEventType_MouseScroll,
-};
-
 struct OS_WindowHandle {
     U64* handle;
 };
 
-struct OS_GraphicsWindowEvent {
-    U32 width;
-    U32 height;
-};
-
-struct OS_GraphicsKeyEvent {
-    enum OS_KeyCode keyCode;
-    U32 modifiers;
-    U32 character;
-    B32 isRepeat;
-};
-
-struct OS_GraphicsTextEvent {
-    U32 codepoint;
-    U32 modifiers;
-};
-
-struct OS_GraphicsMouseEvent {
-    F32 x;
-    F32 y;
-    F32 deltaX;
-    F32 deltaY;
-    F32 globalX;
-    F32 globalY;
-    U32 modifiers;
-    enum OS_MouseButton button;
-    U32 clickCount;
-    B32 isInWindow;
-};
-
-struct OS_GraphicsEvent {
-    enum OS_GraphicsEventType type;
-    OS_WindowHandle window;
-
-    union {
-        OS_GraphicsWindowEvent windowEvent;
-        OS_GraphicsKeyEvent key;
-        OS_GraphicsTextEvent text;
-        OS_GraphicsMouseEvent mouse;
-    };
-};
+#include "os_graphics.generated.hpp"
 
 struct OS_GraphicsEventNode {
     OS_GraphicsEvent event;

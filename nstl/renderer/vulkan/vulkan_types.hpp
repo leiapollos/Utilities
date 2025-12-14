@@ -33,6 +33,7 @@
 #endif
 
 #define VKDEFER_ENABLE_VMA
+#define VKDEFER_IMPLEMENTATION
 #include "vkdefer.h"
 
 static const StringU8 VULKAN_LOG_DOMAIN = str8("vulkan");

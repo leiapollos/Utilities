@@ -252,11 +252,7 @@ static void host_window_resize_callback(OS_WindowHandle window, U32 width, U32 h
     AppInput input = {};
     input.deltaSeconds = 0.016f;
     
-    OS_GraphicsEvent resizeEvent = {};
-    resizeEvent.type = OS_GraphicsEventType_WindowResized;
-    resizeEvent.window = window;
-    resizeEvent.windowEvent.width = width;
-    resizeEvent.windowEvent.height = height;
+    OS_GraphicsEvent resizeEvent = OS_GraphicsEvent::window_resized(window, width, height);
     
     input.events = &resizeEvent;
     input.eventCount = 1;

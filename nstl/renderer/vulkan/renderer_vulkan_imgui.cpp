@@ -349,27 +349,27 @@ void renderer_vulkan_imgui_process_events(RendererVulkan* vulkan, const OS_Graph
             continue;
         }
 
-        switch (evt->type) {
-            case OS_GraphicsEventType_WindowShown: {
+        switch (evt->tag) {
+            case OS_GraphicsEvent_Tag_WindowShown: {
                 io.AddFocusEvent(true);
                 vulkan->imguiWindow = evt->window;
             } break;
 
-            case OS_GraphicsEventType_WindowClosed:
-            case OS_GraphicsEventType_WindowDestroyed: {
+            case OS_GraphicsEvent_Tag_WindowClosed:
+            case OS_GraphicsEvent_Tag_WindowDestroyed: {
                 io.AddFocusEvent(false);
                 vulkan->imguiWindow.handle = 0;
             } break;
 
-            case OS_GraphicsEventType_WindowFocused: {
+            case OS_GraphicsEvent_Tag_WindowFocused: {
                 io.AddFocusEvent(true);
             } break;
 
-            case OS_GraphicsEventType_WindowUnfocused: {
+            case OS_GraphicsEvent_Tag_WindowUnfocused: {
                 io.AddFocusEvent(false);
             } break;
 
-            case OS_GraphicsEventType_MouseMove: {
+            case OS_GraphicsEvent_Tag_MouseMove: {
                 F32 framebufferWidth = 0.0f;
                 F32 framebufferHeight = 0.0f;
                 F32 logicalWidth = 0.0f;
@@ -384,62 +384,91 @@ void renderer_vulkan_imgui_process_events(RendererVulkan* vulkan, const OS_Graph
                                                            &scaleX,
                                                            &scaleY);
 
-                if (!evt->mouse.isInWindow) {
+                if (!evt->mouseMove.isInWindow) {
                     io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
                 } else {
-                    F32 x = evt->mouse.x;
-                    F32 y = logicalHeight - evt->mouse.y;
+                    F32 x = evt->mouseMove.x;
+                    F32 y = logicalHeight - evt->mouseMove.y;
                     io.AddMousePosEvent(x, y);
                 }
             } break;
 
-            case OS_GraphicsEventType_MouseButtonDown:
-            case OS_GraphicsEventType_MouseButtonUp: {
-                ImGuiMouseButton button = renderer_vulkan_imgui_translate_mouse_button(evt->mouse.button);
-                B32 isDown = (evt->type == OS_GraphicsEventType_MouseButtonDown) ? 1 : 0;
-
-                if (evt->mouse.isInWindow) {
-                    F32 framebufferWidth = 0.0f;
-                    F32 framebufferHeight = 0.0f;
-                    F32 logicalWidth = 0.0f;
-                    F32 logicalHeight = 0.0f;
-                    F32 scaleX = 1.0f;
-                    F32 scaleY = 1.0f;
-                    renderer_vulkan_imgui_compute_display_info(vulkan,
-                                                               &framebufferWidth,
-                                                               &framebufferHeight,
-                                                               &logicalWidth,
-                                                               &logicalHeight,
-                                                               &scaleX,
-                                                               &scaleY);
-                    F32 x = evt->mouse.x;
-                    F32 y = logicalHeight - evt->mouse.y;
-                    io.AddMousePosEvent(x, y);
+            case OS_GraphicsEvent_Tag_MouseButtonDown:
+            case OS_GraphicsEvent_Tag_MouseButtonUp: {
+                // Get the button from the appropriate variant
+                enum OS_MouseButton button;
+                F32 x, y;
+                U32 modifiers;
+                B32 isDown;
+                
+                if (evt->tag == OS_GraphicsEvent_Tag_MouseButtonDown) {
+                    button = evt->mouseButtonDown.button;
+                    x = evt->mouseButtonDown.x;
+                    y = evt->mouseButtonDown.y;
+                    modifiers = evt->mouseButtonDown.modifiers;
+                    isDown = 1;
+                } else {
+                    button = evt->mouseButtonUp.button;
+                    x = evt->mouseButtonUp.x;
+                    y = evt->mouseButtonUp.y;
+                    modifiers = evt->mouseButtonUp.modifiers;
+                    isDown = 0;
                 }
 
-                io.AddMouseButtonEvent(button, isDown != 0);
-                renderer_vulkan_imgui_update_modifier_keys(&io, evt->mouse.modifiers);
+                ImGuiMouseButton imguiButton = renderer_vulkan_imgui_translate_mouse_button(button);
+
+                F32 framebufferWidth = 0.0f;
+                F32 framebufferHeight = 0.0f;
+                F32 logicalWidth = 0.0f;
+                F32 logicalHeight = 0.0f;
+                F32 scaleX = 1.0f;
+                F32 scaleY = 1.0f;
+                renderer_vulkan_imgui_compute_display_info(vulkan,
+                                                           &framebufferWidth,
+                                                           &framebufferHeight,
+                                                           &logicalWidth,
+                                                           &logicalHeight,
+                                                           &scaleX,
+                                                           &scaleY);
+                F32 adjustedY = logicalHeight - y;
+                io.AddMousePosEvent(x, adjustedY);
+
+                io.AddMouseButtonEvent(imguiButton, isDown != 0);
+                renderer_vulkan_imgui_update_modifier_keys(&io, modifiers);
             } break;
 
-            case OS_GraphicsEventType_MouseScroll: {
-                io.AddMouseWheelEvent(evt->mouse.deltaX, evt->mouse.deltaY);
-                renderer_vulkan_imgui_update_modifier_keys(&io, evt->mouse.modifiers);
+            case OS_GraphicsEvent_Tag_MouseScroll: {
+                io.AddMouseWheelEvent(evt->mouseScroll.deltaX, evt->mouseScroll.deltaY);
+                renderer_vulkan_imgui_update_modifier_keys(&io, evt->mouseScroll.modifiers);
             } break;
 
-            case OS_GraphicsEventType_KeyDown:
-            case OS_GraphicsEventType_KeyUp: {
-                B32 isDown = (evt->type == OS_GraphicsEventType_KeyDown) ? 1 : 0;
-                ImGuiKey key = renderer_vulkan_imgui_translate_os_keycode_to_imgui_key_(evt->key.keyCode);
+            case OS_GraphicsEvent_Tag_KeyDown:
+            case OS_GraphicsEvent_Tag_KeyUp: {
+                enum OS_KeyCode keyCode;
+                U32 modifiers;
+                B32 isDown;
+                
+                if (evt->tag == OS_GraphicsEvent_Tag_KeyDown) {
+                    keyCode = evt->keyDown.keyCode;
+                    modifiers = evt->keyDown.modifiers;
+                    isDown = 1;
+                } else {
+                    keyCode = evt->keyUp.keyCode;
+                    modifiers = evt->keyUp.modifiers;
+                    isDown = 0;
+                }
+                
+                ImGuiKey key = renderer_vulkan_imgui_translate_os_keycode_to_imgui_key_(keyCode);
                 if (key != ImGuiKey_None) {
                     io.AddKeyEvent(key, isDown != 0);
-                    io.SetKeyEventNativeData(key, (int) evt->key.keyCode, 0);
+                    io.SetKeyEventNativeData(key, (int) keyCode, 0);
                 }
-                renderer_vulkan_imgui_update_modifier_keys(&io, evt->key.modifiers);
+                renderer_vulkan_imgui_update_modifier_keys(&io, modifiers);
             } break;
 
-            case OS_GraphicsEventType_TextInput: {
-                if (evt->text.codepoint != 0u) {
-                    io.AddInputCharacter(evt->text.codepoint);
+            case OS_GraphicsEvent_Tag_TextInput: {
+                if (evt->textInput.codepoint != 0u) {
+                    io.AddInputCharacter(evt->textInput.codepoint);
                 }
             } break;
 

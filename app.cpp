@@ -144,14 +144,14 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
         const OS_GraphicsEvent* evt = input->events + eventIndex;
         ASSERT_ALWAYS(evt != 0);
 
-        switch (evt->type) {
-            case OS_GraphicsEventType_WindowShown: {
+        switch (evt->tag) {
+            case OS_GraphicsEvent_Tag_WindowShown: {
                 if (!state->windowHandle.handle) {
                     state->windowHandle = evt->window;
                 }
-                if (evt->windowEvent.width != 0u && evt->windowEvent.height != 0u) {
-                    state->desiredWindow.width = evt->windowEvent.width;
-                    state->desiredWindow.height = evt->windowEvent.height;
+                if (evt->windowShown.width != 0u && evt->windowShown.height != 0u) {
+                    state->desiredWindow.width = evt->windowShown.width;
+                    state->desiredWindow.height = evt->windowShown.height;
                     PLATFORM_RENDERER_CALL(platform,
                                            renderer_imgui_set_window_size,
                                            host->renderer,
@@ -161,8 +161,8 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
             }
             break;
 
-            case OS_GraphicsEventType_WindowClosed:
-            case OS_GraphicsEventType_WindowDestroyed: {
+            case OS_GraphicsEvent_Tag_WindowClosed:
+            case OS_GraphicsEvent_Tag_WindowDestroyed: {
                 if (state->windowHandle.handle == evt->window.handle) {
                     OS_WindowHandle closedHandle = state->windowHandle;
                     state->windowHandle.handle = 0;
@@ -173,10 +173,10 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
             }
             break;
 
-            case OS_GraphicsEventType_WindowResized: {
+            case OS_GraphicsEvent_Tag_WindowResized: {
                 if (state->windowHandle.handle == evt->window.handle) {
-                    state->desiredWindow.width = evt->windowEvent.width;
-                    state->desiredWindow.height = evt->windowEvent.height;
+                    state->desiredWindow.width = evt->windowResized.width;
+                    state->desiredWindow.height = evt->windowResized.height;
                     PLATFORM_RENDERER_CALL(platform,
                                            renderer_on_window_resized,
                                            host->renderer,
@@ -186,17 +186,17 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
             }
             break;
 
-            case OS_GraphicsEventType_MouseMove: {
-                LOG_DEBUG("app", "Mouse moved to ({}, {})", evt->mouse.x, evt->mouse.y);
+            case OS_GraphicsEvent_Tag_MouseMove: {
+                LOG_DEBUG("app", "Mouse moved to ({}, {})", evt->mouseMove.x, evt->mouseMove.y);
             }
             break;
 
-            case OS_GraphicsEventType_MouseButtonDown:
-            case OS_GraphicsEventType_MouseButtonUp:
-            case OS_GraphicsEventType_MouseScroll:
-            case OS_GraphicsEventType_KeyDown:
-            case OS_GraphicsEventType_KeyUp:
-            case OS_GraphicsEventType_TextInput:
+            case OS_GraphicsEvent_Tag_MouseButtonDown:
+            case OS_GraphicsEvent_Tag_MouseButtonUp:
+            case OS_GraphicsEvent_Tag_MouseScroll:
+            case OS_GraphicsEvent_Tag_KeyDown:
+            case OS_GraphicsEvent_Tag_KeyUp:
+            case OS_GraphicsEvent_Tag_TextInput:
             default: {
             }
                 break;

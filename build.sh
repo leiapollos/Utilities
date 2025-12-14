@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 
-# --- Configuration ---
 BUILD_DIR="build"
+META_DIR="meta"
+METAGEN="${META_DIR}/build/metagen"
 
 clean_partial() {
     if [ ! -d "${BUILD_DIR}" ]; then
@@ -46,7 +47,6 @@ REQUESTED_TARGET=${2:-all}
 CLEAN_BUILD=${3:-false}
 CMAKE_ARGS=()
 
-# --- Build Flavors ---
 COMMON_WARN_FLAGS="-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Wformat=2 -Wnull-dereference -Wdouble-promotion -Wimplicit-fallthrough -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function -Wno-gnu-anonymous-struct -Wno-nested-anon-types -Wno-gnu-zero-variadic-macro-arguments -Wno-initializer-overrides"
 C_FLAGS="${COMMON_WARN_FLAGS}"
 CXX_FLAGS="${COMMON_WARN_FLAGS}"
@@ -56,7 +56,7 @@ echo "==> Selected build flavor: ${FLAVOR}"
 case "${FLAVOR}" in
   release)
     CMAKE_ARGS+=("-DCMAKE_BUILD_TYPE=Release")
-    CMAKE_ARGS+=("-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON") # Enable LTO
+    CMAKE_ARGS+=("-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON")
     ;;
 
   debug)
@@ -81,7 +81,6 @@ if [[ -n "${LD_FLAGS}" ]]; then
     CMAKE_ARGS+=("-DCMAKE_EXE_LINKER_FLAGS=${LD_FLAGS}")
 fi
 
-# --- Execution ---
 case "${CLEAN_BUILD}" in
     clean)
         clean_partial
@@ -96,8 +95,37 @@ esac
 echo "==> Ensuring build directory exists..."
 mkdir -p "${BUILD_DIR}"
 
+run_metagen() {
+    (cd "${META_DIR}" && bash build_meta.sh)
+    if [ $? -ne 0 ]; then
+        echo "Error: Failed to build metagen" >&2
+        exit 1
+    fi
+
+    NEEDS_REGEN=0
+    for metadef in $(find . -name "*.metadef" -type f 2>/dev/null); do
+        generated="${metadef%.metadef}.generated.hpp"
+        if [ ! -f "$generated" ] || [ "$metadef" -nt "$generated" ]; then
+            NEEDS_REGEN=1
+            break
+        fi
+    done
+
+    if [ ${NEEDS_REGEN} -eq 1 ]; then
+        echo "==> Running metagen..."
+        "${METAGEN}" -v .
+        if [ $? -ne 0 ]; then
+            echo "Error: metagen failed" >&2
+            exit 1
+        fi
+    fi
+}
+
+if find . -name "*.metadef" -type f 2>/dev/null | grep -q .; then
+    run_metagen
+fi
+
 echo "==> Configuring CMake..."
-# Always force out-of-source build using explicit -S/-B.
 cmake -S . -B "${BUILD_DIR}" "${CMAKE_ARGS[@]}"
 
 if [ ! -d "${BUILD_DIR}" ]; then
