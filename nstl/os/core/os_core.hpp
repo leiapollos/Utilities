@@ -129,7 +129,7 @@ OS_FileInfo OS_get_file_info(const char* path);
 B32 OS_file_copy_contents(const char* srcPath, const char* dstPath);
 OS_Handle OS_get_log_handle();
 
-bool OS_terminal_supports_color();
+B32 OS_terminal_supports_color();
 
 enum OS_FileHintFlags {
     OS_FileHint_None = 0,

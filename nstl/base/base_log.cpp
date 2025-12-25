@@ -12,7 +12,7 @@ struct LogDomainEntry {
 };
 
 static LogLevel g_logLevel = LogLevel_Debug;
-static bool g_useColor = false;
+static B32 g_useColor = false;
 static const StringU8 g_defaultTerminalColor = str8("\033[0m");
 static LogDomainEntry* g_logDomainList = nullptr;
 static Arena* g_logDomainArena = nullptr;

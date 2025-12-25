@@ -531,7 +531,7 @@ void OS_file_unmap(OS_FileMapping mapping) {
     }
 }
 
-static bool OS_is_seekable(int fd) {
+static B32 OS_is_seekable(int fd) {
     return lseek(fd, 0, SEEK_CUR) != -1;
 }
 
@@ -638,7 +638,7 @@ OS_Handle OS_get_log_handle() {
     return handle;
 }
 
-bool OS_terminal_supports_color() {
+B32 OS_terminal_supports_color() {
     if (getenv("NO_COLOR") != NULL) {
         return false;
     }

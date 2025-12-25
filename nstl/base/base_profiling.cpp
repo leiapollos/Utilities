@@ -330,7 +330,7 @@ void profiler_dump_trace_json(const char* path) {
     str8list_init(&pieces, arena, 64);
     str8list_push(&pieces, str8("{ \"traceEvents\": [\n"));
 
-    bool first = true;
+    B32 first = true;
 
     OS_mutex_lock(g_profiler.registryMutex);
     const U32 tcount = g_profiler.threadCount;

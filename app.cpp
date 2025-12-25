@@ -228,7 +228,7 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
         static int selected_fish = -1;
         const char* names[] = { "Bream", "Haddock", "Mackerel", "Pollock", "Tilefish" };
         const char* names2[] = { "Bream2", "Haddock2", "Mackerel2", "Pollock2", "Tilefish2" };
-        static bool toggles[] = { true, false, false, false, false };
+        static B32 toggles[] = { true, false, false, false, false };
         if (ImGui::Button("Select.."))
             ImGui::OpenPopup("my_select_popup");
         if (ImGui::BeginPopup("my_select_popup"))
