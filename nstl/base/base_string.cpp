@@ -168,3 +168,164 @@ void str8list_push(Str8List* l, StringU8 s) {
     StringU8 copy = str8_cpy(l->arena, s);
     l->items[l->count++] = copy;
 }
+
+
+// ////////////////////////
+// String Formatting
+
+Str8FmtSpec str8_fmt_parse_spec(StringU8 specStr) {
+    Str8FmtSpec spec;
+    spec.hasSpec = 0;
+    spec.floatPrecision = 5;
+    spec.intBase = 10;
+    spec.uppercaseHex = 0;
+
+    if (specStr.size == 0) {
+        return spec;
+    }
+
+    const U8* data = specStr.data;
+    U64 i = 0;
+    U64 len = specStr.size;
+
+    if (i < len && data[i] == ':') {
+        ++i;
+        spec.hasSpec = 1;
+
+        if (i < len && data[i] == '.') {
+            ++i;
+            int precision = 0;
+            U64 precisionStart = i;
+            while (i < len && data[i] >= '0' && data[i] <= '9') {
+                precision = precision * 10 + (data[i] - '0');
+                ++i;
+            }
+            if (i > precisionStart) {
+                spec.floatPrecision = precision;
+            }
+        }
+
+        if (i < len) {
+            U8 c = data[i];
+            if (c == 'x') {
+                spec.intBase = 16;
+            } else if (c == 'X') {
+                spec.intBase = 16;
+                spec.uppercaseHex = 1;
+            } else if (c == 'b') {
+                spec.intBase = 2;
+            } else if (c == 'o') {
+                spec.intBase = 8;
+            }
+        }
+    }
+    return spec;
+}
+
+StringU8 str8_fmt_arg_to_string(Arena* arena, const Str8FmtArg& arg, Str8FmtSpec spec) {
+    switch (arg.kind) {
+        case Str8FmtKind_S64: {
+            if (spec.hasSpec && spec.intBase != 10) {
+                U64 unsigned_val = (arg.s64Val < 0) ? (U64)(-arg.s64Val) : (U64)arg.s64Val;
+                StringU8 result = str8_from_U64(arena, unsigned_val, spec.intBase);
+                if (spec.uppercaseHex) {
+                    result = str8_to_uppercase(arena, result);
+                }
+                if (arg.s64Val < 0) {
+                    return str8_concat(arena, str8("-"), result);
+                }
+                return result;
+            }
+            return str8_from_S64(arena, arg.s64Val);
+        }
+        case Str8FmtKind_U64: {
+            if (spec.hasSpec) {
+                StringU8 result = str8_from_U64(arena, arg.u64Val, spec.intBase);
+                if (spec.uppercaseHex) {
+                    result = str8_to_uppercase(arena, result);
+                }
+                return result;
+            }
+            return str8_from_U64(arena, arg.u64Val, 10);
+        }
+        case Str8FmtKind_F64: {
+            int precision = spec.hasSpec ? spec.floatPrecision : 5;
+            return str8_from_F64(arena, arg.f64Val, precision);
+        }
+        case Str8FmtKind_CSTR:
+            return str8(arg.cstrVal);
+        case Str8FmtKind_CHAR:
+            return str8_from_char(arena, arg.charVal);
+        case Str8FmtKind_PTR:
+            return str8_from_ptr(arena, arg.ptrVal);
+        case Str8FmtKind_STRINGU8:
+            return arg.stringU8Val;
+    }
+    return STR8_EMPTY;
+}
+
+StringU8 str8_fmt_(Arena* arena, StringU8 fmt, const Str8FmtArg* args, U64 argCount) {
+    Str8List pieces;
+    str8list_init(&pieces, arena, 16);
+
+    const U8* data = fmt.data;
+    U64 len = fmt.size;
+    U64 i = 0;
+    U64 last = 0;
+    const Str8FmtArg* it = args;
+    const Str8FmtArg* end = args ? args + argCount : 0;
+
+    while (i < len) {
+        if (data[i] == '{') {
+            if (i + 1 < len && data[i + 1] == '{') {
+                if (i > last) {
+                    str8list_push(&pieces, str8((U8*)(data + last), i - last));
+                }
+                str8list_push(&pieces, str8("{"));
+                i += 2;
+                last = i;
+            } else {
+                U64 specStart = i + 1;
+                U64 specEnd = specStart;
+                while (specEnd < len && data[specEnd] != '}') {
+                    ++specEnd;
+                }
+                if (specEnd < len) {
+                    if (i > last) {
+                        str8list_push(&pieces, str8((U8*)(data + last), i - last));
+                    }
+                    StringU8 specStr = str8((U8*)(data + specStart), specEnd - specStart);
+                    Str8FmtSpec spec = str8_fmt_parse_spec(specStr);
+                    if (it && it < end) {
+                        str8list_push(&pieces, str8_fmt_arg_to_string(arena, *it, spec));
+                        ++it;
+                    } else {
+                        str8list_push(&pieces, str8("<MISSING>"));
+                    }
+                    i = specEnd + 1;
+                    last = i;
+                } else {
+                    ++i;
+                }
+            }
+        } else if (data[i] == '}') {
+            if (i + 1 < len && data[i + 1] == '}') {
+                if (i > last) {
+                    str8list_push(&pieces, str8((U8*)(data + last), i - last));
+                }
+                str8list_push(&pieces, str8("}"));
+                i += 2;
+                last = i;
+            } else {
+                ++i;
+            }
+        } else {
+            ++i;
+        }
+    }
+    if (last < len) {
+        str8list_push(&pieces, str8((U8*)(data + last), len - last));
+    }
+
+    return str8_concat_n(arena, pieces.items, pieces.count);
+}
