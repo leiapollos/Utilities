@@ -108,7 +108,6 @@ struct Str8Builder {
 void str8builder_init(Str8Builder* sb, Arena* arena, U64 initialCap);
 void str8builder_append(Str8Builder* sb, StringU8 s);
 void str8builder_append_char(Str8Builder* sb, U8 c);
-void str8builder_appendf(Str8Builder* sb, const char* fmt, ...);
 StringU8 str8builder_to_string(Str8Builder* sb);
 
 

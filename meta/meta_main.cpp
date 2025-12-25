@@ -191,20 +191,39 @@ static void spmd_process_files_kernel(void* arg) {
     }
 }
 
-static void print_usage() {
-    printf("metagen v%s - Meta Pre-compiler for C++\n\n", METAGEN_VERSION);
-    printf("Usage: metagen [options] <input_dir>\n\n");
-    printf("Options:\n");
-    printf("  -o, --output <dir>     Output directory (default: same as input file location)\n");
-    printf("  -e, --ext <extension>  Input file extension (default: %s)\n", METAGEN_DEFAULT_INPUT_EXT);
-    printf("  -s, --suffix <suffix>  Output file suffix (default: %s)\n", METAGEN_DEFAULT_OUTPUT_SUFFIX);
-    printf("  -v, --verbose          Verbose output\n");
-    printf("  -n, --dry-run          Parse and generate but don't write files\n");
-    printf("  -j, --jobs <n>         Number of parallel jobs (default: CPU cores)\n");
-    printf("  -h, --help             Show this help\n");
-    printf("\nExample:\n");
-    printf("  metagen -o build/generated nstl/\n");
-    printf("  metagen -e .def -s .gen.hpp src/\n");
+static void log_raw_impl(Arena* arena, StringU8 str) {
+    OS_file_write(OS_get_log_handle(), str.size, str.data);
+}
+
+static void log_raw_impl(Arena* arena, const char* str) {
+    log_raw_impl(arena, str8(str));
+}
+
+#define log_raw(arena, str) log_raw_impl(arena, str)
+
+#define log_fmt(arena, fmt, ...) do { \
+    StringU8 s = str8_fmt(arena, fmt, __VA_ARGS__); \
+    OS_file_write(OS_get_log_handle(), s.size, s.data); \
+} while(0)
+
+#define LOG_GET_MACRO(_1, _2, _3, _4, _5, _6, _7, _8, NAME, ...) NAME
+#define log_info(...) LOG_GET_MACRO(__VA_ARGS__, log_fmt, log_fmt, log_fmt, log_fmt, log_fmt, log_fmt, log_raw, DUMMY)(__VA_ARGS__)
+#define log_error(...) LOG_GET_MACRO(__VA_ARGS__, log_fmt, log_fmt, log_fmt, log_fmt, log_fmt, log_fmt, log_raw, DUMMY)(__VA_ARGS__)
+
+static void print_usage(Arena* arena) {
+    log_info(arena, "metagen v{} - Meta Pre-compiler for C++\n\n", str8(METAGEN_VERSION));
+    log_info(arena, "Usage: metagen [options] <input_dir>\n\n");
+    log_info(arena, "Options:\n");
+    log_info(arena, "  -o, --output <dir>     Output directory (default: same as input file location)\n");
+    log_info(arena, "  -e, --ext <extension>  Input file extension (default: {})\n", str8(METAGEN_DEFAULT_INPUT_EXT));
+    log_info(arena, "  -s, --suffix <suffix>  Output file suffix (default: {})\n", str8(METAGEN_DEFAULT_OUTPUT_SUFFIX));
+    log_info(arena, "  -v, --verbose          Verbose output\n");
+    log_info(arena, "  -n, --dry-run          Parse and generate but don't write files\n");
+    log_info(arena, "  -j, --jobs <n>         Number of parallel jobs (default: CPU cores)\n");
+    log_info(arena, "  -h, --help             Show this help\n");
+    log_info(arena, "\nExample:\n");
+    log_info(arena, "  metagen -o build/generated nstl/\n");
+    log_info(arena, "  metagen -e .def -s .gen.hpp src/\n");
 }
 
 static MetagenConfig parse_args(int argc, char** argv, Arena* arena) {
@@ -219,7 +238,7 @@ static MetagenConfig parse_args(int argc, char** argv, Arena* arena) {
         StringU8 arg = str8(argv[i]);
         
         if (str8_equal(arg, str8("-h")) || str8_equal(arg, str8("--help"))) {
-            print_usage();
+            print_usage(arena);
             exit(0);
         } else if (str8_equal(arg, str8("-v")) || str8_equal(arg, str8("--verbose"))) {
             config.verbose = 1;
@@ -229,41 +248,41 @@ static MetagenConfig parse_args(int argc, char** argv, Arena* arena) {
             if (i + 1 < argc) {
                 config.outputDir = str8(argv[++i]);
             } else {
-                fprintf(stderr, "Error: -o requires an argument\n");
+                log_error(arena, "Error: -o requires an argument\n");
                 exit(1);
             }
         } else if (str8_equal(arg, str8("-e")) || str8_equal(arg, str8("--ext"))) {
             if (i + 1 < argc) {
                 config.inputExtension = str8(argv[++i]);
             } else {
-                fprintf(stderr, "Error: -e requires an argument\n");
+                log_error(arena, "Error: -e requires an argument\n");
                 exit(1);
             }
         } else if (str8_equal(arg, str8("-s")) || str8_equal(arg, str8("--suffix"))) {
             if (i + 1 < argc) {
                 config.outputSuffix = str8(argv[++i]);
             } else {
-                fprintf(stderr, "Error: -s requires an argument\n");
+                log_error(arena, "Error: -s requires an argument\n");
                 exit(1);
             }
         } else if (str8_equal(arg, str8("-j")) || str8_equal(arg, str8("--jobs"))) {
             if (i + 1 < argc) {
                 config.threadCount = (U32)atoi(argv[++i]);
             } else {
-                fprintf(stderr, "Error: -j requires an argument\n");
+                log_error(arena, "Error: -j requires an argument\n");
                 exit(1);
             }
         } else if (arg.data[0] != '-') {
             config.inputDir = arg;
         } else {
-            fprintf(stderr, "Error: Unknown option: %.*s\n", (int)arg.size, arg.data);
+            log_error(arena, "Error: Unknown option: {}\n", arg);
             exit(1);
         }
     }
     
     if (str8_is_nil(config.inputDir) || str8_is_empty(config.inputDir)) {
-        fprintf(stderr, "Error: No input directory specified\n\n");
-        print_usage();
+        log_error(arena, "Error: No input directory specified\n\n");
+        print_usage(arena);
         exit(1);
     }
     
@@ -281,28 +300,27 @@ int main(int argc, char** argv) {
     MetagenConfig config = parse_args(argc, argv, arena);
     
     if (config.verbose) {
-        printf("metagen v%s\n", METAGEN_VERSION);
-        printf("Input directory: %.*s\n", (int)config.inputDir.size, config.inputDir.data);
+        log_info(arena, "metagen v{}\n", str8(METAGEN_VERSION));
+        log_info(arena, "Input directory: {}\n", config.inputDir);
         if (!str8_is_nil(config.outputDir)) {
-            printf("Output directory: %.*s\n", (int)config.outputDir.size, config.outputDir.data);
+            log_info(arena, "Output directory: {}\n", config.outputDir);
         }
-        printf("Input extension: %.*s\n", (int)config.inputExtension.size, config.inputExtension.data);
-        printf("Output suffix: %.*s\n", (int)config.outputSuffix.size, config.outputSuffix.data);
-        printf("Thread count: %u\n", config.threadCount);
+        log_info(arena, "Input extension: {}\n", config.inputExtension);
+        log_info(arena, "Output suffix: {}\n", config.outputSuffix);
+        log_info(arena, "Thread count: {}\n", config.threadCount);
     }
     
     FileCollector* collector = discover_files(arena, config.inputDir, config.inputExtension);
     
     if (collector->count == 0) {
         if (config.verbose) {
-            printf("No %.*s files found\n", (int)config.inputExtension.size, config.inputExtension.data);
+            log_info(arena, "No {} files found\n", config.inputExtension);
         }
         return 0;
     }
     
     if (config.verbose) {
-        printf("Found %u %.*s files\n", collector->count, 
-               (int)config.inputExtension.size, config.inputExtension.data);
+        log_info(arena, "Found {} {} files\n", collector->count, config.inputExtension);
     }
     
     MetaFile** files = ARENA_PUSH_ARRAY(arena, MetaFile*, collector->count);
@@ -379,9 +397,7 @@ int main(int argc, char** argv) {
         
         if (result->success) {
             if (config.verbose) {
-                printf("  [OK] %.*s -> %.*s\n",
-                    (int)result->inputPath.size, result->inputPath.data,
-                    (int)result->outputPath.size, result->outputPath.data);
+                log_info(arena, "  [OK] {} -> {}\n", result->inputPath, result->outputPath);
             }
             
             if (!config.dryRun) {
@@ -394,7 +410,7 @@ int main(int argc, char** argv) {
                 
                 OS_Handle out = OS_file_open(outPathCStr, OS_FileOpenMode_Create);
                 if (!out.handle) {
-                    fprintf(stderr, "Error: Failed to create output file: %s\n", outPathCStr);
+                    log_error(arena, "Error: Failed to create output file: {}\n", str8(outPathCStr));
                     failCount++;
                     successCount--;
                 } else {
@@ -403,13 +419,11 @@ int main(int argc, char** argv) {
                 }
             }
         } else {
-            fprintf(stderr, "  [FAIL] %.*s: %.*s\n",
-                (int)result->inputPath.size, result->inputPath.data,
-                (int)result->errorMessage.size, result->errorMessage.data);
+            log_error(arena, "  [FAIL] {}: {}\n", result->inputPath, result->errorMessage);
         }
     }
     
-    printf("Processed %u files: %u succeeded, %u failed\n", collector->count, successCount, failCount);
+    log_info(arena, "Processed {} files: {} succeeded, {} failed\n", collector->count, successCount, failCount);
     
     return (failCount > 0) ? 1 : 0;
 }

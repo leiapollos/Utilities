@@ -105,10 +105,37 @@ StringU8 str8_from_U64(Arena* arena, U64 value, U64 base) {
 }
 
 StringU8 str8_from_S64(Arena* arena, S64 value) {
-    char buffer[64];
-    int len = snprintf(buffer, sizeof(buffer), "%lld", (long long)value);
-    ASSERT_DEBUG(len >= 0);
-    return str8_cpy(arena, str8((U8*)buffer, (U64)len));
+    U8 buffer[32];
+    U64 idx = 0;
+    B32 negative = (value < 0);
+    
+    if (negative) {
+        value = -value;
+    }
+    
+    if (value == 0) {
+        buffer[idx++] = '0';
+    } else {
+        while (value > 0) {
+            buffer[idx++] = (U8)('0' + (value % 10));
+            value /= 10;
+        }
+    }
+    
+    U64 len = idx + (negative ? 1 : 0);
+    U8* data = ARENA_PUSH_ARRAY(arena, U8, len + 1);
+    U64 writeIdx = 0;
+    
+    if (negative) {
+        data[writeIdx++] = '-';
+    }
+    
+    while (idx > 0) {
+        data[writeIdx++] = buffer[--idx];
+    }
+    
+    data[len] = '\0';
+    return str8(data, len);
 }
 
 StringU8 str8_from_char(Arena* arena, U8 c) {
@@ -422,27 +449,6 @@ void str8builder_append_char(Str8Builder* sb, U8 c) {
     sb->data[sb->size++] = c;
 }
 
-void str8builder_appendf(Str8Builder* sb, const char* fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    
-    va_list args_copy;
-    va_copy(args_copy, args);
-    int needed = vsnprintf(NULL, 0, fmt, args_copy);
-    va_end(args_copy);
-    
-    if (needed <= 0) {
-        va_end(args);
-        return;
-    }
-    
-    str8builder_ensure_capacity(sb, (U64)needed);
-    vsnprintf((char*)(sb->data + sb->size), (size_t)(sb->cap - sb->size), fmt, args);
-    sb->size += (U64)needed;
-    
-    va_end(args);
-}
-
 StringU8 str8builder_to_string(Str8Builder* sb) {
     str8builder_ensure_capacity(sb, 1);
     sb->data[sb->size] = '\0';
@@ -454,17 +460,71 @@ StringU8 str8builder_to_string(Str8Builder* sb) {
 // Additional Conversion Functions
 
 StringU8 str8_from_F64(Arena* arena, F64 value, int precision) {
-    char buffer[64];
-    int len = snprintf(buffer, sizeof(buffer), "%.*f", precision, value);
-    ASSERT_DEBUG(len >= 0);
-    return str8_cpy(arena, str8((U8*)buffer, (U64)len));
+    U8 buffer[64];
+    U64 idx = 0;
+    B32 negative = (value < 0);
+    
+    if (negative) {
+        value = -value;
+        buffer[idx++] = '-';
+    }
+    
+    S64 intPart = (S64)value;
+    F64 fracPart = value - (F64)intPart;
+    
+    U8 intBuffer[32];
+    U64 intIdx = 0;
+    if (intPart == 0) {
+        intBuffer[intIdx++] = '0';
+    } else {
+        while (intPart > 0) {
+            intBuffer[intIdx++] = (U8)('0' + (intPart % 10));
+            intPart /= 10;
+        }
+    }
+    while (intIdx > 0) {
+        buffer[idx++] = intBuffer[--intIdx];
+    }
+    
+    if (precision > 0) {
+        buffer[idx++] = '.';
+        for (int i = 0; i < precision; ++i) {
+            fracPart *= 10.0;
+            int digit = (int)fracPart;
+            buffer[idx++] = (U8)('0' + digit);
+            fracPart -= digit;
+        }
+    }
+    
+    U8* data = ARENA_PUSH_ARRAY(arena, U8, idx + 1);
+    MEMCPY(data, buffer, idx);
+    data[idx] = '\0';
+    return str8(data, idx);
 }
 
 StringU8 str8_from_ptr(Arena* arena, const void* ptr) {
-    char buffer[32];
-    int len = snprintf(buffer, sizeof(buffer), "%p", ptr);
-    ASSERT_DEBUG(len >= 0);
-    return str8_cpy(arena, str8((U8*)buffer, (U64)len));
+    static const char hexDigits[] = "0123456789abcdef";
+    U8 buffer[24];
+    U64 idx = 0;
+    
+    buffer[idx++] = '0';
+    buffer[idx++] = 'x';
+    
+    U64 addr = (U64)ptr;
+    B32 started = 0;
+    
+    for (int i = 60; i >= 0; i -= 4) {
+        int nibble = (int)((addr >> i) & 0xF);
+        if (nibble != 0 || started || i == 0) {
+            buffer[idx++] = hexDigits[nibble];
+            started = 1;
+        }
+    }
+    
+    U8* data = ARENA_PUSH_ARRAY(arena, U8, idx + 1);
+    MEMCPY(data, buffer, idx);
+    data[idx] = '\0';
+    return str8(data, idx);
 }
 
 

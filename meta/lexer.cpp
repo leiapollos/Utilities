@@ -210,13 +210,9 @@ B32 lexer_expect(Lexer* lexer, TokenKind kind, Token* outToken) {
     Token tok = lexer_peek_token(lexer);
     if (tok.kind != kind) {
         lexer->hasError = 1;
-        Str8Builder sb;
-        str8builder_init(&sb, lexer->arena, 256);
-        str8builder_appendf(&sb, "%.*s:%u:%u: Expected %s, got %s",
-            (int)lexer->filename.size, lexer->filename.data,
-            tok.line, tok.column,
-            token_kind_name(kind), token_kind_name(tok.kind));
-        lexer->errorMessage = str8builder_to_string(&sb);
+        lexer->errorMessage = str8_fmt(lexer->arena, "{}:{}:{}: Expected {}, got {}",
+            lexer->filename, tok.line, tok.column,
+            str8(token_kind_name(kind)), str8(token_kind_name(tok.kind)));
         return 0;
     }
     lexer_skip_token(lexer);

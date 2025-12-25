@@ -52,4 +52,4 @@ struct Parser {
 void parser_init(Parser* parser, Arena* arena, Lexer* lexer);
 ASTFile* parser_parse_file(Parser* parser);
 
-void ast_print_file(ASTFile* file);
+

@@ -9,47 +9,27 @@ void parser_init(Parser* parser, Arena* arena, Lexer* lexer) {
     parser->hasError = 0;
 }
 
-static void parser_error(Parser* parser, const char* fmt, ...) {
+static void parser_error_(Parser* parser, StringU8 message) {
     if (parser->hasError) {
         return;
     }
     parser->hasError = 1;
     
-    Str8Builder sb;
-    str8builder_init(&sb, parser->arena, 256);
-    
     Token tok = lexer_peek_token(parser->lexer);
-    str8builder_appendf(&sb, "%.*s:%u:%u: ",
-        (int)parser->lexer->filename.size, parser->lexer->filename.data,
-        tok.line, tok.column);
-    
-    va_list args;
-    va_start(args, fmt);
-    
-    va_list argsCopy;
-    va_copy(argsCopy, args);
-    int needed = vsnprintf(NULL, 0, fmt, argsCopy);
-    va_end(argsCopy);
-    
-    if (needed > 0) {
-        char* buffer = ARENA_PUSH_ARRAY(parser->arena, char, (U64)needed + 1);
-        vsnprintf(buffer, (size_t)needed + 1, fmt, args);
-        str8builder_append(&sb, str8(buffer, (U64)needed));
-    }
-    
-    va_end(args);
-    parser->errorMessage = str8builder_to_string(&sb);
+    parser->errorMessage = str8_fmt(parser->arena, "{}:{}:{}: {}",
+        parser->lexer->filename, tok.line, tok.column, message);
 }
+
 
 static ASTField* parse_field(Parser* parser) {
     Token nameTok;
     if (!lexer_expect(parser->lexer, TokenKind_Identifier, &nameTok)) {
-        parser_error(parser, "Expected field name");
+        parser_error_(parser, str8("Expected field name"));
         return nullptr;
     }
     
     if (!lexer_expect(parser->lexer, TokenKind_Colon, nullptr)) {
-        parser_error(parser, "Expected ':' after field name");
+        parser_error_(parser, str8("Expected ':' after field name"));
         return nullptr;
     }
     
@@ -63,7 +43,7 @@ static ASTField* parse_field(Parser* parser) {
     
     Token typeTok;
     if (!lexer_expect(parser->lexer, TokenKind_Identifier, &typeTok)) {
-        parser_error(parser, "Expected type name");
+        parser_error_(parser, str8("Expected type name"));
         return nullptr;
     }
     field->typeName = typeTok.text;
@@ -77,7 +57,7 @@ static ASTField* parse_field(Parser* parser) {
 
 static ASTField* parse_field_list(Parser* parser, U32* outCount) {
     if (!lexer_expect(parser->lexer, TokenKind_OpenBrace, nullptr)) {
-        parser_error(parser, "Expected '{' to start field list");
+        parser_error_(parser, str8("Expected '{' to start field list"));
         return nullptr;
     }
     
@@ -100,7 +80,7 @@ static ASTField* parse_field_list(Parser* parser, U32* outCount) {
         
         if (!lexer_accept(parser->lexer, TokenKind_Comma, nullptr)) {
             if (!lexer_expect(parser->lexer, TokenKind_CloseBrace, nullptr)) {
-                parser_error(parser, "Expected ',' or '}' after field");
+                parser_error_(parser, str8("Expected ',' or '}' after field"));
                 return nullptr;
             }
             break;
@@ -116,7 +96,7 @@ static ASTField* parse_field_list(Parser* parser, U32* outCount) {
 static ASTVariant* parse_variant(Parser* parser) {
     Token nameTok;
     if (!lexer_expect(parser->lexer, TokenKind_Identifier, &nameTok)) {
-        parser_error(parser, "Expected variant name");
+        parser_error_(parser, str8("Expected variant name"));
         return nullptr;
     }
     
@@ -135,7 +115,7 @@ static ASTVariant* parse_variant(Parser* parser) {
     if (!lexer_accept(parser->lexer, TokenKind_Comma, nullptr)) {
         peek = lexer_peek_token(parser->lexer);
         if (peek.kind != TokenKind_CloseBrace) {
-            parser_error(parser, "Expected ',' after variant");
+            parser_error_(parser, str8("Expected ',' after variant"));
             return nullptr;
         }
     }
@@ -145,13 +125,13 @@ static ASTVariant* parse_variant(Parser* parser) {
 
 static ASTSumType* parse_sum_type(Parser* parser) {
     if (!lexer_expect(parser->lexer, TokenKind_KW_SumType, nullptr)) {
-        parser_error(parser, "Expected 'sum_type' after '@'");
+        parser_error_(parser, str8("Expected 'sum_type' after '@'"));
         return nullptr;
     }
     
     Token nameTok;
     if (!lexer_expect(parser->lexer, TokenKind_Identifier, &nameTok)) {
-        parser_error(parser, "Expected sum type name");
+        parser_error_(parser, str8("Expected sum type name"));
         return nullptr;
     }
     
@@ -161,7 +141,7 @@ static ASTSumType* parse_sum_type(Parser* parser) {
     sumType->generateMatch = 1;
     
     if (!lexer_expect(parser->lexer, TokenKind_OpenBrace, nullptr)) {
-        parser_error(parser, "Expected '{' after sum type name");
+        parser_error_(parser, str8("Expected '{' after sum type name"));
         return nullptr;
     }
     
@@ -191,7 +171,7 @@ static ASTSumType* parse_sum_type(Parser* parser) {
                 sumType->generateMatch = 0;
                 continue;
             } else {
-                parser_error(parser, "Unknown directive '@%.*s'", (int)peek.text.size, peek.text.data);
+                parser_error_(parser, str8_fmt(parser->arena, "Unknown directive '@{}'", peek.text));
                 return nullptr;
             }
         }
@@ -237,7 +217,7 @@ ASTFile* parser_parse_file(Parser* parser) {
             SLIST_APPEND(sumTypeHead, sumTypeTail, sumType);
             file->sumTypeCount++;
         } else {
-            parser_error(parser, "Expected '@' to start declaration, got %s", token_kind_name(tok.kind));
+            parser_error_(parser, str8_fmt(parser->arena, "Expected '@' to start declaration, got {}", str8(token_kind_name(tok.kind))));
             file->hasError = 1;
             file->errorMessage = parser->errorMessage;
             return file;
@@ -246,45 +226,4 @@ ASTFile* parser_parse_file(Parser* parser) {
     
     file->sumTypes = sumTypeHead;
     return file;
-}
-
-void ast_print_file(ASTFile* file) {
-    printf("File: %.*s\n", (int)file->filename.size, file->filename.data);
-    
-    if (file->hasError) {
-        printf("  ERROR: %.*s\n", (int)file->errorMessage.size, file->errorMessage.data);
-        return;
-    }
-    
-    for (ASTSumType* st = file->sumTypes; st; st = st->next) {
-        printf("  SumType: %.*s (match=%d)\n", (int)st->name.size, st->name.data, st->generateMatch);
-        
-        if (st->commonFields) {
-            printf("    @common:\n");
-            for (ASTField* f = st->commonFields; f; f = f->next) {
-                printf("      %.*s: %s%.*s%s\n",
-                    (int)f->name.size, f->name.data,
-                    f->isPointer ? "*" : "",
-                    (int)f->typeName.size, f->typeName.data,
-                    f->isReference ? "&" : "");
-            }
-        }
-        
-        printf("    Variants:\n");
-        for (ASTVariant* v = st->variants; v; v = v->next) {
-            if (v->fieldCount == 0) {
-                printf("      %.*s\n", (int)v->name.size, v->name.data);
-            } else {
-                printf("      %.*s {\n", (int)v->name.size, v->name.data);
-                for (ASTField* f = v->fields; f; f = f->next) {
-                    printf("        %.*s: %s%.*s%s\n",
-                        (int)f->name.size, f->name.data,
-                        f->isPointer ? "*" : "",
-                        (int)f->typeName.size, f->typeName.data,
-                        f->isReference ? "&" : "");
-                }
-                printf("      }\n");
-            }
-        }
-    }
 }
