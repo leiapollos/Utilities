@@ -73,7 +73,4 @@ struct ScratchArenas {
 
 void thread_context_init();
 void thread_context_release();
-Temp get_scratch(Arena* const* excludes, U32 count);
-
-
-
+Temp get_scratch(Arena * const * excludes, U32 count);

@@ -10,6 +10,6 @@ struct Generator {
     U32 indentLevel;
 };
 
-void generator_init(Generator* gen, Arena* arena);
-void generator_generate_file(Generator* gen, ASTFile* file);
+void generator_init(Generator * gen, Arena * arena);
+void generator_generate_file(Generator * gen, ASTFile * file);
 StringU8 generator_get_output(Generator* gen);

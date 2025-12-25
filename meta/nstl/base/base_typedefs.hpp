@@ -26,6 +26,3 @@ typedef S8 B8;
 typedef S16 B16;
 typedef S32 B32;
 typedef S64 B64;
-
-
-

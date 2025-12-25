@@ -18,7 +18,7 @@ OS_SystemInfo* OS_get_system_info();
 // ////////////////////////
 // Executable Path
 
-StringU8 OS_get_executable_directory(Arena* arena);
+StringU8 OS_get_executable_directory(Arena * arena);
 
 
 // ////////////////////////
@@ -67,7 +67,7 @@ typedef struct OS_SharedLibrary {
 B32 OS_library_open(StringU8 path, OS_SharedLibrary* outLibrary);
 void OS_library_close(OS_SharedLibrary library);
 void* OS_library_load_symbol(OS_SharedLibrary library, StringU8 symbolName);
-StringU8 OS_library_last_error(Arena* arena);
+StringU8 OS_library_last_error(Arena * arena);
 
 S32 OS_execute(StringU8 command);
 
@@ -146,6 +146,3 @@ void OS_file_set_hints(OS_Handle h, U64 hints);
 typedef void OS_DirIterCallback(const char* path, B32 isDirectory, void* userData);
 
 void OS_dir_iterate(const char* dirPath, OS_DirIterCallback* callback, void* userData, B32 recursive);
-
-
-

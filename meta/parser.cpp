@@ -17,7 +17,7 @@ static void parser_error_(Parser* parser, StringU8 message) {
     
     Token tok = lexer_peek_token(parser->lexer);
     parser->errorMessage = str8_fmt(parser->arena, "{}:{}:{}: {}",
-        parser->lexer->filename, tok.line, tok.column, message);
+                                    parser->lexer->filename, tok.line, tok.column, message);
 }
 
 

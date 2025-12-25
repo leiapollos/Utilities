@@ -35,13 +35,13 @@
     X(KW_NoMatch,   "no_match")
 
 enum TokenKind {
-    #define X(name, str) TokenKind_##name,
-    #define X_CHAR(name, ch) TokenKind_##name,
+#define X(name, str) TokenKind_##name,
+#define X_CHAR(name, ch) TokenKind_##name,
     NONCHAR_TOKENS
     CHAR_TOKENS
     KEYWORD_TOKENS
-    #undef X
-    #undef X_CHAR
+#undef X
+#undef X_CHAR
     TokenKind_COUNT
 };
 
@@ -59,12 +59,12 @@ struct Lexer {
     U32 line;
     U32 column;
     U32 lineStart;
-    
+
     Arena* arena;
-    
+
     Token peekedToken;
     B32 hasPeekedToken;
-    
+
     B32 hasError;
     StringU8 errorMessage;
 };

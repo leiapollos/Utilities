@@ -80,6 +80,3 @@ struct OS_MACOS_State {
 // Globals
 
 extern OS_MACOS_State g_OS_MacOSState;
-
-
-

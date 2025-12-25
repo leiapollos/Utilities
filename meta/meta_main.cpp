@@ -48,24 +48,24 @@ struct FileCollector {
 };
 
 static void collect_meta_file(const char* path, B32 isDirectory, void* userData) {
-    FileCollector* collector = (FileCollector*)userData;
-    
+    FileCollector* collector = (FileCollector*) userData;
+
     if (isDirectory) {
         return;
     }
-    
+
     StringU8 pathStr = str8(path);
     if (!str8_ends_with(pathStr, collector->extension)) {
         return;
     }
-    
+
     OS_mutex_lock(collector->mutex);
     DEFER_REF(OS_mutex_unlock(collector->mutex));
-    
+
     MetaFile* file = ARENA_PUSH_STRUCT(collector->arena, MetaFile);
     MEMSET(file, 0, sizeof(MetaFile));
     file->path = str8_cpy(collector->arena, path);
-    
+
     SLIST_APPEND(collector->head, collector->tail, file);
     collector->count++;
 }
@@ -76,15 +76,15 @@ static FileCollector* discover_files(Arena* arena, StringU8 inputDir, StringU8 e
     collector->arena = arena;
     collector->mutex = OS_mutex_create();
     collector->extension = extension;
-    
+
     StringU8 normalizedDir = str8_path_normalize(inputDir);
-    
+
     char* dirPath = ARENA_PUSH_ARRAY(arena, char, normalizedDir.size + 1);
     MEMCPY(dirPath, normalizedDir.data, normalizedDir.size);
     dirPath[normalizedDir.size] = '\0';
-    
+
     OS_dir_iterate(dirPath, collect_meta_file, collector, 1 /* recursive */);
-    
+
     OS_mutex_destroy(collector->mutex);
     return collector;
 }
@@ -97,15 +97,15 @@ struct ProcessResult {
     StringU8 errorMessage;
 };
 
-static ProcessResult process_file(Arena* arena, MetaFile* file, StringU8 outputDir, 
-                                   StringU8 inputExtension, StringU8 outputSuffix) {
+static ProcessResult process_file(Arena* arena, MetaFile* file, StringU8 outputDir,
+                                  StringU8 inputExtension, StringU8 outputSuffix) {
     ProcessResult result = {};
     result.inputPath = file->path;
-    
+
     char* pathCStr = ARENA_PUSH_ARRAY(arena, char, file->path.size + 1);
     MEMCPY(pathCStr, file->path.data, file->path.size);
     pathCStr[file->path.size] = '\0';
-    
+
     OS_Handle fh = OS_file_open(pathCStr, OS_FileOpenMode_Read);
     if (!fh.handle) {
         result.success = 0;
@@ -113,36 +113,36 @@ static ProcessResult process_file(Arena* arena, MetaFile* file, StringU8 outputD
         return result;
     }
     DEFER_REF(OS_file_close(fh));
-    
+
     U64 fileSize = OS_file_size(fh);
     U8* contents = ARENA_PUSH_ARRAY(arena, U8, fileSize + 1);
     OS_file_read(fh, fileSize, contents);
     contents[fileSize] = '\0';
-    
+
     StringU8 source = str8(contents, fileSize);
-    
+
     StringU8 basename = str8_path_basename(file->path);
     StringU8 stem = str8_strip_suffix(basename, inputExtension);
     StringU8 outputFilename = str8_concat(arena, stem, outputSuffix);
     result.outputPath = str8_path_join(arena, outputDir, outputFilename);
-    
+
     Lexer lexer;
     lexer_init(&lexer, arena, source, file->path);
-    
+
     Parser parser;
     parser_init(&parser, arena, &lexer);
-    
+
     ASTFile* ast = parser_parse_file(&parser);
     if (ast->hasError) {
         result.success = 0;
         result.errorMessage = ast->errorMessage;
         return result;
     }
-    
+
     Generator gen;
     generator_init(&gen, arena);
     generator_generate_file(&gen, ast);
-    
+
     result.generatedCode = generator_get_output(&gen);
     result.success = 1;
     return result;
@@ -163,19 +163,19 @@ struct SPMDProcessContext {
 };
 
 static void spmd_process_files_kernel(void* arg) {
-    SPMDProcessContext* ctx = (SPMDProcessContext*)arg;
-    
+    SPMDProcessContext* ctx = (SPMDProcessContext*) arg;
+
     RangeU64 myRange = SPMD_SPLIT_RANGE(ctx->fileCount);
-    
+
     for (U64 i = myRange.min; i < myRange.max; ++i) {
         Temp scratch = get_scratch(0, 0);
         DEFER_REF(temp_end(&scratch));
-        
+
         StringU8 outputDir = ctx->outputDirs[i];
-        
+
         ProcessResult result = process_file(scratch.arena, ctx->files[i], outputDir,
                                             ctx->inputExtension, ctx->outputSuffix);
-        
+
         OS_mutex_lock(ctx->resultMutex);
         ctx->results[i].success = result.success;
         ctx->results[i].inputPath = str8_cpy(ctx->resultsArena, result.inputPath);
@@ -233,10 +233,10 @@ static MetagenConfig parse_args(int argc, char** argv, Arena* arena) {
     config.threadCount = OS_get_system_info()->logicalCores;
     config.inputExtension = str8(METAGEN_DEFAULT_INPUT_EXT);
     config.outputSuffix = str8(METAGEN_DEFAULT_OUTPUT_SUFFIX);
-    
+
     for (int i = 1; i < argc; ++i) {
         StringU8 arg = str8(argv[i]);
-        
+
         if (str8_equal(arg, str8("-h")) || str8_equal(arg, str8("--help"))) {
             print_usage(arena);
             exit(0);
@@ -267,7 +267,7 @@ static MetagenConfig parse_args(int argc, char** argv, Arena* arena) {
             }
         } else if (str8_equal(arg, str8("-j")) || str8_equal(arg, str8("--jobs"))) {
             if (i + 1 < argc) {
-                config.threadCount = (U32)atoi(argv[++i]);
+                config.threadCount = (U32) atoi(argv[++i]);
             } else {
                 log_error(arena, "Error: -j requires an argument\n");
                 exit(1);
@@ -279,26 +279,26 @@ static MetagenConfig parse_args(int argc, char** argv, Arena* arena) {
             exit(1);
         }
     }
-    
+
     if (str8_is_nil(config.inputDir) || str8_is_empty(config.inputDir)) {
         log_error(arena, "Error: No input directory specified\n\n");
         print_usage(arena);
         exit(1);
     }
-    
+
     return config;
 }
 
 int main(int argc, char** argv) {
     OS_init();
-    
+
     thread_context_init();
     DEFER(thread_context_release());
-    
+
     Arena* arena = arena_alloc();
-    
+
     MetagenConfig config = parse_args(argc, argv, arena);
-    
+
     if (config.verbose) {
         log_info(arena, "metagen v{}\n", str8(METAGEN_VERSION));
         log_info(arena, "Input directory: {}\n", config.inputDir);
@@ -309,26 +309,26 @@ int main(int argc, char** argv) {
         log_info(arena, "Output suffix: {}\n", config.outputSuffix);
         log_info(arena, "Thread count: {}\n", config.threadCount);
     }
-    
+
     FileCollector* collector = discover_files(arena, config.inputDir, config.inputExtension);
-    
+
     if (collector->count == 0) {
         if (config.verbose) {
             log_info(arena, "No {} files found\n", config.inputExtension);
         }
         return 0;
     }
-    
+
     if (config.verbose) {
         log_info(arena, "Found {} {} files\n", collector->count, config.inputExtension);
     }
-    
-    MetaFile** files = ARENA_PUSH_ARRAY(arena, MetaFile*, collector->count);
+
+    MetaFile** files = ARENA_PUSH_ARRAY(arena, MetaFile *, collector->count);
     U32 idx = 0;
     for (MetaFile* f = collector->head; f; f = f->next) {
         files[idx++] = f;
     }
-    
+
     StringU8* outputDirs = ARENA_PUSH_ARRAY(arena, StringU8, collector->count);
     for (U32 i = 0; i < collector->count; ++i) {
         if (str8_is_nil(config.outputDir) || str8_is_empty(config.outputDir)) {
@@ -337,15 +337,15 @@ int main(int argc, char** argv) {
             outputDirs[i] = config.outputDir;
         }
     }
-    
+
     ProcessResult* results = ARENA_PUSH_ARRAY(arena, ProcessResult, collector->count);
     MEMSET(results, 0, sizeof(ProcessResult) * collector->count);
-    
+
     U32 successCount = 0;
     U32 failCount = 0;
-    
+
     B32 useParallel = (collector->count > 1) && (config.threadCount > 1);
-    
+
     if (useParallel) {
         SPMDProcessContext ctx = {};
         ctx.files = files;
@@ -359,15 +359,15 @@ int main(int argc, char** argv) {
         ctx.successCount = 0;
         ctx.failCount = 0;
         ctx.verbose = config.verbose;
-        
+
         U32 laneCount = MIN(config.threadCount, collector->count);
-        
+
         SPMDGroup* group = spmd_run(arena,
-            .laneCount = laneCount,
-            .kernel = spmd_process_files_kernel,
-            .kernelParameters = &ctx
+                                    .laneCount = laneCount,
+                                    .kernel = spmd_process_files_kernel,
+                                    .kernelParameters = &ctx
         );
-        
+
         spmd_group_destroy(group);
         OS_mutex_destroy(ctx.resultMutex);
         successCount = ctx.successCount;
@@ -376,10 +376,10 @@ int main(int argc, char** argv) {
         for (U32 i = 0; i < collector->count; ++i) {
             Temp scratch = get_scratch(&arena, 1);
             DEFER_REF(temp_end(&scratch));
-            
+
             results[i] = process_file(scratch.arena, files[i], outputDirs[i],
                                       config.inputExtension, config.outputSuffix);
-            
+
             results[i].inputPath = str8_cpy(arena, results[i].inputPath);
             results[i].outputPath = str8_cpy(arena, results[i].outputPath);
             results[i].generatedCode = str8_cpy(arena, results[i].generatedCode);
@@ -391,23 +391,23 @@ int main(int argc, char** argv) {
             }
         }
     }
-    
+
     for (U32 i = 0; i < collector->count; ++i) {
         ProcessResult* result = &results[i];
-        
+
         if (result->success) {
             if (config.verbose) {
                 log_info(arena, "  [OK] {} -> {}\n", result->inputPath, result->outputPath);
             }
-            
+
             if (!config.dryRun) {
                 Temp scratch = get_scratch(&arena, 1);
                 DEFER_REF(temp_end(&scratch));
-                
+
                 char* outPathCStr = ARENA_PUSH_ARRAY(scratch.arena, char, result->outputPath.size + 1);
                 MEMCPY(outPathCStr, result->outputPath.data, result->outputPath.size);
                 outPathCStr[result->outputPath.size] = '\0';
-                
+
                 OS_Handle out = OS_file_open(outPathCStr, OS_FileOpenMode_Create);
                 if (!out.handle) {
                     log_error(arena, "Error: Failed to create output file: {}\n", str8(outPathCStr));
@@ -422,8 +422,8 @@ int main(int argc, char** argv) {
             log_error(arena, "  [FAIL] {}: {}\n", result->inputPath, result->errorMessage);
         }
     }
-    
+
     log_info(arena, "Processed {} files: {} succeeded, {} failed\n", collector->count, successCount, failCount);
-    
+
     return (failCount > 0) ? 1 : 0;
 }

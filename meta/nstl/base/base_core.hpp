@@ -106,9 +106,17 @@ static constexpr B32 is_power_of_two(U64 x) {
 // ////////////////////////
 // Memory Units
 
-static constexpr U64 KB(U64 n) { return n << 10; }
-static constexpr U64 MB(U64 n) { return n << 20; }
-static constexpr U64 GB(U64 n) { return n << 30; }
+static constexpr U64 KB(U64 n) {
+    return n << 10;
+}
+
+static constexpr U64 MB(U64 n) {
+    return n << 20;
+}
+
+static constexpr U64 GB(U64 n) {
+    return n << 30;
+}
 
 
 // ////////////////////////
@@ -167,8 +175,12 @@ struct DeferGuard {
     defer_fn fn;
     void* ctx;
 
-    DeferGuard(defer_fn f, void* c) : fn(f), ctx(c) {}
-    ~DeferGuard() { fn(ctx); }
+    DeferGuard(defer_fn f, void* c) : fn(f), ctx(c) {
+    }
+
+    ~DeferGuard() {
+        fn(ctx);
+    }
 };
 
 #define DEFER_UNIQ(prefix) NAME_CONCAT(prefix, __COUNTER__)
@@ -184,6 +196,3 @@ struct DeferGuard {
 
 #define DEFER(...) DEFER_IMPL(DEFER_UNIQ(__defer_), [=], __VA_ARGS__)
 #define DEFER_REF(...) DEFER_IMPL(DEFER_UNIQ(__defer_), [&], __VA_ARGS__)
-
-
-

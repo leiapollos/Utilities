@@ -5,13 +5,13 @@
 #define CHAR_TO_STR(ch) "'" #ch "'"
 
 static const char* g_tokenKindNames[] = {
-    #define X(name, str) str,
-    #define X_CHAR(name, ch) CHAR_TO_STR(ch),
+#define X(name, str) str,
+#define X_CHAR(name, ch) CHAR_TO_STR(ch),
     NONCHAR_TOKENS
     CHAR_TOKENS
     KEYWORD_TOKENS
-    #undef X
-    #undef X_CHAR
+#undef X
+#undef X_CHAR
 };
 
 const char* token_kind_name(TokenKind kind) {
@@ -38,15 +38,16 @@ static B8 is_alnum(U8 c) {
 }
 
 static const TokenKind g_charToToken[256] = {
-    #define X_CHAR(name, ch) [(U8)(ch)] = TokenKind_##name,
+#define X_CHAR(name, ch) [(U8)(ch)] = TokenKind_##name,
     CHAR_TOKENS
-    #undef X_CHAR
+#undef X_CHAR
 };
 
 static TokenKind keyword_or_identifier(StringU8 text) {
-    #define X(name, str) if (str8_equal(text, str8(str))) { return TokenKind_##name; }
+#define X(name, str) if (str8_equal(text, str8(str))) { return TokenKind_##name; }
     KEYWORD_TOKENS
-    #undef X
+#undef X
+    
     return TokenKind_Identifier;
 }
 
@@ -85,7 +86,7 @@ static U8 lexer_advance_char(Lexer* lexer) {
     if (c == '\n') {
         lexer->line++;
         lexer->column = 1;
-        lexer->lineStart = (U32)lexer->pos;
+        lexer->lineStart = (U32) lexer->pos;
     } else {
         lexer->column++;
     }
@@ -95,12 +96,12 @@ static U8 lexer_advance_char(Lexer* lexer) {
 static void lexer_skip_whitespace_and_comments(Lexer* lexer) {
     for (;;) {
         U8 c = lexer_peek_char(lexer);
-        
+
         if (is_whitespace(c)) {
             lexer_advance_char(lexer);
             continue;
         }
-        
+
         if (c == '/' && lexer_peek_char_n(lexer, 1) == '/') {
             lexer_advance_char(lexer);
             lexer_advance_char(lexer);
@@ -109,7 +110,7 @@ static void lexer_skip_whitespace_and_comments(Lexer* lexer) {
             }
             continue;
         }
-        
+
         if (c == '/' && lexer_peek_char_n(lexer, 1) == '*') {
             lexer_advance_char(lexer);
             lexer_advance_char(lexer);
@@ -125,26 +126,26 @@ static void lexer_skip_whitespace_and_comments(Lexer* lexer) {
             }
             continue;
         }
-        
+
         break;
     }
 }
 
 Token lexer_next_token(Lexer* lexer) {
     lexer_skip_whitespace_and_comments(lexer);
-    
+
     Token token = {};
     token.line = lexer->line;
     token.column = lexer->column;
-    
+
     U8 c = lexer_peek_char(lexer);
-    
+
     if (c == 0) {
         token.kind = TokenKind_EOF;
         token.text = str8("EOF");
         return token;
     }
-    
+
     if (is_alpha(c)) {
         U64 start = lexer->pos;
         while (is_alnum(lexer_peek_char(lexer))) {
@@ -154,7 +155,7 @@ Token lexer_next_token(Lexer* lexer) {
         token.kind = keyword_or_identifier(token.text);
         return token;
     }
-    
+
     if (is_digit(c)) {
         U64 start = lexer->pos;
         while (is_digit(lexer_peek_char(lexer))) {
@@ -164,7 +165,7 @@ Token lexer_next_token(Lexer* lexer) {
         token.kind = TokenKind_Number;
         return token;
     }
-    
+
     if (c == '"') {
         lexer_advance_char(lexer);
         U64 start = lexer->pos;
@@ -181,11 +182,11 @@ Token lexer_next_token(Lexer* lexer) {
         }
         return token;
     }
-    
+
     lexer_advance_char(lexer);
     token.text = str8(lexer->source.data + lexer->pos - 1, 1);
     token.kind = g_charToToken[c];
-    
+
     return token;
 }
 
@@ -211,8 +212,8 @@ B32 lexer_expect(Lexer* lexer, TokenKind kind, Token* outToken) {
     if (tok.kind != kind) {
         lexer->hasError = 1;
         lexer->errorMessage = str8_fmt(lexer->arena, "{}:{}:{}: Expected {}, got {}",
-            lexer->filename, tok.line, tok.column,
-            str8(token_kind_name(kind)), str8(token_kind_name(tok.kind)));
+                                       lexer->filename, tok.line, tok.column,
+                                       str8(token_kind_name(kind)), str8(token_kind_name(tok.kind)));
         return 0;
     }
     lexer_skip_token(lexer);

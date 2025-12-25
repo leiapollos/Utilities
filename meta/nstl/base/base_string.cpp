@@ -2,8 +2,8 @@
 // Created by André Leite on 15/10/2025.
 //
 
-StringU8 STR8_NIL = {(U8*)0, 0};
-StringU8 STR8_EMPTY = {(U8*)"", 0};
+StringU8 STR8_NIL = {(U8*) 0, 0};
+StringU8 STR8_EMPTY = {(U8*) "", 0};
 
 // ////////////////////////
 // String
@@ -13,14 +13,14 @@ StringU8 str8(U8* source, U64 size) {
 }
 
 StringU8 str8(const char* source, U64 size) {
-    return StringU8{(U8*)source, size};
+    return StringU8{(U8*) source, size};
 }
 
 StringU8 str8(const char* source) {
     if (source == 0) {
         return STR8_EMPTY;
     }
-    return StringU8{(U8*)source, C_STR_LEN(source)};
+    return StringU8{(U8*) source, C_STR_LEN(source)};
 }
 
 StringU8 str8_cpy(Arena* arena, StringU8 src) {
@@ -81,7 +81,7 @@ StringU8 str8_from_U64(Arena* arena, U64 value, U64 base) {
     U8 buffer[65];
     U64 i = 0;
     if (value == 0) {
-        buffer[i++] = (U8)'0';
+        buffer[i++] = (U8) '0';
     } else {
         while (value != 0) {
             U64 digit = value % base;
@@ -108,11 +108,11 @@ StringU8 str8_from_S64(Arena* arena, S64 value) {
     U8 buffer[32];
     U64 idx = 0;
     B32 negative = (value < 0);
-    
+
     if (negative) {
         value = -value;
     }
-    
+
     if (value == 0) {
         buffer[idx++] = '0';
     } else {
@@ -121,19 +121,19 @@ StringU8 str8_from_S64(Arena* arena, S64 value) {
             value /= 10;
         }
     }
-    
+
     U64 len = idx + (negative ? 1 : 0);
     U8* data = ARENA_PUSH_ARRAY(arena, U8, len + 1);
     U64 writeIdx = 0;
-    
+
     if (negative) {
         data[writeIdx++] = '-';
     }
-    
+
     while (idx > 0) {
         data[writeIdx++] = buffer[--idx];
     }
-    
+
     data[len] = '\0';
     return str8(data, len);
 }
@@ -181,7 +181,7 @@ StringU8 str8_to_snake_case(Arena* arena, StringU8 s) {
     if (s.size == 0) {
         return STR8_EMPTY;
     }
-    
+
     U64 resultSize = 0;
     for (U64 i = 0; i < s.size; ++i) {
         U8 c = s.data[i];
@@ -191,7 +191,7 @@ StringU8 str8_to_snake_case(Arena* arena, StringU8 s) {
         }
         resultSize++;
     }
-    
+
     U8* out = ARENA_PUSH_ARRAY(arena, U8, resultSize + 1);
     U64 j = 0;
     for (U64 i = 0; i < s.size; ++i) {
@@ -234,7 +234,7 @@ StringU8 str8_substr(StringU8 s, U64 start, U64 len) {
 StringU8 str8_trim_whitespace(StringU8 s) {
     U64 start = 0;
     U64 end = s.size;
-    
+
     while (start < end) {
         U8 c = s.data[start];
         if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
@@ -243,7 +243,7 @@ StringU8 str8_trim_whitespace(StringU8 s) {
             break;
         }
     }
-    
+
     while (end > start) {
         U8 c = s.data[end - 1];
         if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
@@ -252,21 +252,21 @@ StringU8 str8_trim_whitespace(StringU8 s) {
             break;
         }
     }
-    
+
     return str8(s.data + start, end - start);
 }
 
 S64 str8_find_char(StringU8 s, U8 c) {
     for (U64 i = 0; i < s.size; ++i) {
         if (s.data[i] == c) {
-            return (S64)i;
+            return (S64) i;
         }
     }
     return -1;
 }
 
 S64 str8_find_char_last(StringU8 s, U8 c) {
-    for (S64 i = (S64)s.size - 1; i >= 0; --i) {
+    for (S64 i = (S64) s.size - 1; i >= 0; --i) {
         if (s.data[i] == c) {
             return i;
         }
@@ -281,12 +281,12 @@ S64 str8_find_char_last(StringU8 s, U8 c) {
 StringU8 str8_path_extension(StringU8 path) {
     S64 lastSlash = str8_find_char_last(path, '/');
     S64 lastDot = str8_find_char_last(path, '.');
-    
+
     if (lastDot < 0 || lastDot <= lastSlash) {
         return STR8_EMPTY;
     }
-    
-    return str8_substr(path, (U64)lastDot, path.size - (U64)lastDot);
+
+    return str8_substr(path, (U64) lastDot, path.size - (U64) lastDot);
 }
 
 StringU8 str8_path_basename(StringU8 path) {
@@ -300,12 +300,12 @@ StringU8 str8_path_basename(StringU8 path) {
 StringU8 str8_path_stem(StringU8 path) {
     StringU8 basename = str8_path_basename(path);
     S64 lastDot = str8_find_char_last(basename, '.');
-    
+
     if (lastDot <= 0) {
         return basename;
     }
-    
-    return str8_substr(basename, 0, (U64)lastDot);
+
+    return str8_substr(basename, 0, (U64) lastDot);
 }
 
 StringU8 str8_path_directory(StringU8 path) {
@@ -316,7 +316,7 @@ StringU8 str8_path_directory(StringU8 path) {
     if (lastSlash == 0) {
         return str8("/");
     }
-    return str8_substr(path, 0, (U64)lastSlash);
+    return str8_substr(path, 0, (U64) lastSlash);
 }
 
 StringU8 str8_strip_suffix(StringU8 s, StringU8 suffix) {
@@ -333,10 +333,10 @@ StringU8 str8_path_join(Arena* arena, StringU8 dir, StringU8 filename) {
     if (filename.size == 0) {
         return str8_cpy(arena, dir);
     }
-    
+
     B8 dirHasSlash = (dir.data[dir.size - 1] == '/');
     B8 fileHasSlash = (filename.data[0] == '/');
-    
+
     if (dirHasSlash && fileHasSlash) {
         return str8_concat(arena, dir, str8_substr(filename, 1, filename.size - 1));
     } else if (dirHasSlash || fileHasSlash) {
@@ -350,12 +350,12 @@ StringU8 str8_path_normalize(StringU8 path) {
     if (path.size == 0) {
         return path;
     }
-    
+
     U64 end = path.size;
     while (end > 1 && path.data[end - 1] == '/') {
         end--;
     }
-    
+
     return str8_substr(path, 0, end);
 }
 
@@ -374,7 +374,7 @@ void str8list_push(Str8List* l, StringU8 s) {
     if (l->count >= l->cap) {
         U64 newCap = l->cap * 2;
         StringU8* n = ARENA_PUSH_ARRAY(l->arena, StringU8, newCap);
-        MEMMOVE(n, l->items, l->count * (U64)sizeof(StringU8));
+        MEMMOVE(n, l->items, l->count * (U64) sizeof(StringU8));
         l->items = n;
         l->cap = newCap;
     }
@@ -385,7 +385,7 @@ StringU8 str8list_join(Str8List* l, StringU8 separator) {
     if (l->count == 0) {
         return STR8_EMPTY;
     }
-    
+
     U64 total = 0;
     for (U64 i = 0; i < l->count; ++i) {
         total += l->items[i].size;
@@ -393,7 +393,7 @@ StringU8 str8list_join(Str8List* l, StringU8 separator) {
             total += separator.size;
         }
     }
-    
+
     U8* out = ARENA_PUSH_ARRAY(l->arena, U8, total + 1);
     U64 off = 0;
     for (U64 i = 0; i < l->count; ++i) {
@@ -463,15 +463,15 @@ StringU8 str8_from_F64(Arena* arena, F64 value, int precision) {
     U8 buffer[64];
     U64 idx = 0;
     B32 negative = (value < 0);
-    
+
     if (negative) {
         value = -value;
         buffer[idx++] = '-';
     }
-    
-    S64 intPart = (S64)value;
-    F64 fracPart = value - (F64)intPart;
-    
+
+    S64 intPart = (S64) value;
+    F64 fracPart = value - (F64) intPart;
+
     U8 intBuffer[32];
     U64 intIdx = 0;
     if (intPart == 0) {
@@ -485,17 +485,17 @@ StringU8 str8_from_F64(Arena* arena, F64 value, int precision) {
     while (intIdx > 0) {
         buffer[idx++] = intBuffer[--intIdx];
     }
-    
+
     if (precision > 0) {
         buffer[idx++] = '.';
         for (int i = 0; i < precision; ++i) {
             fracPart *= 10.0;
-            int digit = (int)fracPart;
+            int digit = (int) fracPart;
             buffer[idx++] = (U8)('0' + digit);
             fracPart -= digit;
         }
     }
-    
+
     U8* data = ARENA_PUSH_ARRAY(arena, U8, idx + 1);
     MEMCPY(data, buffer, idx);
     data[idx] = '\0';
@@ -506,21 +506,21 @@ StringU8 str8_from_ptr(Arena* arena, const void* ptr) {
     static const char hexDigits[] = "0123456789abcdef";
     U8 buffer[24];
     U64 idx = 0;
-    
+
     buffer[idx++] = '0';
     buffer[idx++] = 'x';
-    
-    U64 addr = (U64)ptr;
+
+    U64 addr = (U64) ptr;
     B32 started = 0;
-    
+
     for (int i = 60; i >= 0; i -= 4) {
-        int nibble = (int)((addr >> i) & 0xF);
+        int nibble = (int) ((addr >> i) & 0xF);
         if (nibble != 0 || started || i == 0) {
             buffer[idx++] = hexDigits[nibble];
             started = 1;
         }
     }
-    
+
     U8* data = ARENA_PUSH_ARRAY(arena, U8, idx + 1);
     MEMCPY(data, buffer, idx);
     data[idx] = '\0';
@@ -584,7 +584,7 @@ StringU8 str8_fmt_arg_to_string(Arena* arena, const Str8FmtArg& arg, Str8FmtSpec
     switch (arg.kind) {
         case Str8FmtKind_S64: {
             if (spec.hasSpec && spec.intBase != 10) {
-                U64 unsigned_val = (arg.s64Val < 0) ? (U64)(-arg.s64Val) : (U64)arg.s64Val;
+                U64 unsigned_val = (arg.s64Val < 0) ? (U64)(-arg.s64Val) : (U64) arg.s64Val;
                 StringU8 result = str8_from_U64(arena, unsigned_val, spec.intBase);
                 if (spec.uppercaseHex) {
                     result = str8_to_uppercase(arena, result);
@@ -637,7 +637,7 @@ StringU8 str8_fmt_(Arena* arena, StringU8 fmt, const Str8FmtArg* args, U64 argCo
         if (data[i] == '{') {
             if (i + 1 < len && data[i + 1] == '{') {
                 if (i > last) {
-                    str8list_push(&pieces, str8((U8*)(data + last), i - last));
+                    str8list_push(&pieces, str8((U8*) (data + last), i - last));
                 }
                 str8list_push(&pieces, str8("{"));
                 i += 2;
@@ -650,9 +650,9 @@ StringU8 str8_fmt_(Arena* arena, StringU8 fmt, const Str8FmtArg* args, U64 argCo
                 }
                 if (specEnd < len) {
                     if (i > last) {
-                        str8list_push(&pieces, str8((U8*)(data + last), i - last));
+                        str8list_push(&pieces, str8((U8*) (data + last), i - last));
                     }
-                    StringU8 specStr = str8((U8*)(data + specStart), specEnd - specStart);
+                    StringU8 specStr = str8((U8*) (data + specStart), specEnd - specStart);
                     Str8FmtSpec spec = str8_fmt_parse_spec(specStr);
                     if (it && it < end) {
                         str8list_push(&pieces, str8_fmt_arg_to_string(arena, *it, spec));
@@ -669,7 +669,7 @@ StringU8 str8_fmt_(Arena* arena, StringU8 fmt, const Str8FmtArg* args, U64 argCo
         } else if (data[i] == '}') {
             if (i + 1 < len && data[i + 1] == '}') {
                 if (i > last) {
-                    str8list_push(&pieces, str8((U8*)(data + last), i - last));
+                    str8list_push(&pieces, str8((U8*) (data + last), i - last));
                 }
                 str8list_push(&pieces, str8("}"));
                 i += 2;
@@ -682,7 +682,7 @@ StringU8 str8_fmt_(Arena* arena, StringU8 fmt, const Str8FmtArg* args, U64 argCo
         }
     }
     if (last < len) {
-        str8list_push(&pieces, str8((U8*)(data + last), len - last));
+        str8list_push(&pieces, str8((U8*) (data + last), len - last));
     }
 
     return str8_concat_n(arena, pieces.items, pieces.count);

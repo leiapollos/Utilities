@@ -181,23 +181,23 @@ U64 OS_get_time_nanoseconds() {
 U64 OS_rdtsc_relaxed() {
     U64 value = 0;
 #if defined(COMPILER_CLANG) || defined(COMPILER_GCC)
-    __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(value));
+__asm__ __volatile__("mrs %0, cntvct_el0": "=r"(value));
 #else
-    value = OS_get_time_nanoseconds();
+value= OS_get_time_nanoseconds();
 #endif
-    return value;
+return value;
 }
 
 U64 OS_rdtscp_serialized() {
     U64 value = 0;
 #if defined(COMPILER_CLANG) || defined(COMPILER_GCC)
-    __asm__ __volatile__("isb");
-    __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(value));
-    __asm__ __volatile__("isb");
+__asm__ __volatile__("isb");
+__asm__ __volatile__("mrs %0, cntvct_el0": "=r"(value));
+__asm__ __volatile__("isb");
 #else
-    value = OS_get_time_nanoseconds();
+value= OS_get_time_nanoseconds();
 #endif
-    return value;
+return value;
 }
 #endif
 
@@ -205,7 +205,7 @@ U64 OS_get_counter_frequency_hz() {
 #if defined(PLATFORM_ARCH_ARM64)
     U64 freq = 0;
 #if defined(COMPILER_CLANG) || defined(COMPILER_GCC)
-    __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(freq));
+    __asm__ __volatile__("mrs %0, cntfrq_el0": "=r"(freq));
 #endif
     return freq;
 #else
@@ -216,7 +216,7 @@ U64 OS_get_counter_frequency_hz() {
 void OS_sleep_milliseconds(U32 milliseconds) {
     struct timespec req = {0, 0};
     req.tv_sec = (time_t)(milliseconds / 1000);
-    req.tv_nsec = (long)((milliseconds % 1000) * MILLION(1ULL));
+    req.tv_nsec = (long) ((milliseconds % 1000) * MILLION(1ULL));
     nanosleep(&req, 0);
 }
 
@@ -260,11 +260,11 @@ void OS_release(void* ptr, U64 size) {
 
 static void* _OS_thread_entry_point(void* arg) {
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*) arg;
-    
+
     thread_context_init();
     entity->thread.func(entity->thread.args);
     thread_context_release();
-    
+
     return 0;
 }
 
@@ -545,9 +545,9 @@ U64 OS_file_read(OS_Handle fileHandle, RangeU64 range, void* dst) {
     U64 bytesToTransfer = (range.max >= range.min) ? (range.max - range.min) : 0;
 
     while (totalTransferred < bytesToTransfer) {
-        size_t chunkSize = (size_t) MIN(bytesToTransfer - totalTransferred, (U64)SSIZE_MAX);
+        size_t chunkSize = (size_t) MIN(bytesToTransfer - totalTransferred, (U64) SSIZE_MAX);
         ssize_t bytesRead = pread(entity->file.fd, destinationBytes + totalTransferred,
-                                  chunkSize, (off_t) (range.min + totalTransferred));
+                                  chunkSize, (off_t)(range.min + totalTransferred));
         if (bytesRead < 0) {
             return totalTransferred;
         }
@@ -567,7 +567,7 @@ U64 OS_file_read(OS_Handle fileHandle, U64 size, void* dst) {
     U64 totalTransferred = 0;
 
     while (totalTransferred < size) {
-        size_t chunkSize = (size_t) MIN(size - totalTransferred, (U64)SSIZE_MAX);
+        size_t chunkSize = (size_t) MIN(size - totalTransferred, (U64) SSIZE_MAX);
         ssize_t bytesRead = read(entity->file.fd, destinationBytes + totalTransferred, chunkSize);
         if (bytesRead < 0) {
             return totalTransferred;
@@ -590,9 +590,9 @@ U64 OS_file_write(OS_Handle fileHandle, RangeU64 range, const void* src) {
     U64 bytesToTransfer = (range.max >= range.min) ? (range.max - range.min) : 0;
 
     while (totalTransferred < bytesToTransfer) {
-        size_t chunkSize = (size_t) MIN(bytesToTransfer - totalTransferred, (U64)SSIZE_MAX);
+        size_t chunkSize = (size_t) MIN(bytesToTransfer - totalTransferred, (U64) SSIZE_MAX);
         ssize_t bytesWritten = pwrite(entity->file.fd, sourceBytes + totalTransferred,
-                                      chunkSize, (off_t) (range.min + totalTransferred));
+                                      chunkSize, (off_t)(range.min + totalTransferred));
         if (bytesWritten < 0) {
             return totalTransferred;
         }
@@ -612,7 +612,7 @@ U64 OS_file_write(OS_Handle fileHandle, U64 size, const void* src) {
     U64 totalTransferred = 0;
 
     while (totalTransferred < size) {
-        size_t chunkSize = (size_t) MIN(size - totalTransferred, (U64)SSIZE_MAX);
+        size_t chunkSize = (size_t) MIN(size - totalTransferred, (U64) SSIZE_MAX);
         ssize_t bytesWritten = write(entity->file.fd, sourceBytes + totalTransferred, chunkSize);
         if (bytesWritten < 0) {
             return totalTransferred;
@@ -671,7 +671,8 @@ OS_FileInfo OS_get_file_info(const char* path) {
 
     info.exists = 1;
     info.size = (U64) fileStat.st_size;
-    info.lastWriteTimestampNs = ((U64) fileStat.st_mtimespec.tv_sec * BILLION(1ULL)) + (U64) fileStat.st_mtimespec.tv_nsec;
+    info.lastWriteTimestampNs = ((U64) fileStat.st_mtimespec.tv_sec * BILLION(1ULL)) + (U64) fileStat.st_mtimespec.
+                                tv_nsec;
     return info;
 }
 
@@ -763,7 +764,7 @@ static void OS_dir_iterate_impl(const char* dirPath, OS_DirIterCallback* callbac
     }
 
     char pathBuffer[PATH_MAX];
-    
+
     struct dirent* entry;
     while ((entry = readdir(dir)) != NULL) {
         if (entry->d_name[0] == '.') {
@@ -849,10 +850,7 @@ static void OS_init() {
     OS_SystemInfo* info = &g_OS_MacOSState.systemInfo;
     info->pageSize = static_cast<U64>(sysconf(_SC_PAGESIZE));
     info->logicalCores = static_cast<U32>(sysconf(_SC_NPROCESSORS_ONLN));
-    
+
     pthread_mutex_init(&g_OS_MacOSState.entityMutex, 0);
     g_OS_MacOSState.osEntityArena = arena_alloc();
 }
-
-
-

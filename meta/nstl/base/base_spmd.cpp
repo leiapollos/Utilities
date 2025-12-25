@@ -42,7 +42,7 @@ static SPMDMembership* spmd_membership() {
 SPMDGroup* spmd_group_create_(Arena* arena, U32 laneCount, const SPMDGroupParameters& params) {
     ASSERT_DEBUG(laneCount != 0 && "laneCount must be non-zero");
     ASSERT_DEBUG(params.broadcastScratchSize != 0 && "broadcastScratchSize must be non-zero");
-    
+
     SPMDGroup* group = ARENA_PUSH_STRUCT(arena, SPMDGroup);
     MEMSET(group, 0, sizeof(SPMDGroup));
     group->laneCount = laneCount;
@@ -61,7 +61,7 @@ void spmd_group_destroy(SPMDGroup* group) {
 void spmd_join_group(SPMDGroup* group, U64 lane) {
     ASSERT_DEBUG(group != nullptr && "group must be valid");
     ASSERT_DEBUG(lane < group->laneCount && "lane out of range");
-    
+
     SPMDMembership* membership = spmd_membership();
     membership->group = group;
     membership->laneId = lane;
@@ -70,11 +70,11 @@ void spmd_join_group(SPMDGroup* group, U64 lane) {
 
 U64 spmd_join_group_auto(SPMDGroup* group) {
     ASSERT_DEBUG(group != nullptr && "group must be valid");
-    
+
     U64 lane = ATOMIC_FETCH_ADD(&group->nextLaneId, 1, MEMORY_ORDER_ACQ_REL);
     ASSERT_DEBUG(lane < group->laneCount && "Too many threads trying to join group");
     if (lane >= group->laneCount) {
-        return (U64)-1;
+        return (U64) - 1;
     }
     spmd_join_group(group, lane);
     return lane;
@@ -166,17 +166,17 @@ struct SPMDRunContext {
 };
 
 static void spmd_run_thread_entry(void* arg) {
-    SPMDRunContext* ctx = (SPMDRunContext*)arg;
-    
+    SPMDRunContext* ctx = (SPMDRunContext*) arg;
+
     thread_context_init();
     DEFER(thread_context_release());
-    
+
     U64 lane = spmd_join_group_auto(ctx->group);
-    if (lane == (U64)-1) {
+    if (lane == (U64) - 1) {
         return;
     }
     DEFER(spmd_group_leave());
-    
+
     ctx->kernel(ctx->kernelParameters);
 }
 
@@ -184,40 +184,35 @@ SPMDGroup* spmd_run_(Arena* arena, const SPMDRunOptions& options) {
     ASSERT_DEBUG(arena != nullptr);
     ASSERT_DEBUG(options.laneCount > 0);
     ASSERT_DEBUG(options.kernel != nullptr);
-    
+
     U32 laneCount = options.laneCount;
-    
+
     SPMDGroup* group = spmd_group_create(arena, laneCount, options.groupParams);
     ASSERT_DEBUG(group != nullptr);
     if (!group) {
         return nullptr;
     }
-    
+
     SPMDRunContext* ctx = ARENA_PUSH_STRUCT(arena, SPMDRunContext);
     ctx->group = group;
     ctx->kernel = options.kernel;
     ctx->kernelParameters = options.kernelParameters;
-    
+
     OS_Handle* threads = ARENA_PUSH_ARRAY(arena, OS_Handle, laneCount);
-    
+
     for (U32 i = 1; i < laneCount; ++i) {
         threads[i] = OS_thread_create(spmd_run_thread_entry, ctx);
-    }
-    
-    {
+    } {
         U64 lane = spmd_join_group_auto(group);
         ASSERT_DEBUG(lane == 0 && "Main thread should be lane 0");
         DEFER(spmd_group_leave());
-        
+
         options.kernel(options.kernelParameters);
     }
-    
+
     for (U32 i = 1; i < laneCount; ++i) {
         OS_thread_join(threads[i]);
     }
-    
+
     return group;
 }
-
-
-

@@ -76,6 +76,3 @@ struct SPMDRunOptions {
 
 SPMDGroup* spmd_run_(Arena* arena, const SPMDRunOptions& options);
 #define spmd_run(arena, ...) spmd_run_(arena, {__VA_ARGS__})
-
-
-
