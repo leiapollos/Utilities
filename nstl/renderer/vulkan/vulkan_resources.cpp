@@ -383,6 +383,156 @@ static void vulkan_destroy_depth_image(RendererVulkan* vulkan) {
 }
 
 // ////////////////////////
+// Texture Image Creation
+
+static RendererVulkanAllocatedImage vulkan_create_image(RendererVulkan* vulkan,
+                                                         VkExtent3D size,
+                                                         VkFormat format,
+                                                         VkImageUsageFlags usage) {
+    RendererVulkanAllocatedImage newImage = {};
+    if (!vulkan || vulkan->device.allocator == 0) {
+        return newImage;
+    }
+
+    newImage.imageFormat = format;
+    newImage.imageExtent = size;
+
+    VkImageCreateInfo imgInfo = vulkan_image_create_info(format, usage, size);
+
+    VmaAllocationCreateInfo allocInfo = {};
+    allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    allocInfo.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    VkResult result = vmaCreateImage(vulkan->device.allocator,
+                                     &imgInfo,
+                                     &allocInfo,
+                                     &newImage.image,
+                                     &newImage.allocation,
+                                     0);
+    if (result != VK_SUCCESS) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create image: {}", result);
+        return newImage;
+    }
+
+    VkImageAspectFlags aspectFlag = VK_IMAGE_ASPECT_COLOR_BIT;
+    if (format == VK_FORMAT_D32_SFLOAT) {
+        aspectFlag = VK_IMAGE_ASPECT_DEPTH_BIT;
+    }
+
+    VkImageViewCreateInfo viewInfo = vulkan_image_view_create_info(format, newImage.image, aspectFlag);
+
+    result = vkCreateImageView(vulkan->device.device, &viewInfo, 0, &newImage.imageView);
+    if (result != VK_SUCCESS) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create image view: {}", result);
+        vmaDestroyImage(vulkan->device.allocator, newImage.image, newImage.allocation);
+        newImage.image = VK_NULL_HANDLE;
+        newImage.allocation = 0;
+        return newImage;
+    }
+
+    return newImage;
+}
+
+static RendererVulkanAllocatedImage vulkan_create_image_data(RendererVulkan* vulkan,
+                                                              void* pixels,
+                                                              VkExtent3D size,
+                                                              VkFormat format,
+                                                              VkImageUsageFlags usage) {
+    RendererVulkanAllocatedImage newImage = {};
+    if (!vulkan || !pixels) {
+        return newImage;
+    }
+
+    U64 dataSize = (U64)size.width * (U64)size.height * (U64)size.depth * 4;
+
+    RendererVulkanAllocatedBuffer stagingBuffer = vulkan_create_buffer(
+        vulkan->device.allocator,
+        dataSize,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VMA_MEMORY_USAGE_CPU_TO_GPU);
+
+    MEMMOVE(stagingBuffer.info.pMappedData, pixels, dataSize);
+
+    newImage = vulkan_create_image(vulkan,
+                                   size,
+                                   format,
+                                   usage | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+
+    if (newImage.image == VK_NULL_HANDLE) {
+        vulkan_destroy_buffer(vulkan->device.allocator, &stagingBuffer);
+        return newImage;
+    }
+
+    VkCommandBuffer cmd = vulkan_immediate_begin(vulkan, &vulkan->immSubmit);
+    if (cmd != VK_NULL_HANDLE) {
+        vulkan_transition_image(cmd, newImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+        VkBufferImageCopy copyRegion = {};
+        copyRegion.bufferOffset = 0;
+        copyRegion.bufferRowLength = 0;
+        copyRegion.bufferImageHeight = 0;
+        copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copyRegion.imageSubresource.mipLevel = 0;
+        copyRegion.imageSubresource.baseArrayLayer = 0;
+        copyRegion.imageSubresource.layerCount = 1;
+        copyRegion.imageExtent = size;
+
+        vkCmdCopyBufferToImage(cmd,
+                               stagingBuffer.buffer,
+                               newImage.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               1,
+                               &copyRegion);
+
+        vulkan_transition_image(cmd, newImage.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+        vulkan_immediate_end(vulkan, &vulkan->immSubmit);
+    }
+
+    vulkan_destroy_buffer(vulkan->device.allocator, &stagingBuffer);
+
+    return newImage;
+}
+
+static void vulkan_destroy_image(RendererVulkan* vulkan, RendererVulkanAllocatedImage* img) {
+    if (!vulkan || !img) {
+        return;
+    }
+    if (img->imageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(vulkan->device.device, img->imageView, 0);
+    }
+    if (img->image != VK_NULL_HANDLE) {
+        vmaDestroyImage(vulkan->device.allocator, img->image, img->allocation);
+    }
+    img->image = VK_NULL_HANDLE;
+    img->imageView = VK_NULL_HANDLE;
+    img->allocation = 0;
+}
+
+static VkSampler vulkan_create_sampler(VulkanDevice* device, VkFilter filter) {
+    if (!device || device->device == VK_NULL_HANDLE) {
+        return VK_NULL_HANDLE;
+    }
+
+    VkSamplerCreateInfo samplerInfo = {};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = filter;
+    samplerInfo.minFilter = filter;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+
+    VkSampler sampler = VK_NULL_HANDLE;
+    VkResult result = vkCreateSampler(device->device, &samplerInfo, 0, &sampler);
+    if (result != VK_SUCCESS) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create sampler: {}", result);
+        return VK_NULL_HANDLE;
+    }
+
+    return sampler;
+}
+
+// ////////////////////////
 // Mesh Upload
 
 static GPUMeshBuffers vulkan_upload_mesh(RendererVulkan* vulkan,

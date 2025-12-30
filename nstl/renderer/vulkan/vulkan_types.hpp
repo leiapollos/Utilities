@@ -85,12 +85,17 @@ struct VulkanSwapchain {
     VkExtent2D extent;
 };
 
+struct VulkanDescriptorAllocator;
+struct RendererVulkanAllocatedBuffer;
+
 struct RendererVulkanFrame {
     VkCommandPool commandPool;
     VkCommandBuffer commandBuffer;
     VkSemaphore swapchainSemaphore;
     VkFence renderFence;
     U32 imageIndex;
+    VulkanDescriptorAllocator* frameDescriptors;
+    RendererVulkanAllocatedBuffer* sceneBuffer;
 };
 
 struct VulkanCommands {
@@ -143,13 +148,55 @@ struct DrawCommand {
     F32 alpha;
 };
 
-struct VulkanDescriptorAllocator {
-    struct PoolSizeRatio {
-        VkDescriptorType type;
-        F32 ratio;
-    };
+// ////////////////////////
+// Scene Data
 
-    VkDescriptorPool currentPool;
+struct SceneData {
+    Mat4x4F32 view;
+    Mat4x4F32 proj;
+    Mat4x4F32 viewproj;
+    Vec4F32 ambientColor;
+    Vec4F32 sunDirection;
+    Vec4F32 sunColor;
+};
+
+// ////////////////////////
+// Material Types
+
+typedef enum MaterialType {
+    MaterialType_Opaque,
+    MaterialType_Transparent,
+    MaterialType_COUNT
+} MaterialType;
+
+struct MaterialConstants {
+    Vec4F32 colorFactor;
+    Vec4F32 metalRoughFactor;
+    Vec4F32 _pad[14];
+};
+
+struct Material {
+    VkPipeline pipeline;
+    VkPipelineLayout layout;
+    VkDescriptorSet descriptorSet;
+    MaterialType type;
+};
+
+static const U32 VULKAN_DESCRIPTOR_ALLOCATOR_MAX_RATIOS = 8;
+
+struct VulkanDescriptorAllocator {
+    Arena* arena;
+    
+    VkDescriptorType types[VULKAN_DESCRIPTOR_ALLOCATOR_MAX_RATIOS];
+    F32 ratios[VULKAN_DESCRIPTOR_ALLOCATOR_MAX_RATIOS];
+    U32 ratioCount;
+    
+    VkDescriptorPool* pools;
+    U32 poolCount;
+    U32 poolCapacity;
+    U32 currentPoolIndex;
+    
+    U32 setsPerPool;
 };
 
 struct RendererVulkanShader {
@@ -206,6 +253,26 @@ struct RendererVulkan {
     DrawCommand* drawCommands;
     U32 drawCommandCount;
     U32 drawCommandCapacity;
+    
+    RendererVulkanAllocatedImage whiteImage;
+    RendererVulkanAllocatedImage blackImage;
+    RendererVulkanAllocatedImage errorImage;
+    
+    VkSampler samplerLinear;
+    VkSampler samplerNearest;
+    
+    VkDescriptorSetLayout sceneDataLayout;
+    VkDescriptorSetLayout materialLayout;
+    
+    VkPipelineLayout materialPipelineLayout;
+    VkPipeline opaquePipeline;
+    VkPipeline transparentPipeline;
+    
+    VkDescriptorPool globalDescriptorPool;
+    Material defaultMaterial;
+    RendererVulkanAllocatedBuffer defaultMaterialBuffer;
+    
+    SceneData sceneData;
 
     VkDescriptorPool imguiDescriptorPool;
     ImGuiContext* imguiContext;

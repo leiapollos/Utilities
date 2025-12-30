@@ -10,6 +10,7 @@
 #include "vulkan_commands.cpp"
 #include "vulkan_resources.cpp"
 #include "vulkan_pipelines.cpp"
+#include "vulkan_materials.cpp"
 #include "renderer_vulkan_imgui.cpp" 
 #include "vulkan_swapchain.cpp"
 
@@ -52,6 +53,37 @@ B32 renderer_init(Arena* arena, Renderer* renderer) {
     INIT_SUCCESS(vulkan_init_immediate_submit(vulkan, &vulkan->immSubmit) && "Failed to initialize immediate submit");
     
     INIT_SUCCESS(vulkan_init_draw_pipeline(vulkan) && "Failed to initialize Vulkan draw pipeline");
+    
+    INIT_SUCCESS(vulkan_init_default_resources(vulkan) && "Failed to initialize default resources");
+
+    VkDescriptorType frameDescTypes[] = {
+        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+    };
+    F32 frameDescRatios[] = { 3.0f, 3.0f, 3.0f, 4.0f };
+
+    for (U32 i = 0; i < VULKAN_FRAME_OVERLAP; ++i) {
+        RendererVulkanFrame* frame = &vulkan->commands.frames[i];
+        
+        frame->frameDescriptors = ARENA_PUSH_STRUCT(arena, VulkanDescriptorAllocator);
+        ASSERT_ALWAYS(frame->frameDescriptors != 0);
+        INIT_SUCCESS(vulkan_descriptor_allocator_init(&vulkan->device,
+                                                       frame->frameDescriptors,
+                                                       arena,
+                                                       1000,
+                                                       frameDescTypes,
+                                                       frameDescRatios,
+                                                       4) && "Failed to init per-frame descriptor allocator");
+        
+        frame->sceneBuffer = ARENA_PUSH_STRUCT(arena, RendererVulkanAllocatedBuffer);
+        ASSERT_ALWAYS(frame->sceneBuffer != 0);
+        *frame->sceneBuffer = vulkan_create_buffer(vulkan->device.allocator,
+                                                    sizeof(SceneData),
+                                                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                                    VMA_MEMORY_USAGE_CPU_TO_GPU);
+    }
 
     vulkan->frameArena = arena_alloc(.arenaSize = MB(1));
     ASSERT_ALWAYS(vulkan->frameArena != 0);
@@ -65,6 +97,32 @@ B32 renderer_init(Arena* arena, Renderer* renderer) {
     vulkan->drawCommands = 0;
     vulkan->drawCommandCount = 0;
     vulkan->drawCommandCapacity = 0;
+    
+    MEMSET(&vulkan->sceneData, 0, sizeof(vulkan->sceneData));
+    vulkan->sceneData.view.v[0][0] = 1.0f;
+    vulkan->sceneData.view.v[1][1] = 1.0f;
+    vulkan->sceneData.view.v[2][2] = 1.0f;
+    vulkan->sceneData.view.v[3][3] = 1.0f;
+    vulkan->sceneData.proj.v[0][0] = 1.0f;
+    vulkan->sceneData.proj.v[1][1] = 1.0f;
+    vulkan->sceneData.proj.v[2][2] = 1.0f;
+    vulkan->sceneData.proj.v[3][3] = 1.0f;
+    vulkan->sceneData.viewproj.v[0][0] = 1.0f;
+    vulkan->sceneData.viewproj.v[1][1] = 1.0f;
+    vulkan->sceneData.viewproj.v[2][2] = 1.0f;
+    vulkan->sceneData.viewproj.v[3][3] = 1.0f;
+    vulkan->sceneData.ambientColor.r = 0.1f;
+    vulkan->sceneData.ambientColor.g = 0.1f;
+    vulkan->sceneData.ambientColor.b = 0.1f;
+    vulkan->sceneData.ambientColor.a = 1.0f;
+    vulkan->sceneData.sunDirection.x = 0.0f;
+    vulkan->sceneData.sunDirection.y = 1.0f;
+    vulkan->sceneData.sunDirection.z = 0.5f;
+    vulkan->sceneData.sunDirection.w = 0.0f;
+    vulkan->sceneData.sunColor.r = 1.0f;
+    vulkan->sceneData.sunColor.g = 1.0f;
+    vulkan->sceneData.sunColor.b = 1.0f;
+    vulkan->sceneData.sunColor.a = 1.0f;
 
     LOG_INFO(VULKAN_LOG_DOMAIN, "Vulkan renderer initialized successfully");
 
@@ -98,6 +156,18 @@ void renderer_shutdown(Renderer* renderer) {
     }
     vulkan->meshCount = 0;
     vulkan->meshFreeHead = MESH_FREE_LIST_END;
+    
+    vulkan_destroy_default_resources(vulkan);
+    
+    for (U32 i = 0; i < VULKAN_FRAME_OVERLAP; ++i) {
+        RendererVulkanFrame* frame = &vulkan->commands.frames[i];
+        if (frame->frameDescriptors) {
+            vulkan_descriptor_allocator_destroy(&vulkan->device, frame->frameDescriptors);
+        }
+        if (frame->sceneBuffer) {
+            vulkan_destroy_buffer(vulkan->device.allocator, frame->sceneBuffer);
+        }
+    }
 
     if (vulkan->frameArena) {
         arena_release(vulkan->frameArena);
@@ -144,7 +214,14 @@ void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, 
         return;
     }
     
-    U32 imageIndex = vulkan->commands.frames[vulkan->commands.currentFrameIndex].imageIndex;
+    RendererVulkanFrame* frame = &vulkan->commands.frames[vulkan->commands.currentFrameIndex];
+    
+    vulkan_descriptor_allocator_clear(&vulkan->device, frame->frameDescriptors);
+    
+    SceneData* mappedScene = (SceneData*)frame->sceneBuffer->info.pMappedData;
+    *mappedScene = vulkan->sceneData;
+    
+    U32 imageIndex = frame->imageIndex;
     RendererVulkanSwapchainImage* image = &vulkan->swapchain.images[imageIndex];
 
     B32 hasDrawImage = (vulkan->drawImage.image != VK_NULL_HANDLE) &&
@@ -159,8 +236,8 @@ void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, 
 
         vulkan_dispatch_gradient(vulkan, cmd, color);
 
-        if (vulkan->pipelines.meshPipeline == VK_NULL_HANDLE) {
-            vulkan_init_mesh_pipeline(vulkan);
+        if (vulkan->opaquePipeline == VK_NULL_HANDLE) {
+            vulkan_init_material_pipelines(vulkan);
         }
 
         if (vulkan->depthImage.image == VK_NULL_HANDLE) {
@@ -169,7 +246,7 @@ void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, 
         }
 
         B32 hasDrawCommands = (vulkan->drawCommandCount > 0);
-        if (hasDrawCommands && vulkan->pipelines.meshPipeline != VK_NULL_HANDLE) {
+        if (hasDrawCommands && vulkan->opaquePipeline != VK_NULL_HANDLE) {
             vulkan_transition_image(cmd,
                                     vulkan->drawImage.image,
                                     VK_IMAGE_LAYOUT_GENERAL,
@@ -203,6 +280,19 @@ void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, 
             renderingInfo.pDepthAttachment = &depthAttachment;
 
             vkCmdBeginRendering(cmd, &renderingInfo);
+            
+            VkDescriptorSet sceneDescSet;
+            if (vulkan_descriptor_allocator_allocate(&vulkan->device, frame->frameDescriptors,
+                                                      vulkan->sceneDataLayout, &sceneDescSet)) {
+                VulkanDescriptorWriter writer = {};
+                vulkan_descriptor_writer_write_buffer(&writer, 0, frame->sceneBuffer->buffer,
+                                                       sizeof(SceneData), 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+                vulkan_descriptor_writer_update_set(&vulkan->device, &writer, sceneDescSet);
+                
+                VkDescriptorSet descSets[2] = { sceneDescSet, vulkan->defaultMaterial.descriptorSet };
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        vulkan->materialPipelineLayout, 0, 2, descSets, 0, 0);
+            }
 
             for (U32 i = 0; i < vulkan->drawCommandCount; ++i) {
                 DrawCommand* drawCmd = &vulkan->drawCommands[i];

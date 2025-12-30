@@ -323,10 +323,9 @@ static B32 vulkan_init_draw_pipeline(RendererVulkan* vulkan) {
     }
 
     {
-        VulkanDescriptorAllocator::PoolSizeRatio ratios[] = {
-            { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1.0f }
-        };
-        if (!vulkan_create_descriptor_pool(vulkan->device.device, ratios, 1, 10, &descriptorPool)) {
+        VkDescriptorType types[] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE };
+        F32 ratios[] = { 1.0f };
+        if (!vulkan_create_descriptor_pool_(vulkan->device.device, types, ratios, 1, 10, &descriptorPool)) {
             goto cleanup_fail;
         }
     }
@@ -554,10 +553,15 @@ cleanup_fail:
 
 static void vulkan_draw_mesh(RendererVulkan* vulkan, VkCommandBuffer cmd, GPUMeshBuffers* mesh, 
                              Mat4x4F32 worldMatrix, U32 indexCount, F32 alpha) {
-    if (!vulkan || cmd == VK_NULL_HANDLE || !mesh) return;
-    if (vulkan->pipelines.meshPipeline == VK_NULL_HANDLE) return;
+    if (!vulkan || cmd == VK_NULL_HANDLE || !mesh) {
+        return;
+    }
+    if (vulkan->opaquePipeline == VK_NULL_HANDLE) {
+        return;
+    }
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vulkan->pipelines.meshPipeline);
+    VkPipeline pipeline = (alpha < 1.0f) ? vulkan->transparentPipeline : vulkan->opaquePipeline;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
     VkViewport viewport = {};
     viewport.x = 0;
@@ -581,7 +585,7 @@ static void vulkan_draw_mesh(RendererVulkan* vulkan, VkCommandBuffer cmd, GPUMes
     pushConstants.alpha = alpha;
     
     vkCmdPushConstants(cmd,
-                       vulkan->pipelines.meshPipelineLayout,
+                       vulkan->materialPipelineLayout,
                        VK_SHADER_STAGE_VERTEX_BIT, 
                        0,
                        sizeof(GPUDrawPushConstants),

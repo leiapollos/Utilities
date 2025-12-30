@@ -135,6 +135,10 @@ U32 mesh_load_from_file(Arena* arena, const char* path, MeshAssetData** outMeshe
                     cgltf_accessor_read_float(uvAccessor, i, uv, 2);
                     v->uvX = uv[0];
                     v->uvY = uv[1];
+                } else {
+                    LOG_DEBUG("mesh_loader", "Missing UVs for vertex {}", i);
+                    v->uvX = v->position.x * 0.5f; 
+                    v->uvY = v->position.y * 0.5f;
                 }
                 if (colorAccessor) {
                     cgltf_accessor_read_float(colorAccessor, i, &v->color.r, 4);
