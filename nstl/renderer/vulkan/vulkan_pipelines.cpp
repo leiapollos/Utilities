@@ -115,9 +115,6 @@ static B32 vulkan_load_shader_module(VulkanDevice* device, const char* filePath,
 // Pipeline Builder
 
 struct PipelineBuilder {
-    // Not implementing full builder for now as we only have 1 compute pipeline
-    // But following plan structure for future expansion
-    
     // Dynamic Rendering Info
     VkPipelineRenderingCreateInfo renderingInfo;
     VkFormat colorAttachmentFormats[8];
@@ -139,6 +136,160 @@ static void pipeline_builder_clear(PipelineBuilder* builder) {
     MEMSET(builder, 0, sizeof(PipelineBuilder));
 }
 
+static void pipeline_builder_set_shaders(PipelineBuilder* builder, VkShaderModule vertShader, VkShaderModule fragShader) {
+    builder->shaderStageCount = 0;
+    
+    if (vertShader != VK_NULL_HANDLE) {
+        VkPipelineShaderStageCreateInfo* stage = &builder->shaderStages[builder->shaderStageCount++];
+        stage->sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stage->stage = VK_SHADER_STAGE_VERTEX_BIT;
+        stage->module = vertShader;
+        stage->pName = "main";
+    }
+    
+    if (fragShader != VK_NULL_HANDLE) {
+        VkPipelineShaderStageCreateInfo* stage = &builder->shaderStages[builder->shaderStageCount++];
+        stage->sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stage->stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stage->module = fragShader;
+        stage->pName = "main";
+    }
+}
+
+static void pipeline_builder_set_input_topology(PipelineBuilder* builder, VkPrimitiveTopology topology) {
+    builder->inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    builder->inputAssembly.topology = topology;
+    builder->inputAssembly.primitiveRestartEnable = VK_FALSE;
+}
+
+static void pipeline_builder_set_polygon_mode(PipelineBuilder* builder, VkPolygonMode mode) {
+    builder->rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    builder->rasterizer.polygonMode = mode;
+    builder->rasterizer.lineWidth = 1.0f;
+}
+
+static void pipeline_builder_set_cull_mode(PipelineBuilder* builder, VkCullModeFlags cullMode, VkFrontFace frontFace) {
+    builder->rasterizer.cullMode = cullMode;
+    builder->rasterizer.frontFace = frontFace;
+}
+
+static void pipeline_builder_set_multisampling_none(PipelineBuilder* builder) {
+    builder->multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    builder->multisampling.sampleShadingEnable = VK_FALSE;
+    builder->multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    builder->multisampling.minSampleShading = 1.0f;
+    builder->multisampling.pSampleMask = 0;
+    builder->multisampling.alphaToCoverageEnable = VK_FALSE;
+    builder->multisampling.alphaToOneEnable = VK_FALSE;
+}
+
+static void pipeline_builder_disable_blending(PipelineBuilder* builder) {
+    builder->colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                                   VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    builder->colorBlendAttachment.blendEnable = VK_FALSE;
+}
+
+static void pipeline_builder_enable_blending_additive(PipelineBuilder* builder) {
+    builder->colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                                   VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    builder->colorBlendAttachment.blendEnable = VK_TRUE;
+    builder->colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    builder->colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    builder->colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+    builder->colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    builder->colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    builder->colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+}
+
+static void pipeline_builder_enable_blending_alphablend(PipelineBuilder* builder) {
+    builder->colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                                   VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    builder->colorBlendAttachment.blendEnable = VK_TRUE;
+    builder->colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    builder->colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    builder->colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+    builder->colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    builder->colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    builder->colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+}
+
+static void pipeline_builder_set_color_attachment_format(PipelineBuilder* builder, VkFormat format) {
+    builder->colorAttachmentFormats[0] = format;
+    builder->renderingInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    builder->renderingInfo.colorAttachmentCount = 1;
+    builder->renderingInfo.pColorAttachmentFormats = builder->colorAttachmentFormats;
+}
+
+static void pipeline_builder_set_depth_format(PipelineBuilder* builder, VkFormat format) {
+    builder->renderingInfo.depthAttachmentFormat = format;
+}
+
+static void pipeline_builder_enable_depth_test(PipelineBuilder* builder, B32 depthWriteEnable, VkCompareOp op) {
+    builder->depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    builder->depthStencil.depthTestEnable = VK_TRUE;
+    builder->depthStencil.depthWriteEnable = depthWriteEnable ? VK_TRUE : VK_FALSE;
+    builder->depthStencil.depthCompareOp = op;
+    builder->depthStencil.depthBoundsTestEnable = VK_FALSE;
+    builder->depthStencil.stencilTestEnable = VK_FALSE;
+    builder->depthStencil.minDepthBounds = 0.0f;
+    builder->depthStencil.maxDepthBounds = 1.0f;
+}
+
+static void pipeline_builder_disable_depth_test(PipelineBuilder* builder) {
+    builder->depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    builder->depthStencil.depthTestEnable = VK_FALSE;
+    builder->depthStencil.depthWriteEnable = VK_FALSE;
+    builder->depthStencil.depthCompareOp = VK_COMPARE_OP_NEVER;
+    builder->depthStencil.depthBoundsTestEnable = VK_FALSE;
+    builder->depthStencil.stencilTestEnable = VK_FALSE;
+}
+
+static VkPipeline pipeline_builder_build(PipelineBuilder* builder, VkDevice device) {
+    VkPipelineViewportStateCreateInfo viewportState = {};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+
+    VkPipelineColorBlendStateCreateInfo colorBlending = {};
+    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.logicOpEnable = VK_FALSE;
+    colorBlending.logicOp = VK_LOGIC_OP_COPY;
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &builder->colorBlendAttachment;
+
+    VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
+    vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+    VkDynamicState dynamicStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkPipelineDynamicStateCreateInfo dynamicInfo = {};
+    dynamicInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicInfo.dynamicStateCount = 2;
+    dynamicInfo.pDynamicStates = dynamicStates;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo = {};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.pNext = &builder->renderingInfo;
+    pipelineInfo.stageCount = builder->shaderStageCount;
+    pipelineInfo.pStages = builder->shaderStages;
+    pipelineInfo.pVertexInputState = &vertexInputInfo;
+    pipelineInfo.pInputAssemblyState = &builder->inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &builder->rasterizer;
+    pipelineInfo.pMultisampleState = &builder->multisampling;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDepthStencilState = &builder->depthStencil;
+    pipelineInfo.pDynamicState = &dynamicInfo;
+    pipelineInfo.layout = builder->pipelineLayout;
+
+    VkPipeline newPipeline = VK_NULL_HANDLE;
+    VkResult result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, 0, &newPipeline);
+    if (result != VK_SUCCESS) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create graphics pipeline: {}", result);
+        return VK_NULL_HANDLE;
+    }
+    return newPipeline;
+}
+
 static B32 vulkan_init_draw_pipeline(RendererVulkan* vulkan) {
     if (!vulkan || vulkan->device.device == VK_NULL_HANDLE) {
         return 0;
@@ -154,45 +305,45 @@ static B32 vulkan_init_draw_pipeline(RendererVulkan* vulkan) {
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkShaderModule shaderModule = VK_NULL_HANDLE;
-    B32 success = 0;
 
-    do {
-        // Descriptor Set Layout
-        VkDescriptorSetLayoutBinding binding = {};
-        binding.binding = 0u;
-        binding.descriptorCount = 1u;
-        binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        binding.pImmutableSamplers = 0;
+    VkDescriptorSetLayoutBinding binding = {};
+    binding.binding = 0u;
+    binding.descriptorCount = 1u;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    binding.pImmutableSamplers = 0;
 
-        VkDescriptorSetLayoutCreateInfo descriptorLayoutInfo = {};
-        descriptorLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        descriptorLayoutInfo.bindingCount = 1u;
-        descriptorLayoutInfo.pBindings = &binding;
+    VkDescriptorSetLayoutCreateInfo descriptorLayoutInfo = {};
+    descriptorLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    descriptorLayoutInfo.bindingCount = 1u;
+    descriptorLayoutInfo.pBindings = &binding;
 
-        VkResult descriptorLayoutResult =
-            vkCreateDescriptorSetLayout(vulkan->device.device, &descriptorLayoutInfo, 0, &descriptorLayout);
-        if (descriptorLayoutResult != VK_SUCCESS) break;
+    if (vkCreateDescriptorSetLayout(vulkan->device.device, &descriptorLayoutInfo, 0, &descriptorLayout) != VK_SUCCESS) {
+        goto cleanup_fail;
+    }
 
-        // Descriptor Pool
+    {
         VulkanDescriptorAllocator::PoolSizeRatio ratios[] = {
             { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1.0f }
         };
         if (!vulkan_create_descriptor_pool(vulkan->device.device, ratios, 1, 10, &descriptorPool)) {
-            break;
+            goto cleanup_fail;
         }
+    }
 
-        // Allocate Set
+    {
         VkDescriptorSetAllocateInfo allocInfo = {};
         allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         allocInfo.descriptorPool = descriptorPool;
         allocInfo.descriptorSetCount = 1u;
         allocInfo.pSetLayouts = &descriptorLayout;
 
-        VkResult allocResult = vkAllocateDescriptorSets(vulkan->device.device, &allocInfo, &descriptorSet);
-        if (allocResult != VK_SUCCESS) break;
+        if (vkAllocateDescriptorSets(vulkan->device.device, &allocInfo, &descriptorSet) != VK_SUCCESS) {
+            goto cleanup_fail;
+        }
+    }
 
-        // Pipeline Layout
+    {
         VkPushConstantRange pushConstantRange = {};
         pushConstantRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         pushConstantRange.offset = 0u;
@@ -205,16 +356,16 @@ static B32 vulkan_init_draw_pipeline(RendererVulkan* vulkan) {
         pipelineLayoutInfo.pushConstantRangeCount = 1u;
         pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 
-        VkResult pipelineLayoutResult =
-            vkCreatePipelineLayout(vulkan->device.device, &pipelineLayoutInfo, 0, &pipelineLayout);
-        if (pipelineLayoutResult != VK_SUCCESS) break;
-
-        // Shader
-        const char* shaderFilePath = "shaders/gradient.comp.spv";
-        if (!vulkan_load_shader_module(&vulkan->device, shaderFilePath, &shaderModule)) {
-            break;
+        if (vkCreatePipelineLayout(vulkan->device.device, &pipelineLayoutInfo, 0, &pipelineLayout) != VK_SUCCESS) {
+            goto cleanup_fail;
         }
+    }
 
+    if (!vulkan_load_shader_module(&vulkan->device, "shaders/gradient.comp.spv", &shaderModule)) {
+        goto cleanup_fail;
+    }
+
+    {
         VkPipelineShaderStageCreateInfo stageInfo = {};
         stageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -227,20 +378,12 @@ static B32 vulkan_init_draw_pipeline(RendererVulkan* vulkan) {
         pipelineInfo.layout = pipelineLayout;
         pipelineInfo.stage = stageInfo;
         
-        VkResult pipelineResult = vkCreateComputePipelines(vulkan->device.device, VK_NULL_HANDLE, 1u, &pipelineInfo, 0, &pipeline);
-        if (pipelineResult != VK_SUCCESS) break;
-
-        success = 1;
-    } while (0);
-
-    if (shaderModule != VK_NULL_HANDLE) {
-        vkDestroyShaderModule(vulkan->device.device, shaderModule, 0);
+        if (vkCreateComputePipelines(vulkan->device.device, VK_NULL_HANDLE, 1u, &pipelineInfo, 0, &pipeline) != VK_SUCCESS) {
+            goto cleanup_fail;
+        }
     }
 
-    if (!success) {
-        // Cleanup...
-        return 0;
-    }
+    vkDestroyShaderModule(vulkan->device.device, shaderModule, 0);
 
     vulkan->pipelines.drawImageDescriptorLayout = descriptorLayout;
     vulkan->pipelines.gradientPipelineLayout = pipelineLayout;
@@ -256,6 +399,24 @@ static B32 vulkan_init_draw_pipeline(RendererVulkan* vulkan) {
     vkdefer_destroy_VkPipeline(&vulkan->deferCtx.globalBuf, pipeline);
 
     return 1;
+
+cleanup_fail:
+    if (shaderModule != VK_NULL_HANDLE) {
+        vkDestroyShaderModule(vulkan->device.device, shaderModule, 0);
+    }
+    if (pipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(vulkan->device.device, pipeline, 0);
+    }
+    if (pipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(vulkan->device.device, pipelineLayout, 0);
+    }
+    if (descriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(vulkan->device.device, descriptorPool, 0);
+    }
+    if (descriptorLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(vulkan->device.device, descriptorLayout, 0);
+    }
+    return 0;
 }
 
 static B32 vulkan_update_draw_pipeline(RendererVulkan* vulkan) {
@@ -297,6 +458,139 @@ static void vulkan_dispatch_gradient(RendererVulkan* vulkan, VkCommandBuffer cmd
 }
 
 // ////////////////////////
+// Mesh Pipeline
+
+static B32 vulkan_init_mesh_pipeline(RendererVulkan* vulkan) {
+    if (!vulkan || vulkan->device.device == VK_NULL_HANDLE) {
+        return 0;
+    }
+
+    if (vulkan->pipelines.meshPipeline != VK_NULL_HANDLE) {
+        return 1;
+    }
+
+    VkShaderModule vertShader = VK_NULL_HANDLE;
+    VkShaderModule fragShader = VK_NULL_HANDLE;
+    VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+    VkPipeline pipeline = VK_NULL_HANDLE;
+
+    if (!vulkan_load_shader_module(&vulkan->device, "shaders/mesh.vert.spv", &vertShader)) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to load mesh vertex shader");
+        goto cleanup_fail;
+    }
+
+    if (!vulkan_load_shader_module(&vulkan->device, "shaders/mesh.frag.spv", &fragShader)) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to load mesh fragment shader");
+        goto cleanup_fail;
+    }
+
+    {
+        VkPushConstantRange pushConstantRange = {};
+        pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        pushConstantRange.offset = 0;
+        pushConstantRange.size = sizeof(GPUDrawPushConstants);
+
+        VkPipelineLayoutCreateInfo layoutInfo = {};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layoutInfo.setLayoutCount = 0;
+        layoutInfo.pushConstantRangeCount = 1;
+        layoutInfo.pPushConstantRanges = &pushConstantRange;
+
+        if (vkCreatePipelineLayout(vulkan->device.device, &layoutInfo, 0, &pipelineLayout) != VK_SUCCESS) {
+            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create mesh pipeline layout");
+            goto cleanup_fail;
+        }
+    }
+
+    {
+        PipelineBuilder builder;
+        pipeline_builder_clear(&builder);
+        pipeline_builder_set_shaders(&builder, vertShader, fragShader);
+        pipeline_builder_set_input_topology(&builder, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        pipeline_builder_set_polygon_mode(&builder, VK_POLYGON_MODE_FILL);
+        pipeline_builder_set_cull_mode(&builder, VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
+        pipeline_builder_set_multisampling_none(&builder);
+        pipeline_builder_enable_blending_alphablend(&builder);
+        pipeline_builder_enable_depth_test(&builder, 1, VK_COMPARE_OP_GREATER_OR_EQUAL);
+        pipeline_builder_set_color_attachment_format(&builder, vulkan->drawImage.imageFormat != VK_FORMAT_UNDEFINED 
+            ? vulkan->drawImage.imageFormat 
+            : VK_FORMAT_R16G16B16A16_SFLOAT);
+        pipeline_builder_set_depth_format(&builder, VK_FORMAT_D32_SFLOAT);
+        builder.pipelineLayout = pipelineLayout;
+
+        pipeline = pipeline_builder_build(&builder, vulkan->device.device);
+        if (pipeline == VK_NULL_HANDLE) {
+            goto cleanup_fail;
+        }
+    }
+
+    vkDestroyShaderModule(vulkan->device.device, vertShader, 0);
+    vkDestroyShaderModule(vulkan->device.device, fragShader, 0);
+
+    vulkan->pipelines.meshPipelineLayout = pipelineLayout;
+    vulkan->pipelines.meshPipeline = pipeline;
+
+    vkdefer_destroy_VkPipelineLayout(&vulkan->deferCtx.globalBuf, pipelineLayout);
+    vkdefer_destroy_VkPipeline(&vulkan->deferCtx.globalBuf, pipeline);
+
+    LOG_INFO(VULKAN_LOG_DOMAIN, "Mesh graphics pipeline initialized");
+    return 1;
+
+cleanup_fail:
+    if (vertShader != VK_NULL_HANDLE) {
+        vkDestroyShaderModule(vulkan->device.device, vertShader, 0);
+    }
+    if (fragShader != VK_NULL_HANDLE) {
+        vkDestroyShaderModule(vulkan->device.device, fragShader, 0);
+    }
+    if (pipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(vulkan->device.device, pipeline, 0);
+    }
+    if (pipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(vulkan->device.device, pipelineLayout, 0);
+    }
+    return 0;
+}
+
+static void vulkan_draw_mesh(RendererVulkan* vulkan, VkCommandBuffer cmd, GPUMeshBuffers* mesh, 
+                             Mat4x4F32 worldMatrix, U32 indexCount, F32 alpha) {
+    if (!vulkan || cmd == VK_NULL_HANDLE || !mesh) return;
+    if (vulkan->pipelines.meshPipeline == VK_NULL_HANDLE) return;
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vulkan->pipelines.meshPipeline);
+
+    VkViewport viewport = {};
+    viewport.x = 0;
+    viewport.y = 0;
+    viewport.width = (F32)vulkan->drawExtent.width;
+    viewport.height = (F32)vulkan->drawExtent.height;
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor = {};
+    scissor.offset.x = 0;
+    scissor.offset.y = 0;
+    scissor.extent.width = vulkan->drawExtent.width;
+    scissor.extent.height = vulkan->drawExtent.height;
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    GPUDrawPushConstants pushConstants = {};
+    pushConstants.worldMatrix = worldMatrix;
+    pushConstants.vertexBuffer = mesh->vertexBufferAddress;
+    pushConstants.alpha = alpha;
+    
+    vkCmdPushConstants(cmd,
+                       vulkan->pipelines.meshPipelineLayout,
+                       VK_SHADER_STAGE_VERTEX_BIT, 
+                       0,
+                       sizeof(GPUDrawPushConstants),
+                       &pushConstants);
+    
+    vkCmdBindIndexBuffer(cmd, mesh->indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
+}
+
 // Shader Compilation (DXC)
 
 B32 renderer_vulkan_compile_shader_to_result(RendererVulkan* vulkan, Arena* arena, StringU8 shaderPath,
@@ -375,7 +669,16 @@ B32 renderer_vulkan_compile_shader_to_result(RendererVulkan* vulkan, Arena* aren
         }
     }
 
-    if (!isCompute && shaderPath.size >= 8) {
+    B32 isFragment = 0;
+    if (!isCompute && shaderPath.size >= 10) {
+        StringU8 fragSuffix = str8((const char*) shaderPath.data + shaderPath.size - 10, 10);
+        if (str8_equal(fragSuffix, str8(".frag.hlsl"))) {
+            targetProfile = L"ps_6_0";
+            isFragment = 1;
+        }
+    }
+
+    if (!isCompute && !isFragment && shaderPath.size >= 8) {
         for (U64 i = 0; i <= shaderPath.size - 8; ++i) {
             StringU8 substr = str8((const char*) shaderPath.data + i, 8);
             if (str8_equal(substr, str8("fragment"))) {

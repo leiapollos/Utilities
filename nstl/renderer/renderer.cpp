@@ -107,6 +107,41 @@ void renderer_on_window_resized(Renderer* renderer, U32 width, U32 height) {
 #endif
 }
 
+MeshHandle renderer_upload_mesh(Renderer* renderer, const MeshAssetData* meshData) {
+    if (!renderer || !renderer->backendData || !meshData) {
+        return MESH_HANDLE_INVALID;
+    }
+
+#if defined(RENDERER_BACKEND_VULKAN)
+    RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
+    return renderer_vulkan_upload_mesh(vulkan, meshData);
+#else
+    return MESH_HANDLE_INVALID;
+#endif
+}
+
+void renderer_destroy_mesh(Renderer* renderer, MeshHandle handle) {
+    if (!renderer || !renderer->backendData || handle == MESH_HANDLE_INVALID) {
+        return;
+    }
+
+#if defined(RENDERER_BACKEND_VULKAN)
+    RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
+    renderer_vulkan_destroy_mesh(vulkan, handle);
+#endif
+}
+
+void renderer_draw_mesh(Renderer* renderer, MeshHandle handle, const Mat4x4F32* transform, F32 alpha) {
+    if (!renderer || !renderer->backendData || handle == MESH_HANDLE_INVALID || !transform) {
+        return;
+    }
+
+#if defined(RENDERER_BACKEND_VULKAN)
+    RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
+    renderer_vulkan_draw_mesh(vulkan, handle, transform, alpha);
+#endif
+}
+
 #ifndef SHADER_COMPILE_WORKER_COUNT
 #define SHADER_COMPILE_WORKER_COUNT 10u
 #endif

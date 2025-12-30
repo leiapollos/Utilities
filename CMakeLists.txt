@@ -24,6 +24,7 @@ set(VULKAN_SDK_ROOT "${SRC_ROOT}/third_party/vulkan")
 set(VULKAN_SDK_INCLUDE_DIR "${VULKAN_SDK_ROOT}/include")
 set(VULKAN_VMA_INCLUDE_DIR "${SRC_ROOT}/third_party/vulkan_vma")
 set(IMGUI_INCLUDE_DIR "${SRC_ROOT}/third_party/dear_imgui")
+set(CGLTF_INCLUDE_DIR "${SRC_ROOT}/third_party/cgltf")
 
 set(IMGUI_SOURCES
     ${IMGUI_INCLUDE_DIR}/imgui_unity.cpp
@@ -49,7 +50,7 @@ add_executable(utilities_host ${HOST_SOURCES})
 if(CMAKE_INTERPROCEDURAL_OPTIMIZATION)
     set_property(TARGET utilities_host PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)
 endif()
-target_include_directories(utilities_host PRIVATE ${SRC_ROOT} ${VULKAN_VMA_INCLUDE_DIR} ${IMGUI_INCLUDE_DIR})
+target_include_directories(utilities_host PRIVATE ${SRC_ROOT} ${VULKAN_VMA_INCLUDE_DIR} ${IMGUI_INCLUDE_DIR} ${CGLTF_INCLUDE_DIR})
 target_link_libraries(utilities_host PRIVATE dear_imgui)
 
 if(APPLE)
@@ -119,7 +120,7 @@ endif()
 set_target_properties(utilities_host PROPERTIES OUTPUT_NAME "utilities_host")
 
 add_library(utilities_app MODULE ${SRC_ROOT}/app.cpp)
-target_include_directories(utilities_app PRIVATE ${SRC_ROOT} ${VULKAN_SDK_INCLUDE_DIR} ${VULKAN_VMA_INCLUDE_DIR} ${IMGUI_INCLUDE_DIR})
+target_include_directories(utilities_app PRIVATE ${SRC_ROOT} ${VULKAN_SDK_INCLUDE_DIR} ${VULKAN_VMA_INCLUDE_DIR} ${IMGUI_INCLUDE_DIR} ${CGLTF_INCLUDE_DIR})
 
 if(APPLE)
     set_target_properties(utilities_app PROPERTIES SUFFIX ".dylib")

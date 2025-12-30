@@ -2,6 +2,8 @@
 // Created by André Leite on 03/11/2025.
 //
 
+#include "mesh_loader_cgltf.cpp"
+
 #include "renderer.cpp"
 
 #if defined(RENDERER_BACKEND_VULKAN)

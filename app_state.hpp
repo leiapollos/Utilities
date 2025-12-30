@@ -18,4 +18,11 @@ struct AppCoreState {
     JobSystem* jobSystem;
     U32 workerCount;
     AppTestsState* tests;
+
+    MeshHandle meshHandle;
+    F32 meshScale;
+    F32 meshAlpha;
+    F32 meshSpacing;
+    S32 meshCount;
+    B32 meshLoaded;
 };

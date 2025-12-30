@@ -131,6 +131,75 @@ static B32 vulkan_commands_init(RendererVulkan* vulkan, VulkanCommands* commands
 }
 
 // ////////////////////////
+// Immediate Submit
+
+static B32 vulkan_init_immediate_submit(RendererVulkan* vulkan, ImmediateSubmitContext* ctx) {
+    if (!vulkan || vulkan->device.device == VK_NULL_HANDLE || !ctx) {
+        return 0;
+    }
+
+    VkFenceCreateInfo fenceInfo = vulkan_fence_create_info(VK_FENCE_CREATE_SIGNALED_BIT);
+    VK_CHECK(vkCreateFence(vulkan->device.device, &fenceInfo, 0, &ctx->fence));
+
+    VkCommandPoolCreateInfo poolInfo = {};
+    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    poolInfo.queueFamilyIndex = vulkan->device.graphicsQueueFamilyIndex;
+    VK_CHECK(vkCreateCommandPool(vulkan->device.device, &poolInfo, 0, &ctx->commandPool));
+
+    VkCommandBufferAllocateInfo allocInfo = {};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.commandPool = ctx->commandPool;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = 1;
+    VK_CHECK(vkAllocateCommandBuffers(vulkan->device.device, &allocInfo, &ctx->commandBuffer));
+
+    return 1;
+}
+
+static void vulkan_destroy_immediate_submit(RendererVulkan* vulkan, ImmediateSubmitContext* ctx) {
+    if (!vulkan || vulkan->device.device == VK_NULL_HANDLE || !ctx) {
+        return;
+    }
+    if (ctx->commandPool != VK_NULL_HANDLE) {
+        vkDestroyCommandPool(vulkan->device.device, ctx->commandPool, 0);
+        ctx->commandPool = VK_NULL_HANDLE;
+    }
+    if (ctx->fence != VK_NULL_HANDLE) {
+        vkDestroyFence(vulkan->device.device, ctx->fence, 0);
+        ctx->fence = VK_NULL_HANDLE;
+    }
+}
+
+static VkCommandBuffer vulkan_immediate_begin(RendererVulkan* vulkan, ImmediateSubmitContext* ctx) {
+    if (!vulkan || vulkan->device.device == VK_NULL_HANDLE || !ctx) {
+        return VK_NULL_HANDLE;
+    }
+
+    VK_CHECK(vkResetFences(vulkan->device.device, 1, &ctx->fence));
+    VK_CHECK(vkResetCommandBuffer(ctx->commandBuffer, 0));
+
+    VkCommandBufferBeginInfo beginInfo = vulkan_command_buffer_begin_info(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+    VK_CHECK(vkBeginCommandBuffer(ctx->commandBuffer, &beginInfo));
+
+    return ctx->commandBuffer;
+}
+
+static void vulkan_immediate_end(RendererVulkan* vulkan, ImmediateSubmitContext* ctx) {
+    if (!vulkan || vulkan->device.device == VK_NULL_HANDLE || !ctx) {
+        return;
+    }
+
+    VK_CHECK(vkEndCommandBuffer(ctx->commandBuffer));
+
+    VkCommandBufferSubmitInfo cmdInfo = vulkan_command_buffer_submit_info(ctx->commandBuffer);
+    VkSubmitInfo2 submit = vulkan_submit_info2(&cmdInfo, 0, 0);
+
+    VK_CHECK(vkQueueSubmit2(vulkan->device.graphicsQueue, 1, &submit, ctx->fence));
+    VK_CHECK(vkWaitForFences(vulkan->device.device, 1, &ctx->fence, VK_TRUE, SECONDS_TO_NANOSECONDS(10)));
+}
+
+// ////////////////////////
 // Frame Logic
 
 static B32 vulkan_begin_frame(RendererVulkan* vulkan, VkCommandBuffer* outCmd) {

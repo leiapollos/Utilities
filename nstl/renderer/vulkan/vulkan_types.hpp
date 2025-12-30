@@ -106,6 +106,43 @@ struct RendererVulkanAllocatedImage {
     VkFormat imageFormat;
 };
 
+struct RendererVulkanAllocatedBuffer {
+    VkBuffer buffer;
+    VmaAllocation allocation;
+    VmaAllocationInfo info;
+};
+
+struct GPUMeshBuffers {
+    RendererVulkanAllocatedBuffer indexBuffer;
+    RendererVulkanAllocatedBuffer vertexBuffer;
+    VkDeviceAddress vertexBufferAddress;
+};
+
+struct GPUDrawPushConstants {
+    Mat4x4F32 worldMatrix;
+    VkDeviceAddress vertexBuffer;
+    F32 alpha;
+    F32 _padding[3];
+};
+
+struct MeshAsset {
+    GPUMeshBuffers gpu;
+    U32 indexCount;
+    U32 generation;
+    union {
+        U32 nextFree;
+        B32 loaded;
+    };
+};
+
+static const U32 MESH_FREE_LIST_END = 0xFFFFFFFF;
+
+struct DrawCommand {
+    MeshHandle meshHandle;
+    Mat4x4F32 transform;
+    F32 alpha;
+};
+
 struct VulkanDescriptorAllocator {
     struct PoolSizeRatio {
         VkDescriptorType type;
@@ -113,8 +150,6 @@ struct VulkanDescriptorAllocator {
     };
 
     VkDescriptorPool currentPool;
-    // We might need an arena for pools tracking if we want to destroy them later
-    // or just use a simplified approach for now
 };
 
 struct RendererVulkanShader {
@@ -126,9 +161,19 @@ struct VulkanPipelines {
     VkDescriptorSetLayout drawImageDescriptorLayout;
     VkPipelineLayout gradientPipelineLayout;
     VkPipeline gradientPipeline;
+    
+    VkPipelineLayout meshPipelineLayout;
+    VkPipeline meshPipeline;
+    
     RendererVulkanShader* shaders;
     U32 shaderCount;
     U32 shaderCapacity;
+};
+
+struct ImmediateSubmitContext {
+    VkFence fence;
+    VkCommandPool commandPool;
+    VkCommandBuffer commandBuffer;
 };
 
 struct RendererVulkan {
@@ -138,20 +183,30 @@ struct RendererVulkan {
     VulkanCommands commands;
     VulkanPipelines pipelines;
     
-    // Defer
     VkDeferCtx deferCtx;
     U8* deferPerFrameMem;
     U8* deferGlobalMem;
+    
+    ImmediateSubmitContext immSubmit;
 
-    // Resources
     RendererVulkanAllocatedImage drawImage;
+    RendererVulkanAllocatedImage depthImage;
     VkExtent2D drawExtent;
     
-    // Descriptors
+    Arena* frameArena;
+    
+    MeshAsset** meshSlots;
+    U32 meshSlotCapacity;
+    U32 meshFreeHead;
+    U32 meshCount;
+    
     VkDescriptorPool drawImageDescriptorPool;
     VkDescriptorSet drawImageDescriptorSet;
+    
+    DrawCommand* drawCommands;
+    U32 drawCommandCount;
+    U32 drawCommandCapacity;
 
-    // ImGui - could also be moved to a struct
     VkDescriptorPool imguiDescriptorPool;
     ImGuiContext* imguiContext;
     OS_WindowHandle imguiWindow;

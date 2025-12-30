@@ -272,3 +272,181 @@ static void vulkan_destroy_draw_image(RendererVulkan* vulkan) {
          vulkan_reset_draw_image(vulkan);
     }
 }
+
+// ////////////////////////
+// Buffer Management
+
+static RendererVulkanAllocatedBuffer vulkan_create_buffer(VmaAllocator allocator, U64 allocSize,
+                                                          VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage) {
+    VkBufferCreateInfo bufferInfo = {};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.pNext = nullptr;
+    bufferInfo.size = allocSize;
+    bufferInfo.usage = usage;
+
+    VmaAllocationCreateInfo vmaallocInfo = {};
+    vmaallocInfo.usage = memoryUsage;
+    vmaallocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+    RendererVulkanAllocatedBuffer newBuffer = {};
+    VK_CHECK(vmaCreateBuffer(allocator, &bufferInfo, &vmaallocInfo,
+                             &newBuffer.buffer, &newBuffer.allocation, &newBuffer.info));
+    return newBuffer;
+}
+
+static void vulkan_destroy_buffer(VmaAllocator allocator, RendererVulkanAllocatedBuffer* buffer) {
+    if (!buffer || buffer->buffer == VK_NULL_HANDLE) {
+        return;
+    }
+    vmaDestroyBuffer(allocator, buffer->buffer, buffer->allocation);
+    buffer->buffer = VK_NULL_HANDLE;
+    buffer->allocation = VK_NULL_HANDLE;
+}
+
+// ////////////////////////
+// Depth Image Management
+
+static void vulkan_reset_depth_image(RendererVulkan* vulkan) {
+    if (!vulkan) {
+        return;
+    }
+    vulkan->depthImage.image = VK_NULL_HANDLE;
+    vulkan->depthImage.imageView = VK_NULL_HANDLE;
+    vulkan->depthImage.allocation = 0;
+    vulkan->depthImage.imageExtent = {};
+    vulkan->depthImage.imageFormat = VK_FORMAT_UNDEFINED;
+}
+
+static B32 vulkan_create_depth_image(RendererVulkan* vulkan, VkExtent3D extent) {
+    if (!vulkan || vulkan->device.allocator == 0) {
+        return 0;
+    }
+
+    if (vulkan->depthImage.image != VK_NULL_HANDLE) {
+        vkDestroyImageView(vulkan->device.device, vulkan->depthImage.imageView, 0);
+        vmaDestroyImage(vulkan->device.allocator, vulkan->depthImage.image, vulkan->depthImage.allocation);
+        vulkan_reset_depth_image(vulkan);
+    }
+
+    vulkan->depthImage.imageFormat = VK_FORMAT_D32_SFLOAT;
+    vulkan->depthImage.imageExtent = extent;
+
+    VkImageUsageFlags depthImageUsages = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+
+    VkImageCreateInfo dimg_info = vulkan_image_create_info(vulkan->depthImage.imageFormat, depthImageUsages, extent);
+
+    VmaAllocationCreateInfo dimg_allocinfo = {};
+    dimg_allocinfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    dimg_allocinfo.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    VkResult depthImageResult = vmaCreateImage(vulkan->device.allocator,
+                                               &dimg_info,
+                                               &dimg_allocinfo,
+                                               &vulkan->depthImage.image,
+                                               &vulkan->depthImage.allocation,
+                                               nullptr);
+    if (depthImageResult != VK_SUCCESS) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create depth image: {}", depthImageResult);
+        vulkan_reset_depth_image(vulkan);
+        return 0;
+    }
+
+    VkImageViewCreateInfo dview_info = vulkan_image_view_create_info(vulkan->depthImage.imageFormat,
+                                                                     vulkan->depthImage.image,
+                                                                     VK_IMAGE_ASPECT_DEPTH_BIT);
+
+    VkResult depthImageViewResult = vkCreateImageView(vulkan->device.device,
+                                                      &dview_info,
+                                                      nullptr,
+                                                      &vulkan->depthImage.imageView);
+    if (depthImageViewResult != VK_SUCCESS) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create depth image view: {}", depthImageViewResult);
+        vmaDestroyImage(vulkan->device.allocator, vulkan->depthImage.image, vulkan->depthImage.allocation);
+        vulkan_reset_depth_image(vulkan);
+        return 0;
+    }
+
+    return 1;
+}
+
+static void vulkan_destroy_depth_image(RendererVulkan* vulkan) {
+    if (!vulkan) {
+        return;
+    }
+    if (vulkan->depthImage.image != VK_NULL_HANDLE) {
+        if (vulkan->depthImage.imageView != VK_NULL_HANDLE) {
+            vkDestroyImageView(vulkan->device.device, vulkan->depthImage.imageView, 0);
+        }
+        vmaDestroyImage(vulkan->device.allocator, vulkan->depthImage.image, vulkan->depthImage.allocation);
+        vulkan_reset_depth_image(vulkan);
+    }
+}
+
+// ////////////////////////
+// Mesh Upload
+
+static GPUMeshBuffers vulkan_upload_mesh(RendererVulkan* vulkan,
+                                         const U32* indices, U32 indexCount,
+                                         const Vertex* vertices, U32 vertexCount) {
+    GPUMeshBuffers newMesh = {};
+    if (!vulkan || !indices || !vertices || indexCount == 0 || vertexCount == 0) {
+        return newMesh;
+    }
+
+    U64 vertexBufferSize = vertexCount * sizeof(Vertex);
+    U64 indexBufferSize = indexCount * sizeof(U32);
+
+    newMesh.vertexBuffer = vulkan_create_buffer(vulkan->device.allocator,
+                                                vertexBufferSize,
+                                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                                VMA_MEMORY_USAGE_GPU_ONLY);
+
+    VkBufferDeviceAddressInfo deviceAddressInfo = {};
+    deviceAddressInfo.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+    deviceAddressInfo.buffer = newMesh.vertexBuffer.buffer;
+    newMesh.vertexBufferAddress = vkGetBufferDeviceAddress(vulkan->device.device, &deviceAddressInfo);
+
+    newMesh.indexBuffer = vulkan_create_buffer(vulkan->device.allocator,
+                                               indexBufferSize,
+                                               VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                               VMA_MEMORY_USAGE_GPU_ONLY);
+
+    RendererVulkanAllocatedBuffer staging = vulkan_create_buffer(vulkan->device.allocator,
+                                                                 vertexBufferSize + indexBufferSize,
+                                                                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                                 VMA_MEMORY_USAGE_CPU_ONLY);
+
+    void* data = staging.info.pMappedData;
+    MEMMOVE(data, vertices, vertexBufferSize);
+    MEMMOVE((U8*)data + vertexBufferSize, indices, indexBufferSize);
+
+    VkCommandBuffer cmd = vulkan_immediate_begin(vulkan, &vulkan->immSubmit);
+    if (cmd != VK_NULL_HANDLE) {
+        VkBufferCopy vertexCopy = {};
+        vertexCopy.dstOffset = 0;
+        vertexCopy.srcOffset = 0;
+        vertexCopy.size = vertexBufferSize;
+        vkCmdCopyBuffer(cmd, staging.buffer, newMesh.vertexBuffer.buffer, 1, &vertexCopy);
+
+        VkBufferCopy indexCopy = {};
+        indexCopy.dstOffset = 0;
+        indexCopy.srcOffset = vertexBufferSize;
+        indexCopy.size = indexBufferSize;
+        vkCmdCopyBuffer(cmd, staging.buffer, newMesh.indexBuffer.buffer, 1, &indexCopy);
+        
+        vulkan_immediate_end(vulkan, &vulkan->immSubmit);
+    }
+
+    vulkan_destroy_buffer(vulkan->device.allocator, &staging);
+
+    return newMesh;
+}
+
+static void vulkan_destroy_mesh(RendererVulkan* vulkan, GPUMeshBuffers* mesh) {
+    if (!vulkan || !mesh) {
+        return;
+    }
+    vulkan_destroy_buffer(vulkan->device.allocator, &mesh->vertexBuffer);
+    vulkan_destroy_buffer(vulkan->device.allocator, &mesh->indexBuffer);
+    mesh->vertexBufferAddress = 0;
+}

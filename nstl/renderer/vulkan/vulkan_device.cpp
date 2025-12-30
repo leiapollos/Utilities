@@ -411,15 +411,21 @@ static B32 vulkan_create_device_internal(Arena* arena, VulkanDevice* device) {
     queueCreateInfo.pQueuePriorities = &queuePriority;
 
     VkPhysicalDeviceFeatures deviceFeatures = {};
+    deviceFeatures.shaderInt64 = VK_TRUE;
 
     VkPhysicalDeviceSynchronization2FeaturesKHR sync2Features = {};
     sync2Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR;
     sync2Features.pNext = 0;
     sync2Features.synchronization2 = VK_TRUE;
 
+    VkPhysicalDeviceVulkan12Features vulkan12Features = {};
+    vulkan12Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    vulkan12Features.pNext = &sync2Features;
+    vulkan12Features.bufferDeviceAddress = VK_TRUE;
+
     VkPhysicalDeviceDynamicRenderingFeaturesKHR dynamicRenderingFeatures = {};
     dynamicRenderingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR;
-    dynamicRenderingFeatures.pNext = &sync2Features;
+    dynamicRenderingFeatures.pNext = &vulkan12Features;
     dynamicRenderingFeatures.dynamicRendering = VK_TRUE;
 
     VkDeviceCreateInfo createInfo = {};
@@ -488,6 +494,7 @@ static B32 vulkan_create_allocator(VulkanDevice* device) {
     }
 
     VmaAllocatorCreateInfo allocatorInfo = {};
+    allocatorInfo.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
     allocatorInfo.physicalDevice = device->physicalDevice;
     allocatorInfo.device = device->device;
     allocatorInfo.instance = device->instance;

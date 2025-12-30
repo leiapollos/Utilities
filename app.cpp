@@ -101,6 +101,22 @@ static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostConte
 
     app_compile_shaders_from_folder(platform, memory, host);
 
+    if (!state->meshLoaded) {
+        MeshAssetData* meshAssets = 0;
+        U32 meshCount = mesh_load_from_file(memory->programArena, "assets/suzanne_blender_monkey.glb", &meshAssets);
+        if (meshCount > 0 && meshAssets) {
+            state->meshHandle = PLATFORM_RENDERER_CALL(platform, renderer_upload_mesh, host->renderer, &meshAssets[0]);
+            if (state->meshHandle != MESH_HANDLE_INVALID) {
+                state->meshLoaded = 1;
+                state->meshScale = 0.1f;
+                state->meshAlpha = 1.0f;
+                state->meshSpacing = 0.5f;
+                state->meshCount = 1;
+                LOG_INFO("app", "Loaded mesh with handle {}", state->meshHandle);
+            }
+        }
+    }
+
     return 1;
 }
 
@@ -225,6 +241,14 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
     {
         ImGui::ColorEdit4("Color", tests->drawColor.v);
 
+        if (state->meshLoaded) {
+            ImGui::InputInt("Mesh Count", &state->meshCount);
+            if (state->meshCount < 0) { state->meshCount = 0; }
+            ImGui::SliderFloat("Mesh Scale", &state->meshScale, 0.01f, 1.0f, "%.3f");
+            ImGui::SliderFloat("Mesh Alpha", &state->meshAlpha, 0.0f, 1.0f, "%.2f");
+            ImGui::SliderFloat("Mesh Spacing", &state->meshSpacing, 0.1f, 2.0f, "%.2f");
+        }
+
         static int selected_fish = -1;
         const char* names[] = { "Bream", "Haddock", "Mackerel", "Pollock", "Tilefish" };
         const char* names2[] = { "Bream2", "Haddock2", "Mackerel2", "Pollock2", "Tilefish2" };
@@ -259,6 +283,26 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
     color.g = green;
     color.b = blue;
     color.a = 1.0f;
+
+    if (state->meshLoaded && state->meshCount > 0) {
+        F32 spacing = state->meshSpacing;
+        F32 scale = state->meshScale;
+        F32 alpha = state->meshAlpha;
+
+        for (S32 i = 0; i < state->meshCount; ++i) {
+            F32 xOffset = (F32)(i - state->meshCount / 2) * spacing;
+
+            Mat4x4F32 transform = {};
+            transform.v[0][0] = scale;
+            transform.v[1][1] = scale;
+            transform.v[2][2] = scale;
+            transform.v[3][0] = xOffset;
+            transform.v[3][3] = 1.0f;
+
+            PLATFORM_RENDERER_CALL(platform, renderer_draw_mesh, host->renderer, state->meshHandle, &transform, alpha);
+        }
+    }
+
     PLATFORM_RENDERER_CALL(platform, renderer_draw_color, host->renderer, state->windowHandle, tests->drawColor);
 }
 
