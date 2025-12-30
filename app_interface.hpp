@@ -65,6 +65,8 @@ struct PlatformOSApi {
 #define PLATFORM_OS_CALL(platform, name, ...) ((platform)->os.name(__VA_ARGS__))
 
 #define PLATFORM_RENDERER_FUNCTIONS(X) \
+    X(renderer_init) \
+    X(renderer_shutdown) \
     X(renderer_compile_shaders) \
     X(renderer_draw) \
     X(renderer_imgui_init) \

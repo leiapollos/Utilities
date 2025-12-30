@@ -33,6 +33,17 @@ B32 renderer_imgui_init(Renderer* renderer, OS_WindowHandle window) {
 #endif
 }
 
+void renderer_shutdown(Renderer* renderer) {
+    if (!renderer || !renderer->backendData) {
+        return;
+    }
+
+#if defined(RENDERER_BACKEND_VULKAN)
+    RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
+    renderer_vulkan_shutdown(vulkan);
+#endif
+}
+
 void renderer_imgui_shutdown(Renderer* renderer) {
     if (!renderer || !renderer->backendData) {
         return;

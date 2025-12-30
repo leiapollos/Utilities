@@ -535,13 +535,10 @@ B32 vulkan_device_init(VulkanDevice* device, Arena* arena) {
 void vulkan_device_shutdown(VulkanDevice* device) {
     if (!device) return;
     
-    // Allocator is destroyed via vkdefer in renderer_shutdown
-    /*
     if (device->allocator) {
         vmaDestroyAllocator(device->allocator);
         device->allocator = 0;
     }
-    */
     
     vulkan_destroy_device_internal(device);
     vulkan_destroy_debug_messenger(device);

@@ -46,8 +46,7 @@ B32 renderer_init(Arena* arena, Renderer* renderer) {
     
     vkdefer_init_device(&vulkan->deferCtx, vulkan->device.device, 0);
     vkdefer_set_vma_allocator(&vulkan->deferCtx, vulkan->device.allocator);
-    vkdefer_destroy_VmaAllocator(&vulkan->deferCtx.globalBuf, vulkan->device.allocator);
-
+    
     INIT_SUCCESS(vulkan_commands_init(vulkan, &vulkan->commands) && "Failed to initialize Vulkan commands");
     
     INIT_SUCCESS(vulkan_init_immediate_submit(vulkan, &vulkan->immSubmit) && "Failed to initialize immediate submit");
@@ -96,13 +95,12 @@ B32 renderer_init(Arena* arena, Renderer* renderer) {
     return 1;
 }
 
-void renderer_shutdown(Renderer* renderer) {
-    if (!renderer || !renderer->backendData) {
+void renderer_vulkan_shutdown(RendererVulkan* vulkan) {
+    Renderer* renderer = (Renderer*)((U8*)vulkan - offsetof(Renderer, backendData));
+    if (!vulkan) {
         return;
     }
-
-    RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
-
+    
     if (vulkan->device.device != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(vulkan->device.device);
         renderer_vulkan_imgui_shutdown(vulkan);
@@ -141,8 +139,6 @@ void renderer_shutdown(Renderer* renderer) {
     vulkan_destroy_surface(&vulkan->device, &vulkan->swapchain.surface);
     
     vulkan_device_shutdown(&vulkan->device);
-
-    renderer->backendData = 0;
 }
 
 // ////////////////////////

@@ -596,7 +596,13 @@ static void vulkan_destroy_mesh(RendererVulkan* vulkan, GPUMeshBuffers* mesh) {
     if (!vulkan || !mesh) {
         return;
     }
-    vulkan_destroy_buffer(vulkan->device.allocator, &mesh->vertexBuffer);
-    vulkan_destroy_buffer(vulkan->device.allocator, &mesh->indexBuffer);
+
+    vkdefer_destroy_VmaBuffer(&vulkan->deferCtx.globalBuf, mesh->vertexBuffer.buffer, mesh->vertexBuffer.allocation);
+    vkdefer_destroy_VmaBuffer(&vulkan->deferCtx.globalBuf, mesh->indexBuffer.buffer, mesh->indexBuffer.allocation);
+    
+    mesh->vertexBuffer.buffer = VK_NULL_HANDLE;
+    mesh->vertexBuffer.allocation = VK_NULL_HANDLE;
+    mesh->indexBuffer.buffer = VK_NULL_HANDLE;
+    mesh->indexBuffer.allocation = VK_NULL_HANDLE;
     mesh->vertexBufferAddress = 0;
 }

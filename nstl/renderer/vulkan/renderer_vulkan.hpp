@@ -9,6 +9,7 @@
 // ////////////////////////
 // Vulkan Renderer Backend
 
+void renderer_vulkan_shutdown(RendererVulkan* vulkan);
 void renderer_vulkan_draw(RendererVulkan* vulkan, OS_WindowHandle window,
                           const SceneData* scene, const RenderObject* objects, U32 objectCount);
 B32 renderer_vulkan_compile_shader_to_result(RendererVulkan* vulkan, Arena* arena, StringU8 shaderPath,
