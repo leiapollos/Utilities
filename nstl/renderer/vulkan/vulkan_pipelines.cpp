@@ -393,7 +393,6 @@ static B32 vulkan_init_draw_pipeline(RendererVulkan* vulkan) {
     // Defer cleanup
     vkdefer_destroy_VkDescriptorSetLayout(&vulkan->deferCtx.globalBuf, descriptorLayout);
     vkdefer_destroy_VkDescriptorPool(&vulkan->deferCtx.globalBuf, descriptorPool);
-    vkdefer_free_descriptor_set(&vulkan->deferCtx.globalBuf, descriptorPool, descriptorSet);
     vkdefer_destroy_VkPipelineLayout(&vulkan->deferCtx.globalBuf, pipelineLayout);
     vkdefer_destroy_VkPipeline(&vulkan->deferCtx.globalBuf, pipeline);
 
@@ -552,7 +551,7 @@ cleanup_fail:
 }
 
 static void vulkan_draw_mesh(RendererVulkan* vulkan, VkCommandBuffer cmd, GPUMeshBuffers* mesh, 
-                             Mat4x4F32 worldMatrix, U32 indexCount, F32 alpha) {
+                             Mat4x4F32 worldMatrix, U32 indexCount, Vec4F32 color) {
     if (!vulkan || cmd == VK_NULL_HANDLE || !mesh) {
         return;
     }
@@ -560,7 +559,7 @@ static void vulkan_draw_mesh(RendererVulkan* vulkan, VkCommandBuffer cmd, GPUMes
         return;
     }
 
-    VkPipeline pipeline = (alpha < 1.0f) ? vulkan->transparentPipeline : vulkan->opaquePipeline;
+    VkPipeline pipeline = (color.a < 1.0f) ? vulkan->transparentPipeline : vulkan->opaquePipeline;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
     VkViewport viewport = {};
@@ -582,7 +581,7 @@ static void vulkan_draw_mesh(RendererVulkan* vulkan, VkCommandBuffer cmd, GPUMes
     GPUDrawPushConstants pushConstants = {};
     pushConstants.worldMatrix = worldMatrix;
     pushConstants.vertexBuffer = mesh->vertexBufferAddress;
-    pushConstants.alpha = alpha;
+    pushConstants.color = color;
     
     vkCmdPushConstants(cmd,
                        vulkan->materialPipelineLayout,

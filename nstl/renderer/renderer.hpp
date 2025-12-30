@@ -50,7 +50,7 @@ static const MeshHandle MESH_HANDLE_INVALID = 0;
 struct RenderObject {
     MeshHandle mesh;
     Mat4x4F32 transform;
-    F32 alpha;
+    Vec4F32 color;
 };
 
 typedef U64 ShaderHandle;

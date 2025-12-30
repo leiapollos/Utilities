@@ -109,7 +109,10 @@ static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostConte
             if (state->meshHandle != MESH_HANDLE_INVALID) {
                 state->meshLoaded = 1;
                 state->meshScale = 0.1f;
-                state->meshAlpha = 1.0f;
+                state->meshColor.r = 1.0f;
+                state->meshColor.g = 1.0f;
+                state->meshColor.b = 1.0f;
+                state->meshColor.a = 1.0f;
                 state->meshSpacing = 0.5f;
                 state->meshCount = 1;
                 LOG_INFO("app", "Loaded mesh with handle {}", state->meshHandle);
@@ -242,10 +245,11 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
         ImGui::ColorEdit4("Color", tests->drawColor.v);
 
         if (state->meshLoaded) {
-            ImGui::InputInt("Mesh Count", &state->meshCount);
-            if (state->meshCount < 0) { state->meshCount = 0; }
+            int tempMeshCount = (int)state->meshCount;
+            ImGui::InputInt("Mesh Count", &tempMeshCount);
+            state->meshCount = (tempMeshCount < 0) ? 0 : (U32)tempMeshCount;
             ImGui::SliderFloat("Mesh Scale", &state->meshScale, 0.01f, 1.0f, "%.3f");
-            ImGui::SliderFloat("Mesh Alpha", &state->meshAlpha, 0.0f, 1.0f, "%.2f");
+            ImGui::ColorEdit4("Mesh Color", state->meshColor.v);
             ImGui::SliderFloat("Mesh Spacing", &state->meshSpacing, 0.1f, 2.0f, "%.2f");
         }
 
@@ -306,10 +310,9 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
         if (renderObjects) {
             F32 spacing = state->meshSpacing;
             F32 scale = state->meshScale;
-            F32 alpha = state->meshAlpha;
 
-            for (S32 i = 0; i < state->meshCount; ++i) {
-                F32 xOffset = (F32)(i - state->meshCount / 2) * spacing;
+            for (U32 i = 0; i < state->meshCount; ++i) {
+                F32 xOffset = (F32)((S32)i - (S32)state->meshCount / 2) * spacing;
 
                 RenderObject* obj = &renderObjects[renderObjectCount++];
                 obj->mesh = state->meshHandle;
@@ -319,7 +322,7 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
                 obj->transform.v[2][2] = scale;
                 obj->transform.v[3][0] = xOffset;
                 obj->transform.v[3][3] = 1.0f;
-                obj->alpha = alpha;
+                obj->color = state->meshColor;
             }
         }
     }
@@ -336,6 +339,12 @@ static void app_shutdown(AppPlatform* platform, AppMemory* memory, AppHostContex
 
     AppCoreState* state = app_get_state(memory);
     AppTestsState* tests = app_get_tests(state);
+
+    if (state->meshHandle) {
+        PLATFORM_RENDERER_CALL(platform, renderer_destroy_mesh, host->renderer, state->meshHandle);
+        state->meshHandle = 0;
+        state->meshLoaded = 0;
+    }
 
     PLATFORM_RENDERER_CALL(platform,
                            renderer_imgui_shutdown,

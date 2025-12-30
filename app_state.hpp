@@ -21,8 +21,8 @@ struct AppCoreState {
 
     MeshHandle meshHandle;
     F32 meshScale;
-    F32 meshAlpha;
+    Vec4F32 meshColor;
     F32 meshSpacing;
-    S32 meshCount;
+    U32 meshCount;
     B32 meshLoaded;
 };

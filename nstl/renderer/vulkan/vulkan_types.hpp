@@ -126,8 +126,7 @@ struct GPUMeshBuffers {
 struct GPUDrawPushConstants {
     Mat4x4F32 worldMatrix;
     VkDeviceAddress vertexBuffer;
-    F32 alpha;
-    F32 _padding[3];
+    alignas(16) Vec4F32 color;
 };
 
 struct GPUMesh {

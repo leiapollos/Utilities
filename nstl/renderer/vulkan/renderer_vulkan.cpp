@@ -130,6 +130,10 @@ void renderer_shutdown(Renderer* renderer) {
         vulkan->frameArena = 0;
     }
     
+    if (vulkan->defaultMaterialBuffer.buffer != VK_NULL_HANDLE) {
+        vulkan_destroy_buffer(vulkan->device.allocator, &vulkan->defaultMaterialBuffer);
+    }
+    
     if (vulkan->device.device != VK_NULL_HANDLE) {
         vkdefer_shutdown(&vulkan->deferCtx);
     }
@@ -258,7 +262,7 @@ void renderer_vulkan_draw(RendererVulkan* vulkan, OS_WindowHandle window,
             for (U32 i = 0; i < objectCount; ++i) {
                 const RenderObject* obj = &objects[i];
                 if (obj->mesh) {
-                    vulkan_draw_mesh(vulkan, cmd, &obj->mesh->gpu, obj->transform, obj->mesh->indexCount, obj->alpha);
+                    vulkan_draw_mesh(vulkan, cmd, &obj->mesh->gpu, obj->transform, obj->mesh->indexCount, obj->color);
                 }
             }
 

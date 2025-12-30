@@ -21,12 +21,10 @@ struct Vertex {
 };
 
 struct GPUDrawPushConstants {
-    float4x4 worldMatrix;
-    uint64_t vertexBufferAddress;
-    float alpha;
-    float _padding0;
-    float _padding1;
-    float _padding2;
+    float4x4 worldMatrix;         // 64 bytes, offset 0
+    uint64_t vertexBufferAddress; // 8 bytes, offset 64
+    uint2 _padding;               // 8 bytes padding, offset 72
+    float4 color;                 // 16 bytes, offset 80
 };
 
 [[vk::push_constant]]
@@ -35,9 +33,8 @@ GPUDrawPushConstants g_pushConstants;
 struct VSOutput {
     float4 position : SV_Position;
     [[vk::location(0)]] float3 normal : NORMAL;
-    [[vk::location(1)]] float3 color : COLOR;
+    [[vk::location(1)]] float4 color : COLOR;
     [[vk::location(2)]] float2 uv : TEXCOORD0;
-    [[vk::location(3)]] float alpha : ALPHA;
 };
 
 VSOutput main(uint vertexId : SV_VertexID) {
@@ -53,9 +50,9 @@ VSOutput main(uint vertexId : SV_VertexID) {
     VSOutput output;
     output.position = mul(viewproj, worldPos);
     output.normal = normalize(mul((float3x3)g_pushConstants.worldMatrix, v.normal));
-    output.color = vertColor * colorFactor.rgb;
+    output.color.rgb = vertColor * colorFactor.rgb * g_pushConstants.color.rgb;
+    output.color.a = g_pushConstants.color.a;
     output.uv = float2(v.uvX, v.uvY);
-    output.alpha = g_pushConstants.alpha;
     return output;
 }
 

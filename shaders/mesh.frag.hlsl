@@ -12,9 +12,8 @@ SamplerState colorSampler : register(s1, space1);
 
 struct PSInput {
     [[vk::location(0)]] float3 normal : NORMAL;
-    [[vk::location(1)]] float3 color : COLOR;
+    [[vk::location(1)]] float4 color : COLOR;
     [[vk::location(2)]] float2 uv : TEXCOORD0;
-    [[vk::location(3)]] float alpha : ALPHA;
     float4 position : SV_Position;
 };
 
@@ -27,10 +26,10 @@ float4 main(PSInput input) : SV_Target {
     float2 uv = input.uv;
     
     float3 texColor = colorTex.Sample(colorSampler, uv).rgb;
-    float3 baseColor = input.color * texColor;
+    float3 baseColor = input.color.rgb * texColor;
     
     float3 lit = baseColor * NdotL * sunColor.rgb + baseColor * ambientColor.rgb;
     
-    return float4(lit, input.alpha);
+    return float4(lit, input.color.a);
 }
 

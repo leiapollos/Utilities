@@ -231,11 +231,15 @@ static void vulkan_destroy_material_pipelines(RendererVulkan* vulkan) {
     if (!vulkan) {
         return;
     }
+    if (vulkan->defaultMaterialBuffer.buffer != VK_NULL_HANDLE) {
+        vulkan_destroy_buffer(vulkan->device.allocator, &vulkan->defaultMaterialBuffer);
+    }
     vulkan->opaquePipeline = VK_NULL_HANDLE;
     vulkan->transparentPipeline = VK_NULL_HANDLE;
     vulkan->materialPipelineLayout = VK_NULL_HANDLE;
     vulkan->sceneDataLayout = VK_NULL_HANDLE;
     vulkan->materialLayout = VK_NULL_HANDLE;
+    vulkan->globalDescriptorPool = VK_NULL_HANDLE;
 }
 
 static void material_fill(Material* mat,
