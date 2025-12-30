@@ -88,42 +88,6 @@ B32 renderer_init(Arena* arena, Renderer* renderer) {
     vulkan->frameArena = arena_alloc(.arenaSize = MB(1));
     ASSERT_ALWAYS(vulkan->frameArena != 0);
 
-    vulkan->meshSlotCapacity = 32;
-    vulkan->meshSlots = ARENA_PUSH_ARRAY(arena, MeshAsset*, vulkan->meshSlotCapacity);
-    ASSERT_ALWAYS(vulkan->meshSlots != 0);
-    vulkan->meshFreeHead = MESH_FREE_LIST_END;
-    vulkan->meshCount = 0;
-
-    vulkan->drawCommands = 0;
-    vulkan->drawCommandCount = 0;
-    vulkan->drawCommandCapacity = 0;
-    
-    MEMSET(&vulkan->sceneData, 0, sizeof(vulkan->sceneData));
-    vulkan->sceneData.view.v[0][0] = 1.0f;
-    vulkan->sceneData.view.v[1][1] = 1.0f;
-    vulkan->sceneData.view.v[2][2] = 1.0f;
-    vulkan->sceneData.view.v[3][3] = 1.0f;
-    vulkan->sceneData.proj.v[0][0] = 1.0f;
-    vulkan->sceneData.proj.v[1][1] = 1.0f;
-    vulkan->sceneData.proj.v[2][2] = 1.0f;
-    vulkan->sceneData.proj.v[3][3] = 1.0f;
-    vulkan->sceneData.viewproj.v[0][0] = 1.0f;
-    vulkan->sceneData.viewproj.v[1][1] = 1.0f;
-    vulkan->sceneData.viewproj.v[2][2] = 1.0f;
-    vulkan->sceneData.viewproj.v[3][3] = 1.0f;
-    vulkan->sceneData.ambientColor.r = 0.1f;
-    vulkan->sceneData.ambientColor.g = 0.1f;
-    vulkan->sceneData.ambientColor.b = 0.1f;
-    vulkan->sceneData.ambientColor.a = 1.0f;
-    vulkan->sceneData.sunDirection.x = 0.0f;
-    vulkan->sceneData.sunDirection.y = 1.0f;
-    vulkan->sceneData.sunDirection.z = 0.5f;
-    vulkan->sceneData.sunDirection.w = 0.0f;
-    vulkan->sceneData.sunColor.r = 1.0f;
-    vulkan->sceneData.sunColor.g = 1.0f;
-    vulkan->sceneData.sunColor.b = 1.0f;
-    vulkan->sceneData.sunColor.a = 1.0f;
-
     LOG_INFO(VULKAN_LOG_DOMAIN, "Vulkan renderer initialized successfully");
 
     renderer->backendData = vulkan;
@@ -148,14 +112,6 @@ void renderer_shutdown(Renderer* renderer) {
     vulkan_destroy_draw_image(vulkan);
     vulkan_destroy_depth_image(vulkan);
     vulkan_destroy_immediate_submit(vulkan, &vulkan->immSubmit);
-    
-    for (U32 i = 0; i < vulkan->meshCount; ++i) {
-        if (vulkan->meshSlots[i] && vulkan->meshSlots[i]->loaded) {
-            vulkan_destroy_mesh(vulkan, &vulkan->meshSlots[i]->gpu);
-        }
-    }
-    vulkan->meshCount = 0;
-    vulkan->meshFreeHead = MESH_FREE_LIST_END;
     
     vulkan_destroy_default_resources(vulkan);
     
@@ -188,7 +144,8 @@ void renderer_shutdown(Renderer* renderer) {
 // ////////////////////////
 // Draw
 
-void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, Vec4F32 color) {
+void renderer_vulkan_draw(RendererVulkan* vulkan, OS_WindowHandle window,
+                          const SceneData* scene, const RenderObject* objects, U32 objectCount) {
     if (!vulkan || !window.handle) {
         return;
     }
@@ -218,8 +175,10 @@ void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, 
     
     vulkan_descriptor_allocator_clear(&vulkan->device, frame->frameDescriptors);
     
-    SceneData* mappedScene = (SceneData*)frame->sceneBuffer->info.pMappedData;
-    *mappedScene = vulkan->sceneData;
+    if (scene) {
+        SceneData* mappedScene = (SceneData*)frame->sceneBuffer->info.pMappedData;
+        *mappedScene = *scene;
+    }
     
     U32 imageIndex = frame->imageIndex;
     RendererVulkanSwapchainImage* image = &vulkan->swapchain.images[imageIndex];
@@ -228,13 +187,15 @@ void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, 
                        (vulkan->drawImage.imageView != VK_NULL_HANDLE);
     VkImageLayout swapchainLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
+    Vec4F32 clearColor = {{0.1f, 0.1f, 0.1f, 1.0f}};
+
     if (hasDrawImage) {
         vulkan_transition_image(cmd,
                                 vulkan->drawImage.image,
                                 VK_IMAGE_LAYOUT_UNDEFINED,
                                 VK_IMAGE_LAYOUT_GENERAL);
 
-        vulkan_dispatch_gradient(vulkan, cmd, color);
+        vulkan_dispatch_gradient(vulkan, cmd, clearColor);
 
         if (vulkan->opaquePipeline == VK_NULL_HANDLE) {
             vulkan_init_material_pipelines(vulkan);
@@ -245,7 +206,7 @@ void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, 
             vulkan_create_depth_image(vulkan, depthExtent);
         }
 
-        B32 hasDrawCommands = (vulkan->drawCommandCount > 0);
+        B32 hasDrawCommands = (objects != 0 && objectCount > 0);
         if (hasDrawCommands && vulkan->opaquePipeline != VK_NULL_HANDLE) {
             vulkan_transition_image(cmd,
                                     vulkan->drawImage.image,
@@ -294,15 +255,10 @@ void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, 
                                         vulkan->materialPipelineLayout, 0, 2, descSets, 0, 0);
             }
 
-            for (U32 i = 0; i < vulkan->drawCommandCount; ++i) {
-                DrawCommand* drawCmd = &vulkan->drawCommands[i];
-                U32 meshIndex = drawCmd->meshHandle & 0xFFFF;
-                U32 meshGen = drawCmd->meshHandle >> 16;
-                if (meshIndex < vulkan->meshCount) {
-                    MeshAsset* mesh = vulkan->meshSlots[meshIndex];
-                    if (mesh && mesh->loaded && mesh->generation == meshGen) {
-                        vulkan_draw_mesh(vulkan, cmd, &mesh->gpu, drawCmd->transform, mesh->indexCount, drawCmd->alpha);
-                    }
+            for (U32 i = 0; i < objectCount; ++i) {
+                const RenderObject* obj = &objects[i];
+                if (obj->mesh) {
+                    vulkan_draw_mesh(vulkan, cmd, &obj->mesh->gpu, obj->transform, obj->mesh->indexCount, obj->alpha);
                 }
             }
 
@@ -330,7 +286,7 @@ void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, 
                                    vulkan->swapchain.extent);
         swapchainLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     } else {
-        VkClearColorValue clearValue = {{color.r, color.g, color.b, color.a}};
+        VkClearColorValue clearValue = {{clearColor.r, clearColor.g, clearColor.b, clearColor.a}};
         VkImageSubresourceRange clearRange = vulkan_image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
 
         vulkan_transition_image(cmd,
@@ -364,9 +320,6 @@ void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, 
     }
 
     arena_pop_to(vulkan->frameArena, ARENA_HEADER_SIZE);
-    vulkan->drawCommands = 0;
-    vulkan->drawCommandCount = 0;
-    vulkan->drawCommandCapacity = 0;
 
     vulkan_end_frame(vulkan);
 }
@@ -390,116 +343,36 @@ MeshHandle renderer_vulkan_upload_mesh(RendererVulkan* vulkan, const MeshAssetDa
         return MESH_HANDLE_INVALID;
     }
 
-    U32 index;
-    MeshAsset* asset;
-
-    if (vulkan->meshFreeHead != MESH_FREE_LIST_END) {
-        index = vulkan->meshFreeHead;
-        asset = vulkan->meshSlots[index];
-        vulkan->meshFreeHead = asset->nextFree;
-    } else {
-        if (vulkan->meshCount >= vulkan->meshSlotCapacity) {
-            U32 newCap = vulkan->meshSlotCapacity * 2;
-            MeshAsset** newSlots = ARENA_PUSH_ARRAY(vulkan->arena, MeshAsset*, newCap);
-            if (!newSlots) {
-                LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to grow mesh slots");
-                return MESH_HANDLE_INVALID;
-            }
-            MEMCPY(newSlots, vulkan->meshSlots, sizeof(MeshAsset*) * vulkan->meshSlotCapacity);
-            vulkan->meshSlots = newSlots;
-            vulkan->meshSlotCapacity = newCap;
-        }
-        asset = ARENA_PUSH_STRUCT(vulkan->arena, MeshAsset);
-        if (!asset) {
-            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to allocate mesh");
-            return MESH_HANDLE_INVALID;
-        }
-        asset->generation = 0;
-        index = vulkan->meshCount++;
-        vulkan->meshSlots[index] = asset;
+    GPUMesh* mesh = ARENA_PUSH_STRUCT(vulkan->arena, GPUMesh);
+    if (!mesh) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to allocate GPUMesh");
+        return MESH_HANDLE_INVALID;
     }
 
-    asset->generation++;
-    asset->gpu = vulkan_upload_mesh(vulkan,
+    mesh->gpu = vulkan_upload_mesh(vulkan,
                                     meshData->data.indices,
                                     meshData->data.indexCount,
                                     meshData->data.vertices,
                                     meshData->data.vertexCount);
-    asset->indexCount = meshData->data.indexCount;
-    asset->loaded = (asset->gpu.vertexBuffer.buffer != VK_NULL_HANDLE);
+    mesh->indexCount = meshData->data.indexCount;
 
-    if (asset->loaded) {
-        MeshHandle handle = ((MeshHandle)asset->generation << 16) | index;
-        LOG_INFO(VULKAN_LOG_DOMAIN,
-                 "Uploaded mesh handle {} (index={}, gen={}, {} vertices, {} indices)",
-                 handle, index, asset->generation,
-                 meshData->data.vertexCount,
-                 meshData->data.indexCount);
-        return handle;
+    if (mesh->gpu.vertexBuffer.buffer == VK_NULL_HANDLE) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to upload mesh GPU buffers");
+        return MESH_HANDLE_INVALID;
     }
 
-    asset->nextFree = vulkan->meshFreeHead;
-    vulkan->meshFreeHead = index;
-    return MESH_HANDLE_INVALID;
+    LOG_INFO(VULKAN_LOG_DOMAIN,
+             "Uploaded mesh ({} vertices, {} indices)",
+             meshData->data.vertexCount,
+             meshData->data.indexCount);
+    return mesh;
 }
 
-void renderer_vulkan_destroy_mesh(RendererVulkan* vulkan, MeshHandle handle) {
-    if (!vulkan || handle == MESH_HANDLE_INVALID) {
+void renderer_vulkan_destroy_mesh(RendererVulkan* vulkan, MeshHandle mesh) {
+    if (!vulkan || !mesh) {
         return;
     }
 
-    U32 index = handle & 0xFFFF;
-    U32 gen = handle >> 16;
-
-    if (index >= vulkan->meshCount) {
-        return;
-    }
-
-    MeshAsset* asset = vulkan->meshSlots[index];
-    if (!asset || asset->generation != gen || !asset->loaded) {
-        return;
-    }
-
-    vulkan_destroy_mesh(vulkan, &asset->gpu);
-    asset->loaded = 0;
-    asset->indexCount = 0;
-    asset->nextFree = vulkan->meshFreeHead;
-    vulkan->meshFreeHead = index;
-}
-
-void renderer_vulkan_draw_mesh(RendererVulkan* vulkan, MeshHandle handle, const Mat4x4F32* transform, F32 alpha) {
-    if (!vulkan || !transform || handle == MESH_HANDLE_INVALID) {
-        return;
-    }
-
-    U32 index = handle & 0xFFFF;
-    U32 gen = handle >> 16;
-
-    if (index >= vulkan->meshCount) {
-        return;
-    }
-
-    MeshAsset* asset = vulkan->meshSlots[index];
-    if (!asset || asset->generation != gen || !asset->loaded) {
-        return;
-    }
-
-    if (vulkan->drawCommandCount >= vulkan->drawCommandCapacity) {
-        U32 newCap = (vulkan->drawCommandCapacity == 0) ? 64 : vulkan->drawCommandCapacity * 2;
-        DrawCommand* newCmds = ARENA_PUSH_ARRAY(vulkan->frameArena, DrawCommand, newCap);
-        if (!newCmds) {
-            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to allocate draw commands");
-            return;
-        }
-        if (vulkan->drawCommands && vulkan->drawCommandCount > 0) {
-            MEMCPY(newCmds, vulkan->drawCommands, sizeof(DrawCommand) * vulkan->drawCommandCount);
-        }
-        vulkan->drawCommands = newCmds;
-        vulkan->drawCommandCapacity = newCap;
-    }
-
-    DrawCommand* cmd = &vulkan->drawCommands[vulkan->drawCommandCount++];
-    cmd->meshHandle = handle;
-    cmd->transform = *transform;
-    cmd->alpha = alpha;
+    vulkan_destroy_mesh(vulkan, &mesh->gpu);
+    mesh->indexCount = 0;
 }

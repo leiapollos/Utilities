@@ -2,17 +2,20 @@
 // Created by André Leite on 03/11/2025.
 //
 
-void renderer_draw_color(Renderer* renderer, OS_WindowHandle window, Vec4F32 color) {
+void renderer_draw(Renderer* renderer, OS_WindowHandle window, const SceneData* scene,
+                   const RenderObject* objects, U32 objectCount) {
     if (!renderer || !renderer->backendData) {
         return;
     }
 
 #if defined(RENDERER_BACKEND_VULKAN)
     RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
-    renderer_vulkan_draw_color(vulkan, window, color);
+    renderer_vulkan_draw(vulkan, window, scene, objects, objectCount);
 #else
     (void) window;
-    (void) color;
+    (void) scene;
+    (void) objects;
+    (void) objectCount;
 #endif
 }
 
@@ -120,25 +123,14 @@ MeshHandle renderer_upload_mesh(Renderer* renderer, const MeshAssetData* meshDat
 #endif
 }
 
-void renderer_destroy_mesh(Renderer* renderer, MeshHandle handle) {
-    if (!renderer || !renderer->backendData || handle == MESH_HANDLE_INVALID) {
+void renderer_destroy_mesh(Renderer* renderer, MeshHandle mesh) {
+    if (!renderer || !renderer->backendData || !mesh) {
         return;
     }
 
 #if defined(RENDERER_BACKEND_VULKAN)
     RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
-    renderer_vulkan_destroy_mesh(vulkan, handle);
-#endif
-}
-
-void renderer_draw_mesh(Renderer* renderer, MeshHandle handle, const Mat4x4F32* transform, F32 alpha) {
-    if (!renderer || !renderer->backendData || handle == MESH_HANDLE_INVALID || !transform) {
-        return;
-    }
-
-#if defined(RENDERER_BACKEND_VULKAN)
-    RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
-    renderer_vulkan_draw_mesh(vulkan, handle, transform, alpha);
+    renderer_vulkan_destroy_mesh(vulkan, mesh);
 #endif
 }
 
@@ -295,3 +287,4 @@ void renderer_compile_shaders(Renderer* renderer, Arena* arena, JobSystem* jobSy
                   .kernelParameters = &kernelParams
     );
 }
+

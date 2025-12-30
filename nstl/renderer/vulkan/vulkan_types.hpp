@@ -130,35 +130,12 @@ struct GPUDrawPushConstants {
     F32 _padding[3];
 };
 
-struct MeshAsset {
+struct GPUMesh {
     GPUMeshBuffers gpu;
     U32 indexCount;
-    U32 generation;
-    union {
-        U32 nextFree;
-        B32 loaded;
-    };
 };
 
-static const U32 MESH_FREE_LIST_END = 0xFFFFFFFF;
 
-struct DrawCommand {
-    MeshHandle meshHandle;
-    Mat4x4F32 transform;
-    F32 alpha;
-};
-
-// ////////////////////////
-// Scene Data
-
-struct SceneData {
-    Mat4x4F32 view;
-    Mat4x4F32 proj;
-    Mat4x4F32 viewproj;
-    Vec4F32 ambientColor;
-    Vec4F32 sunDirection;
-    Vec4F32 sunColor;
-};
 
 // ////////////////////////
 // Material Types
@@ -242,17 +219,8 @@ struct RendererVulkan {
     
     Arena* frameArena;
     
-    MeshAsset** meshSlots;
-    U32 meshSlotCapacity;
-    U32 meshFreeHead;
-    U32 meshCount;
-    
     VkDescriptorPool drawImageDescriptorPool;
     VkDescriptorSet drawImageDescriptorSet;
-    
-    DrawCommand* drawCommands;
-    U32 drawCommandCount;
-    U32 drawCommandCapacity;
     
     RendererVulkanAllocatedImage whiteImage;
     RendererVulkanAllocatedImage blackImage;
@@ -271,8 +239,6 @@ struct RendererVulkan {
     VkDescriptorPool globalDescriptorPool;
     Material defaultMaterial;
     RendererVulkanAllocatedBuffer defaultMaterialBuffer;
-    
-    SceneData sceneData;
 
     VkDescriptorPool imguiDescriptorPool;
     ImGuiContext* imguiContext;

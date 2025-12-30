@@ -9,7 +9,8 @@
 // ////////////////////////
 // Vulkan Renderer Backend
 
-void renderer_vulkan_draw_color(RendererVulkan* vulkan, OS_WindowHandle window, Vec4F32 color);
+void renderer_vulkan_draw(RendererVulkan* vulkan, OS_WindowHandle window,
+                          const SceneData* scene, const RenderObject* objects, U32 objectCount);
 B32 renderer_vulkan_compile_shader_to_result(RendererVulkan* vulkan, Arena* arena, StringU8 shaderPath,
                                              ShaderCompileResult* outResult);
 B32 renderer_vulkan_imgui_init(RendererVulkan* vulkan, OS_WindowHandle window);
@@ -24,6 +25,5 @@ void renderer_vulkan_imgui_set_window_size(RendererVulkan* vulkan, U32 width, U3
 void renderer_vulkan_on_window_resized(RendererVulkan* vulkan, U32 width, U32 height);
 
 MeshHandle renderer_vulkan_upload_mesh(RendererVulkan* vulkan, const MeshAssetData* meshData);
-void renderer_vulkan_destroy_mesh(RendererVulkan* vulkan, MeshHandle handle);
-void renderer_vulkan_draw_mesh(RendererVulkan* vulkan, MeshHandle handle, const Mat4x4F32* transform, F32 alpha);
+void renderer_vulkan_destroy_mesh(RendererVulkan* vulkan, MeshHandle mesh);
 

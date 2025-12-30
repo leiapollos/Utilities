@@ -272,38 +272,59 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
                            renderer_imgui_end_frame,
                            host->renderer);
 
-    U64 frame = state->frameCounter;
-    F32 velocity = 0.05f;
-    F32 x = frame * velocity;
-    F32 red = CLAMP(sin(x) * 0.5f + 0.5f, 0.3f, 0.7f);
-    F32 green = CLAMP(cos(x) * 0.5f + 0.5f, 0.3f, 0.7f);
-    F32 blue = CLAMP(sin(x + 0.3f) * 0.5f + 0.5f, 0.3f, 0.7f);
-    Vec4F32 color = {};
-    color.r = red;
-    color.g = green;
-    color.b = blue;
-    color.a = 1.0f;
+    SceneData scene = {};
+    scene.view.v[0][0] = 1.0f;
+    scene.view.v[1][1] = 1.0f;
+    scene.view.v[2][2] = 1.0f;
+    scene.view.v[3][3] = 1.0f;
+    scene.proj.v[0][0] = 1.0f;
+    scene.proj.v[1][1] = 1.0f;
+    scene.proj.v[2][2] = 1.0f;
+    scene.proj.v[3][3] = 1.0f;
+    scene.viewproj.v[0][0] = 1.0f;
+    scene.viewproj.v[1][1] = 1.0f;
+    scene.viewproj.v[2][2] = 1.0f;
+    scene.viewproj.v[3][3] = 1.0f;
+    scene.ambientColor.r = 0.1f;
+    scene.ambientColor.g = 0.1f;
+    scene.ambientColor.b = 0.1f;
+    scene.ambientColor.a = 1.0f;
+    scene.sunDirection.x = 0.0f;
+    scene.sunDirection.y = 1.0f;
+    scene.sunDirection.z = 0.5f;
+    scene.sunDirection.w = 0.0f;
+    scene.sunColor.r = 1.0f;
+    scene.sunColor.g = 1.0f;
+    scene.sunColor.b = 1.0f;
+    scene.sunColor.a = 1.0f;
+
+    RenderObject* renderObjects = 0;
+    U32 renderObjectCount = 0;
 
     if (state->meshLoaded && state->meshCount > 0) {
-        F32 spacing = state->meshSpacing;
-        F32 scale = state->meshScale;
-        F32 alpha = state->meshAlpha;
+        renderObjects = ARENA_PUSH_ARRAY(host->frameArena, RenderObject, state->meshCount);
+        if (renderObjects) {
+            F32 spacing = state->meshSpacing;
+            F32 scale = state->meshScale;
+            F32 alpha = state->meshAlpha;
 
-        for (S32 i = 0; i < state->meshCount; ++i) {
-            F32 xOffset = (F32)(i - state->meshCount / 2) * spacing;
+            for (S32 i = 0; i < state->meshCount; ++i) {
+                F32 xOffset = (F32)(i - state->meshCount / 2) * spacing;
 
-            Mat4x4F32 transform = {};
-            transform.v[0][0] = scale;
-            transform.v[1][1] = scale;
-            transform.v[2][2] = scale;
-            transform.v[3][0] = xOffset;
-            transform.v[3][3] = 1.0f;
-
-            PLATFORM_RENDERER_CALL(platform, renderer_draw_mesh, host->renderer, state->meshHandle, &transform, alpha);
+                RenderObject* obj = &renderObjects[renderObjectCount++];
+                obj->mesh = state->meshHandle;
+                obj->transform = {};
+                obj->transform.v[0][0] = scale;
+                obj->transform.v[1][1] = scale;
+                obj->transform.v[2][2] = scale;
+                obj->transform.v[3][0] = xOffset;
+                obj->transform.v[3][3] = 1.0f;
+                obj->alpha = alpha;
+            }
         }
     }
 
-    PLATFORM_RENDERER_CALL(platform, renderer_draw_color, host->renderer, state->windowHandle, tests->drawColor);
+    PLATFORM_RENDERER_CALL(platform, renderer_draw, host->renderer, state->windowHandle, &scene, renderObjects, renderObjectCount);
 }
 
 static void app_shutdown(AppPlatform* platform, AppMemory* memory, AppHostContext* host) {

@@ -34,14 +34,27 @@ struct MeshAssetData {
     U32 surfaceCount;
 };
 
-// ////////////////////////
-// Renderer System
+struct SceneData {
+    Mat4x4F32 view;
+    Mat4x4F32 proj;
+    Mat4x4F32 viewproj;
+    Vec4F32 ambientColor;
+    Vec4F32 sunDirection;
+    Vec4F32 sunColor;
+};
+
+struct GPUMesh;
+typedef GPUMesh* MeshHandle;
+static const MeshHandle MESH_HANDLE_INVALID = 0;
+
+struct RenderObject {
+    MeshHandle mesh;
+    Mat4x4F32 transform;
+    F32 alpha;
+};
 
 typedef U64 ShaderHandle;
 static const ShaderHandle SHADER_HANDLE_INVALID = 0ull;
-
-typedef U32 MeshHandle;
-static const MeshHandle MESH_HANDLE_INVALID = 0xFFFFFFFF;
 
 struct ShaderCompileRequest {
     StringU8 shaderPath;
@@ -68,7 +81,8 @@ struct Renderer {
 
 B32 renderer_init(Arena* arena, Renderer* renderer);
 void renderer_shutdown(Renderer* renderer);
-void renderer_draw_color(Renderer* renderer, OS_WindowHandle window, Vec4F32 color);
+void renderer_draw(Renderer* renderer, OS_WindowHandle window, const SceneData* scene,
+                   const RenderObject* objects, U32 objectCount);
 void renderer_compile_shaders(Renderer* renderer, Arena* arena, JobSystem* jobSystem,
                               const ShaderCompileRequest* requests, U32 requestCount);
 B32 renderer_imgui_init(Renderer* renderer, OS_WindowHandle window);
@@ -80,7 +94,7 @@ void renderer_imgui_set_window_size(Renderer* renderer, U32 width, U32 height);
 void renderer_on_window_resized(Renderer* renderer, U32 width, U32 height);
 
 MeshHandle renderer_upload_mesh(Renderer* renderer, const MeshAssetData* meshData);
-void renderer_destroy_mesh(Renderer* renderer, MeshHandle handle);
-void renderer_draw_mesh(Renderer* renderer, MeshHandle handle, const Mat4x4F32* transform, F32 alpha);
+void renderer_destroy_mesh(Renderer* renderer, MeshHandle mesh);
 
 U32 mesh_load_from_file(Arena* arena, const char* path, MeshAssetData** outMeshes);
+
