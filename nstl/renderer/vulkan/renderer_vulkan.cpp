@@ -230,7 +230,7 @@ void renderer_vulkan_draw(RendererVulkan* vulkan, OS_WindowHandle window,
             depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
             depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
             depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-            depthAttachment.clearValue.depthStencil.depth = 0.0f;
+            depthAttachment.clearValue.depthStencil.depth = 1.0f;
 
             VkRenderingInfo renderingInfo = {};
             renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;

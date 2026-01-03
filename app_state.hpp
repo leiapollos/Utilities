@@ -6,6 +6,8 @@
 
 #include "app_interface.hpp"
 
+#include "app/app_camera.hpp"
+
 struct AppTestsState;
 
 struct AppCoreState {
@@ -19,6 +21,8 @@ struct AppCoreState {
     U32 workerCount;
     AppTestsState* tests;
 
+    Camera camera;
+
     MeshHandle meshHandle;
     F32 meshScale;
     Vec4F32 meshColor;
@@ -26,3 +30,4 @@ struct AppCoreState {
     U32 meshCount;
     B32 meshLoaded;
 };
+

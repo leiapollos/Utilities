@@ -8,7 +8,9 @@
 
 #include "imgui.h"
 
+#include "app/app_camera.cpp"
 #include "app_tests.cpp"
+
 
 #include <dirent.h>
 #include <sys/stat.h>
@@ -21,6 +23,7 @@ static void app_assign_tests_state(AppCoreState* state);
 static AppTestsState* app_get_tests(AppCoreState* state);
 static U32 app_select_worker_count(const AppHostContext* host);
 static void app_compile_shaders_from_folder(AppPlatform* platform, AppMemory* memory, AppHostContext* host);
+
 
 static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostContext* host) {
     ASSERT_ALWAYS(platform != 0);
@@ -108,7 +111,7 @@ static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostConte
             state->meshHandle = PLATFORM_RENDERER_CALL(platform, renderer_upload_mesh, host->renderer, &meshAssets[0]);
             if (state->meshHandle != MESH_HANDLE_INVALID) {
                 state->meshLoaded = 1;
-                state->meshScale = 0.1f;
+                state->meshScale = 1.0f;
                 state->meshColor.r = 1.0f;
                 state->meshColor.g = 1.0f;
                 state->meshColor.b = 1.0f;
@@ -118,6 +121,14 @@ static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostConte
                 LOG_INFO("app", "Loaded mesh with handle {}", state->meshHandle);
             }
         }
+    }
+
+    if (needsReset) {
+        state->camera.position    = {{0.0f, 0.0f, 2.0f}};
+        state->camera.velocity    = {{0.0f, 0.0f, 0.0f}};
+        camera_init(&state->camera);
+        state->camera.sensitivity = 0.005f;
+        state->camera.moveSpeed   = 3.0f;
     }
 
     return 1;
@@ -206,15 +217,33 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
             break;
 
             case OS_GraphicsEvent_Tag_MouseMove: {
-                LOG_DEBUG("app", "Mouse moved to ({}, {})", evt->mouseMove.x, evt->mouseMove.y);
+                if (!ImGui::GetIO().WantCaptureMouse) {
+                    F32 deltaPitch = -evt->mouseMove.deltaY * state->camera.sensitivity;
+                    F32 deltaYaw   =  evt->mouseMove.deltaX * state->camera.sensitivity;
+                    camera_rotate(&state->camera, deltaPitch, deltaYaw);
+                }
+            }
+            break;
+
+            case OS_GraphicsEvent_Tag_KeyDown: {
+                OS_KeyCode key = evt->keyDown.keyCode;
+                     if (key == OS_KeyCode_W) { state->camera.velocity.z = -1.0f; }
+                else if (key == OS_KeyCode_S) { state->camera.velocity.z =  1.0f; }
+                else if (key == OS_KeyCode_A) { state->camera.velocity.x = -1.0f; }
+                else if (key == OS_KeyCode_D) { state->camera.velocity.x =  1.0f; }
+            }
+            break;
+
+            case OS_GraphicsEvent_Tag_KeyUp: {
+                OS_KeyCode key = evt->keyUp.keyCode;
+                     if (key == OS_KeyCode_W || key == OS_KeyCode_S) { state->camera.velocity.z = 0.0f; }
+                else if (key == OS_KeyCode_A || key == OS_KeyCode_D) { state->camera.velocity.x = 0.0f; }
             }
             break;
 
             case OS_GraphicsEvent_Tag_MouseButtonDown:
             case OS_GraphicsEvent_Tag_MouseButtonUp:
             case OS_GraphicsEvent_Tag_MouseScroll:
-            case OS_GraphicsEvent_Tag_KeyDown:
-            case OS_GraphicsEvent_Tag_KeyUp:
             case OS_GraphicsEvent_Tag_TextInput:
             default: {
             }
@@ -253,6 +282,14 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
             ImGui::SliderFloat("Mesh Spacing", &state->meshSpacing, 0.1f, 2.0f, "%.2f");
         }
 
+        ImGui::SeparatorText("Camera");
+        ImGui::Text("Position: (%.2f, %.2f, %.2f)",
+            (double)state->camera.position.x, (double)state->camera.position.y, (double)state->camera.position.z);
+        QuatF32 q = state->camera.orientation;
+        ImGui::Text("Orientation: (%.3f, %.3f, %.3f, %.3f)", (double)q.x, (double)q.y, (double)q.z, (double)q.w);
+        ImGui::SliderFloat("Sensitivity", &state->camera.sensitivity, 0.001f, 0.02f, "%.4f");
+        ImGui::SliderFloat("Move Speed", &state->camera.moveSpeed, 1.0f, 20.0f, "%.1f");
+
         static int selected_fish = -1;
         const char* names[] = { "Bream", "Haddock", "Mackerel", "Pollock", "Tilefish" };
         const char* names2[] = { "Bream2", "Haddock2", "Mackerel2", "Pollock2", "Tilefish2" };
@@ -276,19 +313,21 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
                            renderer_imgui_end_frame,
                            host->renderer);
 
+    camera_update(&state->camera, deltaSeconds);
+
+    F32 fovY = DEG_TO_RAD(70.0f);
+    F32 aspect = (F32)state->desiredWindow.width / (F32)state->desiredWindow.height;
+    F32 zNear = 0.1f;
+    F32 zFar = 1000.0f;
+    
+    Mat4x4F32 projection = mat4_perspective(fovY, aspect, zNear, zFar);
+    Mat4x4F32 view = camera_get_view_matrix(&state->camera);
+    
     SceneData scene = {};
-    scene.view.v[0][0] = 1.0f;
-    scene.view.v[1][1] = 1.0f;
-    scene.view.v[2][2] = 1.0f;
-    scene.view.v[3][3] = 1.0f;
-    scene.proj.v[0][0] = 1.0f;
-    scene.proj.v[1][1] = 1.0f;
-    scene.proj.v[2][2] = 1.0f;
-    scene.proj.v[3][3] = 1.0f;
-    scene.viewproj.v[0][0] = 1.0f;
-    scene.viewproj.v[1][1] = 1.0f;
-    scene.viewproj.v[2][2] = 1.0f;
-    scene.viewproj.v[3][3] = 1.0f;
+    scene.view = view;
+    scene.proj = projection;
+    scene.viewproj = view * projection;
+    
     scene.ambientColor.r = 0.1f;
     scene.ambientColor.g = 0.1f;
     scene.ambientColor.b = 0.1f;
@@ -308,20 +347,16 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
     if (state->meshLoaded && state->meshCount > 0) {
         renderObjects = ARENA_PUSH_ARRAY(host->frameArena, RenderObject, state->meshCount);
         if (renderObjects) {
-            F32 spacing = state->meshSpacing;
             F32 scale = state->meshScale;
-
+            F32 spacing = state->meshSpacing;
             for (U32 i = 0; i < state->meshCount; ++i) {
-                F32 xOffset = (F32)((S32)i - (S32)state->meshCount / 2) * spacing;
-
                 RenderObject* obj = &renderObjects[renderObjectCount++];
                 obj->mesh = state->meshHandle;
-                obj->transform = {};
+                obj->transform = mat4_identity();
                 obj->transform.v[0][0] = scale;
                 obj->transform.v[1][1] = scale;
                 obj->transform.v[2][2] = scale;
-                obj->transform.v[3][0] = xOffset;
-                obj->transform.v[3][3] = 1.0f;
+                obj->transform.v[3][0] = (F32)i * spacing;
                 obj->color = state->meshColor;
             }
         }

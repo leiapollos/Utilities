@@ -509,7 +509,7 @@ static B32 vulkan_init_mesh_pipeline(RendererVulkan* vulkan) {
         pipeline_builder_set_cull_mode(&builder, VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
         pipeline_builder_set_multisampling_none(&builder);
         pipeline_builder_enable_blending_alphablend(&builder);
-        pipeline_builder_enable_depth_test(&builder, 1, VK_COMPARE_OP_GREATER_OR_EQUAL);
+        pipeline_builder_enable_depth_test(&builder, 1, VK_COMPARE_OP_LESS_OR_EQUAL);
         pipeline_builder_set_color_attachment_format(&builder, vulkan->drawImage.imageFormat != VK_FORMAT_UNDEFINED 
             ? vulkan->drawImage.imageFormat 
             : VK_FORMAT_R16G16B16A16_SFLOAT);

@@ -342,11 +342,6 @@ Mat4x4F32& operator*=(Mat4x4F32& a, const Mat4x4F32& b) noexcept {
 }
 
 static
-Mat4x4F32 operator*(Mat4x4F32 a, const Mat4x4F32& b) noexcept {
-    return a *= b;
-}
-
-static
 Mat4x4F32& operator*=(Mat4x4F32& m, F32 s) noexcept {
     m.v[0][0] *= s; m.v[0][1] *= s; m.v[0][2] *= s; m.v[0][3] *= s;
     m.v[1][0] *= s; m.v[1][1] *= s; m.v[1][2] *= s; m.v[1][3] *= s;
@@ -378,16 +373,6 @@ Mat4x4F32& operator/=(Mat4x4F32& m, F32 s) noexcept {
 static
 Mat4x4F32 operator/(Mat4x4F32 m, F32 s) noexcept {
     return m /= s;
-}
-
-static
-Vec4F32 operator*(const Mat4x4F32& m, const Vec4F32& v) noexcept {
-    Vec4F32 res;
-    res.x = m.v[0][0] * v.x + m.v[0][1] * v.y + m.v[0][2] * v.z + m.v[0][3] * v.w;
-    res.y = m.v[1][0] * v.x + m.v[1][1] * v.y + m.v[1][2] * v.z + m.v[1][3] * v.w;
-    res.z = m.v[2][0] * v.x + m.v[2][1] * v.y + m.v[2][2] * v.z + m.v[2][3] * v.w;
-    res.w = m.v[3][0] * v.x + m.v[3][1] * v.y + m.v[3][2] * v.z + m.v[3][3] * v.w;
-    return res;
 }
 
 static
