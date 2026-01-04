@@ -527,9 +527,9 @@ static void os_push_key_event(NSEvent* event, OS_GraphicsEvent_Tag tag) {
     }
 }
 
-static void os_process_nsevent(NSEvent* event) {
+static B32 os_process_nsevent(NSEvent* event) {
     if (!event) {
-        return;
+        return 0;
     }
 
     NSEventType type = [event type];
@@ -539,35 +539,35 @@ static void os_process_nsevent(NSEvent* event) {
         case NSEventTypeRightMouseDown:
         case NSEventTypeOtherMouseDown:
             os_push_mouse_event(event, OS_GraphicsEvent_Tag_MouseButtonDown);
-            break;
+            return 0;
 
         case NSEventTypeLeftMouseUp:
         case NSEventTypeRightMouseUp:
         case NSEventTypeOtherMouseUp:
             os_push_mouse_event(event, OS_GraphicsEvent_Tag_MouseButtonUp);
-            break;
+            return 0;
 
         case NSEventTypeMouseMoved:
         case NSEventTypeLeftMouseDragged:
         case NSEventTypeRightMouseDragged:
         case NSEventTypeOtherMouseDragged:
             os_push_mouse_event(event, OS_GraphicsEvent_Tag_MouseMove);
-            break;
+            return 0;
 
         case NSEventTypeScrollWheel:
             os_push_mouse_event(event, OS_GraphicsEvent_Tag_MouseScroll);
-            break;
+            return 0;
 
         case NSEventTypeKeyDown:
             os_push_key_event(event, OS_GraphicsEvent_Tag_KeyDown);
-            break;
+            return 1;
 
         case NSEventTypeKeyUp:
             os_push_key_event(event, OS_GraphicsEvent_Tag_KeyUp);
-            break;
+            return 1;
 
         default:
-            break;
+            return 0;
     }
 }
 
@@ -963,8 +963,10 @@ B32 OS_graphics_pump_events() {
             }
 
             processedEvent = 1;
-            os_process_nsevent(event);
-            [NSApp sendEvent:event];
+            B32 eventHandled = os_process_nsevent(event);
+            if (!eventHandled) {
+                [NSApp sendEvent:event];
+            }
         }
 
         if (processedEvent) {
