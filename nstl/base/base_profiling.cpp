@@ -54,7 +54,7 @@ U64 ProfClock::to_micros(U64 ticksOrMicros) {
 }
 
 void profiler_initialize() {
-    memset(&g_profiler, 0, sizeof(g_profiler));
+    MEMSET(&g_profiler, 0, sizeof(g_profiler));
     g_profiler.registryMutex = OS_mutex_create();
     
     ArenaParameters params = {};
@@ -143,7 +143,7 @@ void profiler_init_thread(const char* name, U32 traceEventCapacityIfEnabled) {
     }
 
     ProfilerThreadState* tls = ARENA_PUSH_STRUCT(g_profiler.labelArena, ProfilerThreadState);
-    memset(tls, 0, sizeof(*tls));
+    MEMSET(tls, 0, sizeof(*tls));
     tls->currentParentIndex = 0;
     tls->threadId = OS_get_thread_id_u32();
     tls->threadName = name;
@@ -230,7 +230,7 @@ TimedScope::~TimedScope() noexcept {
 
 void profiler_print_report() {
     ProfilerEntry agg[PROFILER_MAX_ANCHORS];
-    memset(agg, 0, sizeof(agg));
+    MEMSET(agg, 0, sizeof(agg));
 
     OS_mutex_lock(g_profiler.registryMutex);
     const U32 tcount = g_profiler.threadCount;

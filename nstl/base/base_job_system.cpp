@@ -80,7 +80,7 @@ JobSystem* job_system_create(Arena* arena, U32 workerCount) {
     ASSERT_DEBUG(workerCount >= 1);
     ASSERT_DEBUG(g_tlsJobState.jobSystem == nullptr && "JobSystem already initialized on this thread");
     JobSystem* jobSystem = (JobSystem*) arena_push(arena, sizeof(JobSystem), alignof(JobSystem));
-    memset(jobSystem, 0, sizeof(JobSystem));
+    MEMSET(jobSystem, 0, sizeof(JobSystem));
     jobSystem->workerCount = workerCount;
 
     U32 totalQueues = workerCount + 1u;
@@ -93,8 +93,8 @@ JobSystem* job_system_create(Arena* arena, U32 workerCount) {
 #ifndef NDEBUG
     jobSystem->workerStats = (JobSystemStats*) arena_push(arena, sizeof(JobSystemStats) * totalQueues,
                                                           alignof(JobSystemStats));
-    memset(jobSystem->workerStats, 0, sizeof(JobSystemStats) * totalQueues);
-    memset(&jobSystem->totals, 0, sizeof(jobSystem->totals));
+    MEMSET(jobSystem->workerStats, 0, sizeof(JobSystemStats) * totalQueues);
+    MEMSET(&jobSystem->totals, 0, sizeof(jobSystem->totals));
 #endif
 
     g_tlsJobState.workerIndex = 0;
@@ -102,7 +102,7 @@ JobSystem* job_system_create(Arena* arena, U32 workerCount) {
     g_tlsJobState.jobSystem = jobSystem;
     g_tlsJobState.randomGenerator = xorshift_seed(((U64) (uintptr_t) jobSystem) ^ 0xD1B54A32D192ED03ull);
 #ifndef NDEBUG
-    memset(&g_tlsJobState.stats, 0, sizeof(g_tlsJobState.stats));
+    MEMSET(&g_tlsJobState.stats, 0, sizeof(g_tlsJobState.stats));
 #endif
 
     for (U32 i = 0; i < workerCount; ++i) {
@@ -112,7 +112,7 @@ JobSystem* job_system_create(Arena* arena, U32 workerCount) {
         workerParameters->workerIndex = i + 1u;
         jobSystem->workers[i] = OS_thread_create(job_system_worker_entry, workerParameters);
 #ifndef NDEBUG
-        memset(&jobSystem->workerStats[i], 0, sizeof(JobSystemStats));
+        MEMSET(&jobSystem->workerStats[i], 0, sizeof(JobSystemStats));
 #endif
     }
 
@@ -134,7 +134,7 @@ void job_system_destroy(JobSystem* jobSystem) {
     jobSystem->workerStats[0].steals += g_tlsJobState.stats.steals;
     jobSystem->workerStats[0].yields += g_tlsJobState.stats.yields;
 
-    memset(&jobSystem->totals, 0, sizeof(jobSystem->totals));
+    MEMSET(&jobSystem->totals, 0, sizeof(jobSystem->totals));
     for (U32 i = 0; i < (jobSystem->workerCount + 1u); ++i) {
         jobSystem->totals.pops += jobSystem->workerStats[i].pops;
         jobSystem->totals.steals += jobSystem->workerStats[i].steals;
@@ -143,7 +143,7 @@ void job_system_destroy(JobSystem* jobSystem) {
 #endif
 
     g_tlsJobState.workerIndex = JOB_SYSTEM_INVALID_WORKER_INDEX;
-    memset(&g_tlsJobState, 0, sizeof(g_tlsJobState));
+    MEMSET(&g_tlsJobState, 0, sizeof(g_tlsJobState));
 }
 
 // ////////////////////////
@@ -175,7 +175,7 @@ void job_system_worker_entry(void* params) {
                    (U64) workerIndex * 0x9E3779B97F4A7C15ull);
     g_tlsJobState.randomGenerator = xorshift_seed(seed);
 #ifndef NDEBUG
-    memset(&g_tlsJobState.stats, 0, sizeof(g_tlsJobState.stats));
+    MEMSET(&g_tlsJobState.stats, 0, sizeof(g_tlsJobState.stats));
 #endif
 
     WSDeque** queues = jobSystem->queues;
@@ -237,7 +237,7 @@ void job_system_worker_entry(void* params) {
     }
 #endif
 
-    memset(&g_tlsJobState, 0, sizeof(g_tlsJobState));
+    MEMSET(&g_tlsJobState, 0, sizeof(g_tlsJobState));
     
 }
 

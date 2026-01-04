@@ -8,7 +8,6 @@
 #include "nstl/base/base_job_system.hpp"
 #include "app_state.hpp"
 
-#include <math.h>
 
 #define APP_MAX_JOB_SLOTS 8u
 #define APP_TEST_ENTITY_COUNT 128u
@@ -149,7 +148,7 @@ static void app_tests_step_entities_single_thread(AppMemory* memory, AppCoreStat
     }
 
     tests->lastVelocitySum = speedSum;
-    tests->lastVelocityError = fabsf(tests->expectedSpeedSum - speedSum);
+    tests->lastVelocityError = ABS_F32(tests->expectedSpeedSum - speedSum);
     tests->lastPositionSum = (F32) positionSum;
 
     temp_end(&scratch);
@@ -252,7 +251,7 @@ static void app_tests_step_entities_jobs(AppMemory* memory, AppCoreState* core, 
     }
 
     tests->lastVelocitySum = totalSpeed;
-    tests->lastVelocityError = fabsf(tests->expectedSpeedSum - totalSpeed);
+    tests->lastVelocityError = ABS_F32(tests->expectedSpeedSum - totalSpeed);
 
     Arena* excludes[1] = {memory ? memory->programArena : 0};
     Temp scratch = get_scratch(excludes, ARRAY_COUNT(excludes));

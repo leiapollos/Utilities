@@ -4,11 +4,7 @@
 
 #pragma once
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <stdarg.h>
-#include <math.h>
 
 // ////////////////////////
 // Assert
@@ -132,6 +128,126 @@ EXTERN_C void __asan_unpoison_memory_region(void const volatile* addr, U32 size)
 
 
 // //////////////////////////////
+// Memory Operations
+
+FORCE_INLINE void* mem_copy(void* dst, const void* src, U64 size) {
+    U8* d = (U8*)dst;
+    const U8* s = (const U8*)src;
+
+    if (((uintptr)d & 7) == 0 && ((uintptr)s & 7) == 0) {
+        while (size >= 8) {
+            *(U64*)d = *(const U64*)s;
+            d += 8; s += 8; size -= 8;
+        }
+    }
+    while (size > 0) {
+        *d++ = *s++;
+        size--;
+    }
+    return dst;
+}
+
+FORCE_INLINE void* mem_move(void* dst, const void* src, U64 size) {
+    U8* d = (U8*)dst;
+    const U8* s = (const U8*)src;
+
+    if (d == s || size == 0) {
+        return dst;
+    }
+
+    if (d < s || d >= s + size) {
+        return mem_copy(dst, src, size);
+    }
+
+    d += size;
+    s += size;
+
+    if (((uintptr)d & 7) == 0 && ((uintptr)s & 7) == 0) {
+        while (size >= 8) {
+            d -= 8; s -= 8;
+            *(U64*)d = *(const U64*)s;
+            size -= 8;
+        }
+    }
+    while (size > 0) {
+        *--d = *--s;
+        size--;
+    }
+    return dst;
+}
+
+FORCE_INLINE void* mem_set(void* dst, U8 value, U64 size) {
+    U8* d = (U8*)dst;
+    U64 fill8 = value;
+    fill8 |= fill8 << 8;
+    fill8 |= fill8 << 16;
+    fill8 |= fill8 << 32;
+
+    if (((uintptr)d & 7) == 0) {
+        while (size >= 8) {
+            *(U64*)d = fill8;
+            d += 8; size -= 8;
+        }
+    }
+    while (size > 0) {
+        *d++ = value;
+        size--;
+    }
+    return dst;
+}
+
+FORCE_INLINE S32 mem_cmp(const void* a, const void* b, U64 size) {
+    const U8* pa = (const U8*)a;
+    const U8* pb = (const U8*)b;
+
+    if (((uintptr)pa & 7) == 0 && ((uintptr)pb & 7) == 0) {
+        while (size >= 8) {
+            U64 va = *(const U64*)pa;
+            U64 vb = *(const U64*)pb;
+            if (va != vb) {
+                for (U64 i = 0; i < 8; ++i) {
+                    U8 ca = pa[i];
+                    U8 cb = pb[i];
+                    if (ca != cb) {
+                        return (ca < cb) ? -1 : 1;
+                    }
+                }
+            }
+            pa += 8; pb += 8; size -= 8;
+        }
+    }
+    while (size > 0) {
+        if (*pa != *pb) {
+            return (*pa < *pb) ? -1 : 1;
+        }
+        ++pa; ++pb; --size;
+    }
+    return 0;
+}
+
+
+// //////////////////////////////
+// String Operations
+
+FORCE_INLINE U64 c_str_len(const char* str) {
+    if (!str) { return 0; }
+    const char* s = str;
+    while (*s) { ++s; }
+    return (U64)(s - str);
+}
+
+FORCE_INLINE S32 c_str_cmp(const char* a, const char* b) {
+    if (!a && !b) { return 0; }
+    if (!a) { return -1; }
+    if (!b) { return 1; }
+    while (*a && *b && *a == *b) {
+        ++a; ++b;
+    }
+    return (S32)(*(const U8*)a) - (S32)(*(const U8*)b);
+}
+
+
+// //////////////////////////////
 // Misc
 
 #define MACRO_STR_2(s)      #s
@@ -141,12 +257,12 @@ EXTERN_C void __asan_unpoison_memory_region(void const volatile* addr, U32 size)
 
 #define ARRAY_COUNT(arr)        (sizeof(arr) / sizeof(arr[0]))
 
-#define MEMCPY(dst, src, len)   memcpy(dst, src, len)
-#define MEMMOVE(dst, src, len)  memmove(dst, src, len)
-#define MEMCMP(a, b, len)       memcmp(a, b, len)
-#define MEMSET(dst, v, len)     memset(dst, v, len)
+#define MEMCPY(dst, src, len)   mem_copy(dst, src, len)
+#define MEMMOVE(dst, src, len)  mem_move(dst, src, len)
+#define MEMCMP(a, b, len)       mem_cmp(a, b, len)
+#define MEMSET(dst, v, len)     mem_set(dst, (U8)(v), len)
 
-#define C_STR_LEN(ptr)          strlen(ptr)
+#define C_STR_LEN(ptr)          c_str_len(ptr)
 
 
 // //////////////////////////////

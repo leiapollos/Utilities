@@ -21,7 +21,7 @@ WSDeque* wsdq_create(Arena* arena, U64 capacity, U64 elementSize) {
     dq->buffer = (U8*) arena_push(arena, capacity * elementSize, CACHE_LINE_SIZE);
     ASSERT_DEBUG(dq->buffer);
 
-    memset(dq->buffer, 0, capacity * elementSize);
+    MEMSET(dq->buffer, 0, capacity * elementSize);
 
     ATOMIC_STORE(&dq->bottom, 0u, MEMORY_ORDER_RELAXED);
     ATOMIC_STORE(&dq->top, 0u, MEMORY_ORDER_RELAXED);
@@ -42,7 +42,7 @@ B32 wsdq_push(WSDeque* dq, const void* value) {
     }
 
     U8* slot = WSDQ_SLOT(dq, b);
-    memcpy(slot, value, dq->elementSize);
+    MEMCPY(slot, value, dq->elementSize);
     ATOMIC_STORE(&dq->bottom, b + 1u, MEMORY_ORDER_RELEASE);
     return 1;
 }
@@ -65,7 +65,7 @@ B32 wsdq_pop(WSDeque* dq, void* out_value) {
 
     if (t <= b) {
         U8* slot = WSDQ_SLOT(dq, b);
-        memcpy(out_value, slot, dq->elementSize);
+        MEMCPY(out_value, slot, dq->elementSize);
 
         if (t == b) {
             U64 expected = t;
@@ -105,7 +105,7 @@ B32 wsdq_steal(WSDeque* dq, void* out_value) {
                                     false,
                                     MEMORY_ORDER_SEQ_CST,
                                     MEMORY_ORDER_RELAXED)) {
-            memcpy(out_value, slot, dq->elementSize);
+            MEMCPY(out_value, slot, dq->elementSize);
             return 1;
         }
     }

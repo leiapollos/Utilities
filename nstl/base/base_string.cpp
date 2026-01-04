@@ -107,24 +107,99 @@ StringU8 str8_from_U64(Arena* arena, U64 value, U64 base) {
 }
 
 StringU8 str8_from_S64(Arena* arena, S64 value) {
-    char buffer[64];
-    int len = snprintf(buffer, sizeof(buffer), "%lld", value);
-    ASSERT_DEBUG(len >= 0);
-    return str8_cpy(arena, str8((U8*) buffer, (U64) len));
+    U8 buffer[21];
+    U64 i = 0;
+    B32 negative = (value < 0);
+    U64 absVal = negative ? (U64)(-value) : (U64)value;
+
+    if (absVal == 0) {
+        buffer[i++] = '0';
+    } else {
+        while (absVal > 0) {
+            buffer[i++] = (U8)('0' + (absVal % 10));
+            absVal /= 10;
+        }
+    }
+    if (negative) {
+        buffer[i++] = '-';
+    }
+    for (U64 l = 0, r = i - 1; l < r; ++l, --r) {
+        U8 tmp = buffer[l];
+        buffer[l] = buffer[r];
+        buffer[r] = tmp;
+    }
+
+    StringU8 out;
+    out.size = i;
+    out.data = ARENA_PUSH_ARRAY(arena, U8, i + 1);
+    if (i) { MEMMOVE(out.data, buffer, i); }
+    out.data[i] = '\0';
+    return out;
 }
 
 StringU8 str8_from_F64(Arena* arena, F64 value, int precision) {
-    char buffer[64];
-    int len = snprintf(buffer, sizeof(buffer), "%.*f", precision, value);
-    ASSERT_DEBUG(len >= 0);
-    return str8_cpy(arena, str8((U8*) buffer, (U64) len));
+    U8 buffer[64];
+    U64 i = 0;
+
+    if (value < 0.0) {
+        buffer[i++] = '-';
+        value = -value;
+    }
+
+    U64 intPart = (U64)value;
+    F64 fracPart = value - (F64)intPart;
+
+    if (intPart == 0) {
+        buffer[i++] = '0';
+    } else {
+        U8 intBuf[20];
+        U64 j = 0;
+        while (intPart > 0) {
+            intBuf[j++] = (U8)('0' + (intPart % 10));
+            intPart /= 10;
+        }
+        while (j > 0) {
+            buffer[i++] = intBuf[--j];
+        }
+    }
+
+    if (precision > 0) {
+        buffer[i++] = '.';
+        for (int p = 0; p < precision; ++p) {
+            fracPart *= 10.0;
+            int digit = (int)fracPart;
+            buffer[i++] = (U8)('0' + digit);
+            fracPart -= digit;
+        }
+    }
+
+    StringU8 out;
+    out.size = i;
+    out.data = ARENA_PUSH_ARRAY(arena, U8, i + 1);
+    if (i) { MEMMOVE(out.data, buffer, i); }
+    out.data[i] = '\0';
+    return out;
 }
 
 StringU8 str8_from_ptr(Arena* arena, const void* ptr) {
-    char buffer[32];
-    int len = snprintf(buffer, sizeof(buffer), "%p", ptr);
-    ASSERT_DEBUG(len >= 0);
-    return str8_cpy(arena, str8((U8*) buffer, (U64) len));
+    U8 buffer[20];
+    uintptr val = (uintptr)ptr;
+
+    buffer[0] = '0';
+    buffer[1] = 'x';
+    U64 i = 2;
+
+    for (int shift = (sizeof(uintptr) * 8 - 4); shift >= 0; shift -= 4) {
+        int digit = (val >> shift) & 0xF;
+        buffer[i++] = (U8)(digit < 10 ? '0' + digit : 'a' + (digit - 10));
+    }
+
+    StringU8 out;
+    out.size = i;
+    out.data = ARENA_PUSH_ARRAY(arena, U8, i + 1);
+    if (i) { MEMMOVE(out.data, buffer, i); }
+    out.data[i] = '\0';
+    return out;
 }
 
 StringU8 str8_from_char(Arena* arena, U8 c) {

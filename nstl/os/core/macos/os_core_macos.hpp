@@ -10,7 +10,6 @@
 #include <sys/stat.h>
 #include <limits.h>
 #include <cstdlib>
-#include <math.h>
 #include <time.h>
 #include <pthread.h>
 #include <sched.h>

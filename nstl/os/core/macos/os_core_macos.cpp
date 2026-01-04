@@ -636,7 +636,7 @@ B32 OS_terminal_supports_color() {
     }
 
     const char* term = getenv("TERM");
-    if (term && strcmp(term, "dumb") == 0) {
+    if (term && c_str_cmp(term, "dumb") == 0) {
         return false;
     }
 
@@ -752,12 +752,12 @@ static OS_MACOS_Entity* alloc_OS_entity() {
     OS_MACOS_Entity* entity = g_OS_MacOSState.freeEntities;
     if (entity) {
         g_OS_MacOSState.freeEntities = entity->next;
-        memset(entity, 0, sizeof(OS_MACOS_Entity));
+        MEMSET(entity, 0, sizeof(OS_MACOS_Entity));
     } else {
         Arena* arena = g_OS_MacOSState.osEntityArena;
         entity = (OS_MACOS_Entity*) arena_push(arena, sizeof(OS_MACOS_Entity), alignof(OS_MACOS_Entity));
         if (entity) {
-            memset(entity, 0, sizeof(OS_MACOS_Entity));
+            MEMSET(entity, 0, sizeof(OS_MACOS_Entity));
         }
     }
     return entity;

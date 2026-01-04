@@ -5,15 +5,58 @@
 #pragma once
 
 // ////////////////////////
-// Trigonometry
+// Constants
 
 #define PI_F32         3.14159265358979323846f
 #define DEG_TO_RAD(d)  ((d) * (PI_F32 / 180.0f))
 #define RAD_TO_DEG(r)  ((r) * (180.0f / PI_F32))
 
-#define SIN_F32(v)     sinf(v)
-#define COS_F32(v)     cosf(v)
-#define TAN_F32(v)     tanf(v)
+// ////////////////////////
+// Trigonometry
+
+FORCE_INLINE F32 sin_f32(F32 x) {
+    while (x > PI_F32) { x -= 2.0f * PI_F32; }
+    while (x < -PI_F32) { x += 2.0f * PI_F32; }
+
+    F32 x2 = x * x;
+    F32 x3 = x2 * x;
+    F32 x5 = x3 * x2;
+    F32 x7 = x5 * x2;
+    F32 x9 = x7 * x2;
+
+    return x - x3 / 6.0f + x5 / 120.0f - x7 / 5040.0f + x9 / 362880.0f;
+}
+
+FORCE_INLINE F32 cos_f32(F32 x) {
+    return sin_f32(x + PI_F32 * 0.5f);
+}
+
+FORCE_INLINE F32 tan_f32(F32 x) {
+    F32 c = cos_f32(x);
+    if (c == 0.0f) { return 0.0f; }
+    return sin_f32(x) / c;
+}
+
+FORCE_INLINE F32 sqrt_f32(F32 x) {
+    if (x <= 0.0f) { return 0.0f; }
+
+    union { F32 f; U32 i; } conv = {x};
+    conv.i = 0x5f3759df - (conv.i >> 1);
+    F32 y = conv.f;
+    y = y * (1.5f - (x * 0.5f * y * y));
+    y = y * (1.5f - (x * 0.5f * y * y));
+    return x * y;
+}
+
+FORCE_INLINE F32 abs_f32(F32 x) {
+    return (x < 0.0f) ? -x : x;
+}
+
+#define SIN_F32(v)     sin_f32(v)
+#define COS_F32(v)     cos_f32(v)
+#define TAN_F32(v)     tan_f32(v)
+#define SQRT_F32(v)    sqrt_f32(v)
+#define ABS_F32(v)     abs_f32(v)
 
 // ////////////////////////
 // Alignment
@@ -198,7 +241,7 @@ inline Vec3F32 vec3_cross(Vec3F32 a, Vec3F32 b) {
 }
 
 inline F32 vec3_length(Vec3F32 v) {
-    return sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
+    return SQRT_F32(v.x * v.x + v.y * v.y + v.z * v.z);
 }
 
 inline Vec3F32 vec3_normalize(Vec3F32 v) {
@@ -217,8 +260,8 @@ inline Vec3F32 vec3_normalize(Vec3F32 v) {
 
 inline QuatF32 quat_from_axis_angle(Vec3F32 axis, F32 angleRadians) {
     F32 halfAngle = angleRadians * 0.5f;
-    F32 sinHalf = sinf(halfAngle);
-    F32 cosHalf = cosf(halfAngle);
+    F32 sinHalf = SIN_F32(halfAngle);
+    F32 cosHalf = COS_F32(halfAngle);
     Vec3F32 normAxis = vec3_normalize(axis);
     QuatF32 q;
     q.x = normAxis.x * sinHalf;
@@ -282,7 +325,7 @@ inline QuatF32 quat_mul(QuatF32 a, QuatF32 b) {
 }
 
 inline QuatF32 quat_normalize(QuatF32 q) {
-    F32 len = sqrtf(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+    F32 len = SQRT_F32(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
     if (len > 0.0f) {
         F32 inv = 1.0f / len;
         q.x *= inv;
@@ -343,7 +386,7 @@ inline Mat4x4F32 mat4_transpose(Mat4x4F32 m) {
 
 inline Mat4x4F32 mat4_perspective(F32 fovYRadians, F32 aspect, F32 zNear, F32 zFar) {
     Mat4x4F32 m = {};
-    F32 tanHalfFov = tanf(fovYRadians * 0.5f);
+    F32 tanHalfFov = TAN_F32(fovYRadians * 0.5f);
     F32 f = 1.0f / tanHalfFov;
 
     m.v[0][0] = f / aspect;
@@ -403,12 +446,6 @@ inline Mat4x4F32 mat4_inverse(Mat4x4F32 m) {
 
     return inv;
 }
-
-// ////////////////////////
-// Operations
-
-#define SQRT_F32(v)   sqrtf(v)
-
 
 
 // ////////////////////////

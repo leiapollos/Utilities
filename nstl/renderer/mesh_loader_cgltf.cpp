@@ -42,7 +42,7 @@ static void compute_bounds_from_vertices(const Vertex* vertices, U32 startVtx, U
     F32 ex = outBounds->extents.x;
     F32 ey = outBounds->extents.y;
     F32 ez = outBounds->extents.z;
-    outBounds->sphereRadius = sqrtf(ex * ex + ey * ey + ez * ez);
+    outBounds->sphereRadius = SQRT_F32(ex * ex + ey * ey + ez * ez);
 }
 
 static void load_mesh_primitives(Arena* arena, cgltf_mesh* mesh, MeshAssetData* asset) {
