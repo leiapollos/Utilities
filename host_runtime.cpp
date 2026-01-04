@@ -840,7 +840,6 @@ int host_main_loop(int argc, char** argv) {
         F32 deltaSeconds = (F32) ((F64) deltaMicro / (F64) MILLION(1ULL));
 
         host_update(&state, deltaSeconds);
-        OS_sleep_milliseconds(16);
     }
 
     host_shutdown(&state);
