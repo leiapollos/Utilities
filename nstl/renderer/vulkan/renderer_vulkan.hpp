@@ -28,3 +28,13 @@ void renderer_vulkan_on_window_resized(RendererVulkan* vulkan, U32 width, U32 he
 MeshHandle renderer_vulkan_upload_mesh(RendererVulkan* vulkan, const MeshAssetData* meshData);
 void renderer_vulkan_destroy_mesh(RendererVulkan* vulkan, MeshHandle mesh);
 
+TextureHandle renderer_vulkan_upload_texture(RendererVulkan* vulkan, const LoadedImage* image);
+void renderer_vulkan_destroy_texture(RendererVulkan* vulkan, TextureHandle texture);
+
+MaterialHandle renderer_vulkan_upload_material(RendererVulkan* vulkan, const MaterialData* material,
+                                                TextureHandle colorTexture, TextureHandle metalRoughTexture);
+void renderer_vulkan_destroy_material(RendererVulkan* vulkan, MaterialHandle material);
+
+B32 renderer_vulkan_upload_scene(RendererVulkan* vulkan, Arena* arena, const LoadedScene* scene, GPUSceneData* outGPU);
+void renderer_vulkan_destroy_scene(RendererVulkan* vulkan, GPUSceneData* gpu);
+

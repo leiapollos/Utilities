@@ -29,5 +29,10 @@ struct AppCoreState {
     F32 meshSpacing;
     U32 meshCount;
     B32 meshLoaded;
+    
+    // Scene data
+    LoadedScene scene;
+    GPUSceneData gpuScene;
+    B32 sceneLoaded;
 };
 

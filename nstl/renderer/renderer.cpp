@@ -135,13 +135,86 @@ MeshHandle renderer_upload_mesh(Renderer* renderer, const MeshAssetData* meshDat
 }
 
 void renderer_destroy_mesh(Renderer* renderer, MeshHandle mesh) {
-    if (!renderer || !renderer->backendData || !mesh) {
+    if (!renderer || !renderer->backendData || mesh == MESH_HANDLE_INVALID) {
         return;
     }
 
 #if defined(RENDERER_BACKEND_VULKAN)
     RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
     renderer_vulkan_destroy_mesh(vulkan, mesh);
+#endif
+}
+
+TextureHandle renderer_upload_texture(Renderer* renderer, const LoadedImage* image) {
+    if (!renderer || !renderer->backendData || !image) {
+        return TEXTURE_HANDLE_INVALID;
+    }
+
+#if defined(RENDERER_BACKEND_VULKAN)
+    RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
+    return renderer_vulkan_upload_texture(vulkan, image);
+#else
+    return TEXTURE_HANDLE_INVALID;
+#endif
+}
+
+void renderer_destroy_texture(Renderer* renderer, TextureHandle texture) {
+    if (!renderer || !renderer->backendData || texture == TEXTURE_HANDLE_INVALID) {
+        return;
+    }
+
+#if defined(RENDERER_BACKEND_VULKAN)
+    RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
+    renderer_vulkan_destroy_texture(vulkan, texture);
+#endif
+}
+
+MaterialHandle renderer_upload_material(Renderer* renderer, const MaterialData* material,
+                                        TextureHandle colorTexture, TextureHandle metalRoughTexture) {
+    if (!renderer || !renderer->backendData || !material) {
+        return MATERIAL_HANDLE_INVALID;
+    }
+
+#if defined(RENDERER_BACKEND_VULKAN)
+    RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
+    return renderer_vulkan_upload_material(vulkan, material, colorTexture, metalRoughTexture);
+#else
+    return MATERIAL_HANDLE_INVALID;
+#endif
+}
+
+void renderer_destroy_material(Renderer* renderer, MaterialHandle material) {
+    if (!renderer || !renderer->backendData || material == MATERIAL_HANDLE_INVALID) {
+        return;
+    }
+
+#if defined(RENDERER_BACKEND_VULKAN)
+    RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
+    renderer_vulkan_destroy_material(vulkan, material);
+#endif
+}
+
+B32 renderer_upload_scene(Renderer* renderer, Arena* arena, const LoadedScene* scene, GPUSceneData* outGPU) {
+    if (!renderer || !renderer->backendData || !scene || !outGPU) {
+        return 0;
+    }
+
+#if defined(RENDERER_BACKEND_VULKAN)
+    RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
+    return renderer_vulkan_upload_scene(vulkan, arena, scene, outGPU);
+#else
+    return 0;
+#endif
+}
+
+void renderer_destroy_scene(Renderer* renderer, GPUSceneData* gpu) {
+    if (!renderer || !renderer->backendData || !gpu) {
+        return;
+    }
+
+#if defined(RENDERER_BACKEND_VULKAN)
+    RendererVulkan* vulkan = (RendererVulkan*) renderer->backendData;
+    renderer_vulkan_destroy_scene(vulkan, gpu);
 #endif
 }
 

@@ -104,31 +104,32 @@ static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostConte
 
     app_compile_shaders_from_folder(platform, memory, host);
 
-    if (!state->meshLoaded) {
-        MeshAssetData* meshAssets = 0;
-        U32 meshCount = mesh_load_from_file(memory->programArena, "assets/suzanne_blender_monkey.glb", &meshAssets);
-        if (meshCount > 0 && meshAssets) {
-            state->meshHandle = PLATFORM_RENDERER_CALL(platform, renderer_upload_mesh, host->renderer, &meshAssets[0]);
-            if (state->meshHandle != MESH_HANDLE_INVALID) {
-                state->meshLoaded = 1;
-                state->meshScale = 1.0f;
-                state->meshColor.r = 1.0f;
-                state->meshColor.g = 1.0f;
-                state->meshColor.b = 1.0f;
-                state->meshColor.a = 1.0f;
-                state->meshSpacing = 0.5f;
-                state->meshCount = 1;
-                LOG_INFO("app", "Loaded mesh with handle {}", state->meshHandle);
+    if (!state->sceneLoaded) {
+        if (scene_load_from_file(memory->programArena, "assets/sponza.glb", &state->scene)) {
+            LOG_INFO("app", "Scene loaded: {} meshes, {} materials, {} nodes, {} images",
+                     state->scene.meshCount, state->scene.materialCount, 
+                     state->scene.nodeCount, state->scene.imageCount);
+            
+            if (PLATFORM_RENDERER_CALL(platform, renderer_upload_scene, 
+                                       host->renderer, memory->programArena, 
+                                       &state->scene, &state->gpuScene)) {
+                state->sceneLoaded = 1;
+                state->meshScale = 0.01f;  // Sponza is large, scale down
+                state->meshColor = {{1.0f, 1.0f, 1.0f, 1.0f}};
+            } else {
+                LOG_ERROR("app", "Failed to upload scene to GPU");
             }
+        } else {
+            LOG_ERROR("app", "Failed to load Sponza scene");
         }
     }
 
     if (needsReset) {
-        state->camera.position    = {{0.0f, 0.0f, 2.0f}};
+        state->camera.position    = {{0.0f, 0.5f, 0.0f}};  // Inside Sponza courtyard
         state->camera.velocity    = {{0.0f, 0.0f, 0.0f}};
         camera_init(&state->camera);
         state->camera.sensitivity = 0.005f;
-        state->camera.moveSpeed   = 3.0f;
+        state->camera.moveSpeed   = 1.0f;  // Adjusted for scaled scene
     }
 
     return 1;
@@ -317,8 +318,8 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
 
     F32 fovY = DEG_TO_RAD(70.0f);
     F32 aspect = (F32)state->desiredWindow.width / (F32)state->desiredWindow.height;
-    F32 zNear = 0.1f;
-    F32 zFar = 1000.0f;
+    F32 zNear = 0.001f;  // Reduced for 0.01x scaled scene
+    F32 zFar = 100.0f;
     
     Mat4x4F32 projection = mat4_perspective(fovY, aspect, zNear, zFar);
     Mat4x4F32 view = camera_get_view_matrix(&state->camera);
@@ -344,20 +345,59 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
     RenderObject* renderObjects = 0;
     U32 renderObjectCount = 0;
 
-    if (state->meshLoaded && state->meshCount > 0) {
-        renderObjects = ARENA_PUSH_ARRAY(host->frameArena, RenderObject, state->meshCount);
-        if (renderObjects) {
-            F32 scale = state->meshScale;
-            F32 spacing = state->meshSpacing;
-            for (U32 i = 0; i < state->meshCount; ++i) {
-                RenderObject* obj = &renderObjects[renderObjectCount++];
-                obj->mesh = state->meshHandle;
-                obj->transform = mat4_identity();
-                obj->transform.v[0][0] = scale;
-                obj->transform.v[1][1] = scale;
-                obj->transform.v[2][2] = scale;
-                obj->transform.v[3][0] = (F32)i * spacing;
-                obj->color = state->meshColor;
+    if (state->sceneLoaded && state->scene.nodeCount > 0) {
+        U32 totalSurfaces = 0;
+        for (U32 n = 0; n < state->scene.nodeCount; ++n) {
+            SceneNode* node = &state->scene.nodes[n];
+            if (node->meshIndex >= 0 && (U32)node->meshIndex < state->gpuScene.meshCount) {
+                MeshAssetData* meshData = &state->scene.meshes[node->meshIndex];
+                totalSurfaces += (meshData->surfaceCount > 0) ? meshData->surfaceCount : 1;
+            }
+        }
+        
+        if (totalSurfaces > 0) {
+            renderObjects = ARENA_PUSH_ARRAY(host->frameArena, RenderObject, totalSurfaces);
+            if (renderObjects) {
+                F32 scale = state->meshScale;
+                Mat4x4F32 scaleMatrix = mat4_identity();
+                scaleMatrix.v[0][0] = scale;
+                scaleMatrix.v[1][1] = scale;
+                scaleMatrix.v[2][2] = scale;
+                
+                for (U32 n = 0; n < state->scene.nodeCount; ++n) {
+                    SceneNode* node = &state->scene.nodes[n];
+                    if (node->meshIndex < 0 || (U32)node->meshIndex >= state->gpuScene.meshCount) {
+                        continue;
+                    }
+                    
+                    MeshAssetData* meshData = &state->scene.meshes[node->meshIndex];
+                    Mat4x4F32 worldTransform = scaleMatrix * node->worldTransform;
+                    MeshHandle meshHandle = state->gpuScene.meshes[node->meshIndex];
+                    
+                    if (meshData->surfaceCount == 0) {
+                        RenderObject* obj = &renderObjects[renderObjectCount++];
+                        obj->mesh = meshHandle;
+                        obj->transform = worldTransform;
+                        obj->color = state->meshColor;
+                        obj->material = MATERIAL_HANDLE_INVALID;
+                        obj->firstIndex = 0;
+                        obj->indexCount = 0;
+                    } else {
+                        for (U32 s = 0; s < meshData->surfaceCount; ++s) {
+                            MeshSurface* surface = &meshData->surfaces[s];
+                            RenderObject* obj = &renderObjects[renderObjectCount++];
+                            obj->mesh = meshHandle;
+                            obj->transform = worldTransform;
+                            obj->color = state->meshColor;
+                            obj->firstIndex = surface->startIndex;
+                            obj->indexCount = surface->count;
+                            obj->material = MATERIAL_HANDLE_INVALID;
+                            if (surface->materialIndex < state->gpuScene.materialCount) {
+                                obj->material = state->gpuScene.materials[surface->materialIndex];
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -375,10 +415,9 @@ static void app_shutdown(AppPlatform* platform, AppMemory* memory, AppHostContex
     AppCoreState* state = app_get_state(memory);
     AppTestsState* tests = app_get_tests(state);
 
-    if (state->meshHandle) {
-        PLATFORM_RENDERER_CALL(platform, renderer_destroy_mesh, host->renderer, state->meshHandle);
-        state->meshHandle = 0;
-        state->meshLoaded = 0;
+    if (state->sceneLoaded) {
+        PLATFORM_RENDERER_CALL(platform, renderer_destroy_scene, host->renderer, &state->gpuScene);
+        state->sceneLoaded = 0;
     }
 
     PLATFORM_RENDERER_CALL(platform,

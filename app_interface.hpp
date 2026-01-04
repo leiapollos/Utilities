@@ -77,7 +77,9 @@ struct PlatformOSApi {
     X(renderer_imgui_set_window_size) \
     X(renderer_on_window_resized) \
     X(renderer_upload_mesh) \
-    X(renderer_destroy_mesh)
+    X(renderer_destroy_mesh) \
+    X(renderer_upload_scene) \
+    X(renderer_destroy_scene)
 
 struct PlatformRendererApi {
 #define PLATFORM_DECLARE_RENDERER_FN(name) decltype(&name) name;

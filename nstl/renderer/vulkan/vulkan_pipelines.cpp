@@ -551,7 +551,7 @@ cleanup_fail:
 }
 
 static void vulkan_draw_mesh(RendererVulkan* vulkan, VkCommandBuffer cmd, GPUMeshBuffers* mesh, 
-                             Mat4x4F32 worldMatrix, U32 indexCount, Vec4F32 color) {
+                             Mat4x4F32 worldMatrix, U32 firstIndex, U32 indexCount, Vec4F32 color) {
     if (!vulkan || cmd == VK_NULL_HANDLE || !mesh) {
         return;
     }
@@ -591,7 +591,7 @@ static void vulkan_draw_mesh(RendererVulkan* vulkan, VkCommandBuffer cmd, GPUMes
                        &pushConstants);
     
     vkCmdBindIndexBuffer(cmd, mesh->indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-    vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
+    vkCmdDrawIndexed(cmd, indexCount, 1, firstIndex, 0, 0);
 }
 
 // Shader Compilation (DXC)

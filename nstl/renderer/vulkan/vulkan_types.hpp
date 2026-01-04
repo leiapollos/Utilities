@@ -134,7 +134,12 @@ struct GPUMesh {
     U32 indexCount;
 };
 
+// ////////////////////////
+// Texture Types
 
+struct GPUTexture {
+    RendererVulkanAllocatedImage image;
+};
 
 // ////////////////////////
 // Material Types
@@ -151,11 +156,12 @@ struct MaterialConstants {
     Vec4F32 _pad[14];
 };
 
-struct Material {
+struct GPUMaterial {
     VkPipeline pipeline;
     VkPipelineLayout layout;
     VkDescriptorSet descriptorSet;
     MaterialType type;
+    RendererVulkanAllocatedBuffer uniformBuffer;
 };
 
 static const U32 VULKAN_DESCRIPTOR_ALLOCATOR_MAX_RATIOS = 8;
@@ -236,8 +242,23 @@ struct RendererVulkan {
     VkPipeline transparentPipeline;
     
     VkDescriptorPool globalDescriptorPool;
-    Material defaultMaterial;
+    GPUMaterial defaultMaterial;
     RendererVulkanAllocatedBuffer defaultMaterialBuffer;
+    
+    GPUMesh** gpuMeshes;
+    U32 gpuMeshCount;
+    U32 gpuMeshCapacity;
+    U64 nextMeshHandle;
+    
+    GPUTexture** gpuTextures;
+    U32 gpuTextureCount;
+    U32 gpuTextureCapacity;
+    U64 nextTextureHandle;
+    
+    GPUMaterial** gpuMaterials;
+    U32 gpuMaterialCount;
+    U32 gpuMaterialCapacity;
+    U64 nextMaterialHandle;
 
     VkDescriptorPool imguiDescriptorPool;
     ImGuiContext* imguiContext;

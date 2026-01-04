@@ -2,6 +2,7 @@
 // Created by André Leite on 03/11/2025.
 //
 
+#include "image_loader.cpp"
 #include "mesh_loader_cgltf.cpp"
 
 #include "renderer.cpp"

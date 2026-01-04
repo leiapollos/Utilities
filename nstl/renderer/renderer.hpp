@@ -23,15 +23,84 @@ struct MeshData {
     StringU8 name;
 };
 
+// ////////////////////////
+// Bounding Volume
+
+struct Bounds {
+    Vec3F32 origin;
+    Vec3F32 extents;
+    F32 sphereRadius;
+};
+
+// ////////////////////////
+// Material Data
+
+static const U32 MATERIAL_NO_TEXTURE = 0xFFFFFFFF;
+
+struct MaterialData {
+    Vec4F32 colorFactor;
+    F32 metallicFactor;
+    F32 roughnessFactor;
+    U32 colorTextureIndex;
+    U32 metalRoughTextureIndex;
+    U32 samplerIndex;
+};
+
+// ////////////////////////
+// Mesh Surface (per-primitive)
+
 struct MeshSurface {
     U32 startIndex;
     U32 count;
+    U32 materialIndex;
+    Bounds bounds;
 };
 
 struct MeshAssetData {
     MeshData data;
     MeshSurface* surfaces;
     U32 surfaceCount;
+};
+
+// ////////////////////////
+// Scene Graph Types
+
+struct SceneNode {
+    StringU8 name;
+    Mat4x4F32 localTransform;
+    Mat4x4F32 worldTransform;
+    S32 parentIndex;
+    S32 meshIndex;
+    U32* childIndices;
+    U32 childCount;
+};
+
+struct LoadedImage {
+    U8* pixels;
+    U32 width;
+    U32 height;
+    U32 channels;
+};
+
+B32 image_load_from_memory(const U8* data, U64 size, LoadedImage* out);
+B32 image_load_from_file(const char* path, LoadedImage* out);
+void image_free(LoadedImage* img);
+
+struct LoadedScene {
+    MeshAssetData* meshes;
+    U32 meshCount;
+    
+    SceneNode* nodes;
+    U32 nodeCount;
+    
+    MaterialData* materials;
+    U32 materialCount;
+    
+    LoadedImage* images;
+    U32 imageCount;
+    
+    U32* topNodeIndices;
+    U32 topNodeCount;
 };
 
 struct SceneData {
@@ -43,14 +112,25 @@ struct SceneData {
     Vec4F32 sunColor;
 };
 
-struct GPUMesh;
-typedef GPUMesh* MeshHandle;
+// ////////////////////////
+// GPU Handle Types
+
+typedef U64 MeshHandle;
 static const MeshHandle MESH_HANDLE_INVALID = 0;
+
+typedef U64 TextureHandle;
+static const TextureHandle TEXTURE_HANDLE_INVALID = 0;
+
+typedef U64 MaterialHandle;
+static const MaterialHandle MATERIAL_HANDLE_INVALID = 0;
 
 struct RenderObject {
     MeshHandle mesh;
+    MaterialHandle material;
     Mat4x4F32 transform;
     Vec4F32 color;
+    U32 firstIndex;
+    U32 indexCount;
 };
 
 typedef U64 ShaderHandle;
@@ -96,5 +176,29 @@ void renderer_on_window_resized(Renderer* renderer, U32 width, U32 height);
 MeshHandle renderer_upload_mesh(Renderer* renderer, const MeshAssetData* meshData);
 void renderer_destroy_mesh(Renderer* renderer, MeshHandle mesh);
 
-U32 mesh_load_from_file(Arena* arena, const char* path, MeshAssetData** outMeshes);
+B32 scene_load_from_file(Arena* arena, const char* path, LoadedScene* outScene);
+
+// ////////////////////////
+// GPU Scene Data
+
+struct GPUSceneData {
+    TextureHandle* textures;
+    U32 textureCount;
+    
+    MaterialHandle* materials;
+    U32 materialCount;
+    
+    MeshHandle* meshes;
+    U32 meshCount;
+};
+
+TextureHandle renderer_upload_texture(Renderer* renderer, const LoadedImage* image);
+void renderer_destroy_texture(Renderer* renderer, TextureHandle texture);
+
+MaterialHandle renderer_upload_material(Renderer* renderer, const MaterialData* material,
+                                        TextureHandle colorTexture, TextureHandle metalRoughTexture);
+void renderer_destroy_material(Renderer* renderer, MaterialHandle material);
+
+B32 renderer_upload_scene(Renderer* renderer, Arena* arena, const LoadedScene* scene, GPUSceneData* outGPU);
+void renderer_destroy_scene(Renderer* renderer, GPUSceneData* gpu);
 

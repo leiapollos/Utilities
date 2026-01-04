@@ -80,6 +80,11 @@ static B32 vulkan_init_material_pipelines(RendererVulkan* vulkan) {
         }
     }
 
+    VkFormat drawFormat = vulkan_select_draw_image_format(&vulkan->device);
+    if (drawFormat == VK_FORMAT_UNDEFINED) {
+        drawFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    }
+
     VkShaderModule vertShader = VK_NULL_HANDLE;
     VkShaderModule fragShader = VK_NULL_HANDLE;
 
@@ -104,9 +109,7 @@ static B32 vulkan_init_material_pipelines(RendererVulkan* vulkan) {
         pipeline_builder_set_multisampling_none(&builder);
         pipeline_builder_disable_blending(&builder);
         pipeline_builder_enable_depth_test(&builder, 1, VK_COMPARE_OP_LESS_OR_EQUAL);
-        pipeline_builder_set_color_attachment_format(&builder, vulkan->drawImage.imageFormat != VK_FORMAT_UNDEFINED
-            ? vulkan->drawImage.imageFormat
-            : VK_FORMAT_R16G16B16A16_SFLOAT);
+        pipeline_builder_set_color_attachment_format(&builder, drawFormat);
         pipeline_builder_set_depth_format(&builder, VK_FORMAT_D32_SFLOAT);
         builder.pipelineLayout = vulkan->materialPipelineLayout;
 
@@ -129,9 +132,7 @@ static B32 vulkan_init_material_pipelines(RendererVulkan* vulkan) {
         pipeline_builder_set_multisampling_none(&builder);
         pipeline_builder_enable_blending_alphablend(&builder);
         pipeline_builder_enable_depth_test(&builder, 0, VK_COMPARE_OP_LESS_OR_EQUAL);
-        pipeline_builder_set_color_attachment_format(&builder, vulkan->drawImage.imageFormat != VK_FORMAT_UNDEFINED
-            ? vulkan->drawImage.imageFormat
-            : VK_FORMAT_R16G16B16A16_SFLOAT);
+        pipeline_builder_set_color_attachment_format(&builder, drawFormat);
         pipeline_builder_set_depth_format(&builder, VK_FORMAT_D32_SFLOAT);
         builder.pipelineLayout = vulkan->materialPipelineLayout;
 
@@ -155,7 +156,7 @@ static B32 vulkan_init_material_pipelines(RendererVulkan* vulkan) {
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
         };
         F32 ratios[] = { 1.0f, 1.0f };
-        if (!vulkan_create_descriptor_pool_(vulkan->device.device, types, ratios, 2, 10, &vulkan->globalDescriptorPool)) {
+        if (!vulkan_create_descriptor_pool_(vulkan->device.device, types, ratios, 2, 200, &vulkan->globalDescriptorPool)) {
             LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create global descriptor pool");
             goto cleanup_fail;
         }
@@ -242,7 +243,7 @@ static void vulkan_destroy_material_pipelines(RendererVulkan* vulkan) {
     vulkan->globalDescriptorPool = VK_NULL_HANDLE;
 }
 
-static void material_fill(Material* mat,
+static void material_fill(GPUMaterial* mat,
                           RendererVulkan* vulkan,
                           MaterialType type,
                           VkDescriptorSet descriptorSet) {
