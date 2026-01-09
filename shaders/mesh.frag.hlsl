@@ -7,6 +7,12 @@ cbuffer SceneData : register(b0, space0) {
     float4 sunColor;
 };
 
+cbuffer MaterialData : register(b0, space1) {
+    float4 colorFactor;
+    float4 metalRoughFactor;
+    float alphaCutoff;
+};
+
 Texture2D colorTex : register(t1, space1);
 SamplerState colorSampler : register(s1, space1);
 
@@ -23,13 +29,15 @@ float4 main(PSInput input) : SV_Target {
     
     float NdotL = dot(N, L) * 0.5 + 0.5;
     
-    float2 uv = input.uv;
+    float4 texColor = colorTex.Sample(colorSampler, input.uv);
     
-    float3 texColor = colorTex.Sample(colorSampler, uv).rgb;
-    float3 baseColor = input.color.rgb * texColor;
+    if (texColor.a < alphaCutoff) {
+        discard;
+    }
     
+    float3 baseColor = input.color.rgb * texColor.rgb;
     float3 lit = baseColor * NdotL * sunColor.rgb + baseColor * ambientColor.rgb;
     
-    return float4(lit, input.color.a);
+    return float4(lit, texColor.a * input.color.a);
 }
 

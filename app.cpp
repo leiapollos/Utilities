@@ -289,7 +289,7 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
         QuatF32 q = state->camera.orientation;
         ImGui::Text("Orientation: (%.3f, %.3f, %.3f, %.3f)", (double)q.x, (double)q.y, (double)q.z, (double)q.w);
         ImGui::SliderFloat("Sensitivity", &state->camera.sensitivity, 0.001f, 0.02f, "%.4f");
-        ImGui::SliderFloat("Move Speed", &state->camera.moveSpeed, 1.0f, 20.0f, "%.1f");
+        ImGui::SliderFloat("Move Speed", &state->camera.moveSpeed, 0.001f, 2.0f, "%.3f");
 
         static int selected_fish = -1;
         const char* names[] = { "Bream", "Haddock", "Mackerel", "Pollock", "Tilefish" };

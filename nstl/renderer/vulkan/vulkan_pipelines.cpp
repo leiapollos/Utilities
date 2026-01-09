@@ -559,9 +559,6 @@ static void vulkan_draw_mesh(RendererVulkan* vulkan, VkCommandBuffer cmd, GPUMes
         return;
     }
 
-    VkPipeline pipeline = (color.a < 1.0f) ? vulkan->transparentPipeline : vulkan->opaquePipeline;
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-
     VkViewport viewport = {};
     viewport.x = 0;
     viewport.y = 0;

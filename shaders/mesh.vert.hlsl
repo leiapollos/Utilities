@@ -10,6 +10,7 @@ cbuffer SceneData : register(b0, space0) {
 cbuffer MaterialData : register(b0, space1) {
     float4 colorFactor;
     float4 metalRoughFactor;
+    float alphaCutoff;
 };
 
 struct Vertex {

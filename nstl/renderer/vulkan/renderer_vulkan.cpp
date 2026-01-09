@@ -257,10 +257,10 @@ void renderer_vulkan_draw(RendererVulkan* vulkan, OS_WindowHandle window,
                                         vulkan->materialPipelineLayout, 0, 1, &sceneDescSet, 0, 0);
             }
             
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vulkan->opaquePipeline);
-            
             GPUMaterial* lastMaterial = 0;
 
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vulkan->opaquePipeline);
+            
             for (U32 i = 0; i < objectCount; ++i) {
                 const RenderObject* obj = &objects[i];
                 GPUMesh* mesh = vulkan_get_mesh(vulkan, obj->mesh);
@@ -268,6 +268,34 @@ void renderer_vulkan_draw(RendererVulkan* vulkan, OS_WindowHandle window,
                     GPUMaterial* mat = vulkan_get_material(vulkan, obj->material);
                     if (mat->descriptorSet == VK_NULL_HANDLE) {
                         mat = &vulkan->defaultMaterial;
+                    }
+                    if (mat->type != MaterialType_Opaque) {
+                        continue;
+                    }
+                    if (mat != lastMaterial) {
+                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                                vulkan->materialPipelineLayout, 1, 1, &mat->descriptorSet, 0, 0);
+                        lastMaterial = mat;
+                    }
+                    U32 firstIdx = obj->firstIndex;
+                    U32 idxCount = (obj->indexCount > 0) ? obj->indexCount : mesh->indexCount;
+                    vulkan_draw_mesh(vulkan, cmd, &mesh->gpu, obj->transform, firstIdx, idxCount, obj->color);
+                }
+            }
+            
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vulkan->transparentPipeline);
+            lastMaterial = 0;
+            
+            for (U32 i = 0; i < objectCount; ++i) {
+                const RenderObject* obj = &objects[i];
+                GPUMesh* mesh = vulkan_get_mesh(vulkan, obj->mesh);
+                if (mesh) {
+                    GPUMaterial* mat = vulkan_get_material(vulkan, obj->material);
+                    if (mat->descriptorSet == VK_NULL_HANDLE) {
+                        mat = &vulkan->defaultMaterial;
+                    }
+                    if (mat->type != MaterialType_Transparent) {
+                        continue;
                     }
                     if (mat != lastMaterial) {
                         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -660,6 +688,7 @@ B32 renderer_vulkan_upload_scene(RendererVulkan* vulkan, Arena* arena, const Loa
             consts->colorFactor = matData->colorFactor;
             consts->metalRoughFactor.r = matData->metallicFactor;
             consts->metalRoughFactor.g = matData->roughnessFactor;
+            consts->alphaCutoff = matData->alphaCutoff;
             
             VkDescriptorSet descSet = VK_NULL_HANDLE;
             VkDescriptorSetAllocateInfo allocInfo = {};
@@ -695,7 +724,10 @@ B32 renderer_vulkan_upload_scene(RendererVulkan* vulkan, Arena* arena, const Loa
                                                   VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
             vulkan_descriptor_writer_update_set(&vulkan->device, &writer, descSet);
             
-            material_fill(&internalMaterials[i].material, vulkan, MaterialType_Opaque, descSet);
+            MaterialType matType = (matData->alphaMode == AlphaMode_Blend) 
+                                   ? MaterialType_Transparent 
+                                   : MaterialType_Opaque;
+            material_fill(&internalMaterials[i].material, vulkan, matType, descSet);
             
             outGPU->materials[i] = (MaterialHandle)(uintptr_t)&internalMaterials[i].material;
         }

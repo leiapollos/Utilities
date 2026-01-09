@@ -37,6 +37,12 @@ struct Bounds {
 
 static const U32 MATERIAL_NO_TEXTURE = 0xFFFFFFFF;
 
+typedef enum AlphaMode {
+    AlphaMode_Opaque,
+    AlphaMode_Mask,
+    AlphaMode_Blend,
+} AlphaMode;
+
 struct MaterialData {
     Vec4F32 colorFactor;
     F32 metallicFactor;
@@ -44,6 +50,8 @@ struct MaterialData {
     U32 colorTextureIndex;
     U32 metalRoughTextureIndex;
     U32 samplerIndex;
+    AlphaMode alphaMode;
+    F32 alphaCutoff;
 };
 
 // ////////////////////////

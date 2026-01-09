@@ -228,6 +228,20 @@ B32 scene_load_from_file(Arena* arena, const char* path, LoadedScene* outScene) 
             } else {
                 md->metalRoughTextureIndex = MATERIAL_NO_TEXTURE;
             }
+            
+            if (mat->alpha_mode == cgltf_alpha_mode_blend) {
+                md->alphaMode = AlphaMode_Blend;
+                md->alphaCutoff = 0.0f;
+                LOG_INFO("GLTF", "Material {} uses BLEND mode", mat->name ? mat->name : "(unnamed)");
+            } else if (mat->alpha_mode == cgltf_alpha_mode_mask) {
+                md->alphaMode = AlphaMode_Mask;
+                md->alphaCutoff = (mat->alpha_cutoff > 0.01f) ? mat->alpha_cutoff : 0.5f;
+                LOG_INFO("GLTF", "Material {} uses MASK mode (cutoff={})", mat->name ? mat->name : "(unnamed)", md->alphaCutoff);
+            } else {
+                md->alphaMode = AlphaMode_Opaque;
+                md->alphaCutoff = 0.0f;
+                LOG_INFO("GLTF", "Material {} uses OPAQUE mode", mat->name ? mat->name : "(unnamed)");
+            }
         }
     }
 

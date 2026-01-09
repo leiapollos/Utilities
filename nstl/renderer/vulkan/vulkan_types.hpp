@@ -153,7 +153,9 @@ typedef enum MaterialType {
 struct MaterialConstants {
     Vec4F32 colorFactor;
     Vec4F32 metalRoughFactor;
-    Vec4F32 _pad[14];
+    F32 alphaCutoff;
+    F32 _pad0[3];
+    Vec4F32 _pad[12];
 };
 
 struct GPUMaterial {
