@@ -436,7 +436,7 @@ MeshHandle renderer_vulkan_upload_mesh(RendererVulkan* vulkan, const MeshAssetDa
     vulkan->gpuMeshes[index] = mesh;
     MeshHandle handle = (MeshHandle)(index + 1);  // +1 so 0 is invalid
 
-    LOG_INFO(VULKAN_LOG_DOMAIN,
+    LOG_DEBUG(VULKAN_LOG_DOMAIN,
              "Uploaded mesh ({} vertices, {} indices) -> handle {}",
              meshData->data.vertexCount,
              meshData->data.indexCount,
