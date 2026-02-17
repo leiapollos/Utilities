@@ -20,7 +20,7 @@ SamplerState colorSampler : register(s1, space1);
 Texture2D<float> shadowMap : register(t0, space2);
 SamplerState shadowSampler : register(s0, space2);
 
-#define SHADOW_DEBUG_VISUALIZE 1
+#define SHADOW_DEBUG_VISUALIZE 0
 
 struct PSInput {
     [[vk::location(0)]] float3 normal : NORMAL;
