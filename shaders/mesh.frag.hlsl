@@ -41,22 +41,29 @@ float calculate_shadow_pcf(float4 lightSpacePos, float nDotL) {
     }
     
     float currentDepth = projCoords.z;
-    float bias = max(0.0004f * (1.0f - nDotL), 0.00005f);
-    
     float shadow = 0.0;
     float2 texelSize;
     uint width, height;
     shadowMap.GetDimensions(width, height);
     texelSize = 1.0 / float2(width, height);
+    float baseBias = max(0.0015f * (1.0f - nDotL), 0.0002f);
+    float resolutionBias = 1.0f / max((float)width, (float)height);
+    float bias = baseBias + (resolutionBias * 0.75f);
     
-    for (int x = -1; x <= 1; ++x) {
-        for (int y = -1; y <= 1; ++y) {
-            float2 offset = float2(x, y) * texelSize;
+    float totalWeight = 0.0f;
+    float filterRadius = 1.5f;
+    for (int x = -2; x <= 2; ++x) {
+        for (int y = -2; y <= 2; ++y) {
+            float2 sampleCoord = float2((float)x, (float)y);
+            float2 offset = sampleCoord * texelSize * filterRadius;
+            float weight = (3.0f - abs((float)x)) * (3.0f - abs((float)y));
             float shadowDepth = shadowMap.SampleLevel(shadowSampler, projCoords.xy + offset, 0);
-            shadow += (currentDepth - bias <= shadowDepth) ? 1.0 : 0.0;
+            float lit = (currentDepth - bias <= shadowDepth) ? 1.0f : 0.0f;
+            shadow += lit * weight;
+            totalWeight += weight;
         }
     }
-    shadow /= 9.0;
+    shadow /= max(totalWeight, 0.0001f);
     
     return shadow;
 }

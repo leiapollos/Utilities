@@ -136,6 +136,15 @@ static void vulkan_copy_image_to_image(VkCommandBuffer cmd, VkImage source, VkIm
     vkCmdBlitImage2(cmd, &blitInfo);
 }
 
+static RendererVulkanAllocatedBuffer vulkan_create_buffer(VmaAllocator allocator, U64 allocSize,
+                                                          VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage);
+static void vulkan_destroy_buffer(VmaAllocator allocator, RendererVulkanAllocatedBuffer* buffer);
+static RendererVulkanAllocatedImage vulkan_create_image(RendererVulkan* vulkan,
+                                                        VkExtent3D size,
+                                                        VkFormat format,
+                                                        VkImageUsageFlags usage);
+static void vulkan_destroy_image(RendererVulkan* vulkan, RendererVulkanAllocatedImage* img);
+
 // ////////////////////////
 // Draw Image Management
 
@@ -275,6 +284,139 @@ static void vulkan_destroy_draw_image(RendererVulkan* vulkan) {
          vmaDestroyImage(vulkan->device.allocator, vulkan->drawImage.image, vulkan->drawImage.allocation);
          vulkan_reset_draw_image(vulkan);
     }
+}
+
+static void vulkan_destroy_radiance_images(RendererVulkan* vulkan) {
+    if (!vulkan) {
+        return;
+    }
+
+    for (U32 i = 0; i < VULKAN_RADIANCE_2D_MAX_CASCADES; ++i) {
+        if (vulkan->radianceCascadeImages[i].image != VK_NULL_HANDLE) {
+            vulkan_destroy_image(vulkan, &vulkan->radianceCascadeImages[i]);
+        }
+    }
+
+    vulkan->radianceCascadeImageCount = 0u;
+    vulkan->radianceGridWidth = 0u;
+    vulkan->radianceGridHeight = 0u;
+    vulkan->radianceImagesInitialized = 0;
+}
+
+static B32 vulkan_upload_pixels_to_image(RendererVulkan* vulkan,
+                                         RendererVulkanAllocatedImage* image,
+                                         const void* pixels,
+                                         U32 width,
+                                         U32 height,
+                                         VkImageLayout initialLayout) {
+    if (!vulkan || !image || !pixels) {
+        return 0;
+    }
+    if (image->image == VK_NULL_HANDLE || image->imageView == VK_NULL_HANDLE) {
+        return 0;
+    }
+    if (image->imageExtent.width != width || image->imageExtent.height != height) {
+        return 0;
+    }
+
+    U64 dataSize = (U64) width * (U64) height * 4u;
+    RendererVulkanAllocatedBuffer stagingBuffer = vulkan_create_buffer(vulkan->device.allocator,
+                                                                        dataSize,
+                                                                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                                        VMA_MEMORY_USAGE_CPU_TO_GPU);
+    if (stagingBuffer.buffer == VK_NULL_HANDLE) {
+        return 0;
+    }
+
+    MEMMOVE(stagingBuffer.info.pMappedData, pixels, dataSize);
+
+    B32 success = 0;
+    VkCommandBuffer cmd = vulkan_immediate_begin(vulkan, &vulkan->immSubmit);
+    if (cmd != VK_NULL_HANDLE) {
+        vulkan_transition_image(cmd, image->image, initialLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+        VkBufferImageCopy copyRegion = {};
+        copyRegion.bufferOffset = 0;
+        copyRegion.bufferRowLength = 0;
+        copyRegion.bufferImageHeight = 0;
+        copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copyRegion.imageSubresource.mipLevel = 0;
+        copyRegion.imageSubresource.baseArrayLayer = 0;
+        copyRegion.imageSubresource.layerCount = 1;
+        copyRegion.imageExtent = {width, height, 1};
+
+        vkCmdCopyBufferToImage(cmd,
+                               stagingBuffer.buffer,
+                               image->image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               1,
+                               &copyRegion);
+
+        vulkan_transition_image(cmd,
+                                image->image,
+                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        vulkan_immediate_end(vulkan, &vulkan->immSubmit);
+        success = 1;
+    }
+
+    vulkan_destroy_buffer(vulkan->device.allocator, &stagingBuffer);
+    return success;
+}
+
+static B32 vulkan_ensure_radiance_images(RendererVulkan* vulkan, U32 gridWidth, U32 gridHeight, U32 cascadeCount) {
+    if (!vulkan || gridWidth == 0u || gridHeight == 0u) {
+        return 0;
+    }
+
+    U32 clampedCascadeCount = CLAMP(cascadeCount, 1u, VULKAN_RADIANCE_2D_MAX_CASCADES);
+    if (vulkan->radianceImagesInitialized &&
+        vulkan->radianceGridWidth == gridWidth &&
+        vulkan->radianceGridHeight == gridHeight &&
+        vulkan->radianceCascadeImageCount == clampedCascadeCount) {
+        return 1;
+    }
+
+    vulkan_destroy_radiance_images(vulkan);
+
+    VkFormat imageFormat = (vulkan->drawImage.imageFormat != VK_FORMAT_UNDEFINED)
+                               ? vulkan->drawImage.imageFormat
+                               : VK_FORMAT_R16G16B16A16_SFLOAT;
+    VkImageUsageFlags usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+
+    VkExtent3D imageExtent = {};
+    imageExtent.width = gridWidth;
+    imageExtent.height = gridHeight;
+    imageExtent.depth = 1u;
+
+    for (U32 i = 0; i < clampedCascadeCount; ++i) {
+        RendererVulkanAllocatedImage image = vulkan_create_image(vulkan, imageExtent, imageFormat, usage);
+        if (image.image == VK_NULL_HANDLE || image.imageView == VK_NULL_HANDLE) {
+            vulkan_destroy_radiance_images(vulkan);
+            return 0;
+        }
+        vulkan->radianceCascadeImages[i] = image;
+    }
+
+    VkCommandBuffer cmd = vulkan_immediate_begin(vulkan, &vulkan->immSubmit);
+    if (cmd != VK_NULL_HANDLE) {
+        for (U32 i = 0; i < clampedCascadeCount; ++i) {
+            vulkan_transition_image(cmd,
+                                    vulkan->radianceCascadeImages[i].image,
+                                    VK_IMAGE_LAYOUT_UNDEFINED,
+                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        }
+        vulkan_immediate_end(vulkan, &vulkan->immSubmit);
+    } else {
+        vulkan_destroy_radiance_images(vulkan);
+        return 0;
+    }
+
+    vulkan->radianceCascadeImageCount = clampedCascadeCount;
+    vulkan->radianceGridWidth = gridWidth;
+    vulkan->radianceGridHeight = gridHeight;
+    vulkan->radianceImagesInitialized = 1;
+    return 1;
 }
 
 // ////////////////////////
@@ -468,8 +610,8 @@ static VkSampler vulkan_create_shadow_sampler(VulkanDevice* device) {
 
     VkSamplerCreateInfo samplerInfo = {};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerInfo.magFilter = VK_FILTER_NEAREST;
-    samplerInfo.minFilter = VK_FILTER_NEAREST;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
     samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;

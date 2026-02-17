@@ -13,6 +13,8 @@ B32 renderer_vulkan_backend_init(Arena* arena, Renderer* renderer);
 void renderer_vulkan_shutdown(RendererVulkan* vulkan);
 void renderer_vulkan_draw(RendererVulkan* vulkan, OS_WindowHandle window,
                           const SceneData* scene, const RenderObject* objects, U32 objectCount);
+void renderer_vulkan_draw_radiance_2d(RendererVulkan* vulkan, OS_WindowHandle window,
+                                      const RendererRadiance2DDesc* desc);
 B32 renderer_vulkan_compile_shader_to_result(RendererVulkan* vulkan, Arena* arena, StringU8 shaderPath,
                                              ShaderCompileResult* outResult);
 B32 renderer_vulkan_imgui_init(RendererVulkan* vulkan, OS_WindowHandle window);
@@ -31,6 +33,7 @@ void renderer_vulkan_destroy_mesh(RendererVulkan* vulkan, MeshHandle mesh);
 
 TextureHandle renderer_vulkan_upload_texture(RendererVulkan* vulkan, const LoadedImage* image);
 void renderer_vulkan_destroy_texture(RendererVulkan* vulkan, TextureHandle texture);
+B32 renderer_vulkan_update_texture(RendererVulkan* vulkan, TextureHandle texture, const LoadedImage* image);
 
 MaterialHandle renderer_vulkan_upload_material(RendererVulkan* vulkan, const MaterialData* material,
                                                 TextureHandle colorTexture, TextureHandle metalRoughTexture);

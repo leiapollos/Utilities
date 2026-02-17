@@ -10,12 +10,13 @@
 
 #include "app/app_camera.cpp"
 #include "app_tests.cpp"
-
+#include "app/app_scene_sponza.cpp"
+#include "app/app_scene_radiance_2d.cpp"
 
 #include <dirent.h>
 #include <sys/stat.h>
 
-#define APP_CORE_STATE_VERSION 5u
+#define APP_CORE_STATE_VERSION 8u
 
 static U64 app_total_permanent_size(void);
 static AppCoreState* app_get_state(AppMemory* memory);
@@ -24,7 +25,9 @@ static AppTestsState* app_get_tests(AppCoreState* state);
 static U32 app_select_worker_count(const AppHostContext* host);
 static void app_compile_shaders_from_folder(AppPlatform* platform, AppMemory* memory, AppHostContext* host);
 static void app_request_close(AppPlatform* platform, AppHostContext* host, AppCoreState* state);
-
+static void app_switch_scene(AppCoreState* state, AppSceneKind scene);
+static void app_apply_scene_switch(AppCoreState* state);
+static const char* app_scene_name(AppSceneKind scene);
 
 static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostContext* host) {
     ASSERT_ALWAYS(platform != 0);
@@ -48,6 +51,7 @@ static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostConte
 
     thread_context_alloc();
     log_init();
+
     if (needsReset) {
         state->version = APP_CORE_STATE_VERSION;
         state->desiredWindow.title = "Utilities Hot Reload";
@@ -56,6 +60,9 @@ static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostConte
         state->windowHandle.handle = 0;
         state->frameCounter = 0;
         state->reloadCount = 0;
+        state->activeScene = AppSceneKind_Sponza;
+        state->pendingSceneSwitch = AppSceneKind_Sponza;
+
         set_log_level(LogLevel_Info);
         StringU8 eventsDomain = str8((const char*) "events", 6);
         set_log_domain_level(eventsDomain, LogLevel_Debug);
@@ -105,32 +112,16 @@ static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostConte
 
     app_compile_shaders_from_folder(platform, memory, host);
 
-    if (!state->sceneLoaded) {
-        if (scene_load_from_file(memory->programArena, "assets/sponza.glb", &state->scene)) {
-            LOG_INFO("app", "Scene loaded: {} meshes, {} materials, {} nodes, {} images",
-                     state->scene.meshCount, state->scene.materialCount, 
-                     state->scene.nodeCount, state->scene.imageCount);
-            
-            if (PLATFORM_RENDERER_CALL(platform, renderer_upload_scene, 
-                                       host->renderer, memory->programArena, 
-                                       &state->scene, &state->gpuScene)) {
-                state->sceneLoaded = 1;
-                state->meshScale = 0.01f;  // Sponza is large, scale down
-                state->meshColor = {{1.0f, 1.0f, 1.0f, 1.0f}};
-            } else {
-                LOG_ERROR("app", "Failed to upload scene to GPU");
-            }
-        } else {
-            LOG_ERROR("app", "Failed to load Sponza scene");
-        }
-    }
+    app_scene_sponza_init(platform, memory, host, state);
+    app_scene_radiance_2d_init(platform, memory, host, state);
 
     if (needsReset) {
-        state->camera.position    = {{0.0f, 0.5f, 0.0f}};  // Inside Sponza courtyard
-        state->camera.velocity    = {{0.0f, 0.0f, 0.0f}};
+        state->camera.position = {{0.0f, 0.5f, 0.0f}};
+        state->camera.velocity = {{0.0f, 0.0f, 0.0f}};
         camera_init(&state->camera);
         state->camera.sensitivity = 0.005f;
-        state->camera.moveSpeed   = 1.0f;  // Adjusted for scaled scene
+        state->camera.moveSpeed = 1.0f;
+        app_scene_sponza_on_enter(state);
     }
 
     return 1;
@@ -167,6 +158,40 @@ static void app_request_close(AppPlatform* platform, AppHostContext* host, AppCo
     PLATFORM_OS_CALL(platform, OS_window_destroy, closedHandle);
 }
 
+static void app_switch_scene(AppCoreState* state, AppSceneKind scene) {
+    ASSERT_ALWAYS(state != 0);
+    if (scene >= AppSceneKind_COUNT) {
+        return;
+    }
+    state->pendingSceneSwitch = scene;
+}
+
+static void app_apply_scene_switch(AppCoreState* state) {
+    ASSERT_ALWAYS(state != 0);
+    if (state->pendingSceneSwitch == state->activeScene) {
+        return;
+    }
+
+    AppSceneKind nextScene = state->pendingSceneSwitch;
+    state->activeScene = nextScene;
+
+    if (nextScene == AppSceneKind_Sponza) {
+        app_scene_sponza_on_enter(state);
+    } else if (nextScene == AppSceneKind_Radiance2D) {
+        app_scene_radiance_2d_on_enter(state);
+    }
+}
+
+static const char* app_scene_name(AppSceneKind scene) {
+    if (scene == AppSceneKind_Sponza) {
+        return "Sponza";
+    }
+    if (scene == AppSceneKind_Radiance2D) {
+        return "Radiance2D";
+    }
+    return "Unknown";
+}
+
 static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext* host, const AppInput* input,
                        F32 deltaSeconds) {
     ASSERT_ALWAYS(platform != 0);
@@ -191,6 +216,8 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
     for (U32 eventIndex = 0; eventIndex < input->eventCount; ++eventIndex) {
         const OS_GraphicsEvent* evt = input->events + eventIndex;
         ASSERT_ALWAYS(evt != 0);
+
+        B32 imguiWantCaptureMouse = ImGui::GetIO().WantCaptureMouse ? 1 : 0;
 
         switch (evt->tag) {
             case OS_GraphicsEvent_Tag_WindowShown: {
@@ -232,38 +259,25 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
             }
             break;
 
-            case OS_GraphicsEvent_Tag_MouseMove: {
-                if (!ImGui::GetIO().WantCaptureMouse) {
-                    F32 deltaPitch = -evt->mouseMove.deltaY * state->camera.sensitivity;
-                    F32 deltaYaw   =  evt->mouseMove.deltaX * state->camera.sensitivity;
-                    camera_rotate(&state->camera, deltaPitch, deltaYaw);
+            case OS_GraphicsEvent_Tag_KeyDown: {
+                if (evt->keyDown.keyCode == OS_KeyCode_F2 && !evt->keyDown.isRepeat) {
+                    AppSceneKind toggled = (state->activeScene == AppSceneKind_Sponza)
+                                               ? AppSceneKind_Radiance2D
+                                               : AppSceneKind_Sponza;
+                    app_switch_scene(state, toggled);
                 }
             }
             break;
 
-            case OS_GraphicsEvent_Tag_KeyDown: {
-                OS_KeyCode key = evt->keyDown.keyCode;
-                     if (key == OS_KeyCode_W) { state->camera.velocity.z = -1.0f; }
-                else if (key == OS_KeyCode_S) { state->camera.velocity.z =  1.0f; }
-                else if (key == OS_KeyCode_A) { state->camera.velocity.x = -1.0f; }
-                else if (key == OS_KeyCode_D) { state->camera.velocity.x =  1.0f; }
-            }
-            break;
-
-            case OS_GraphicsEvent_Tag_KeyUp: {
-                OS_KeyCode key = evt->keyUp.keyCode;
-                     if (key == OS_KeyCode_W || key == OS_KeyCode_S) { state->camera.velocity.z = 0.0f; }
-                else if (key == OS_KeyCode_A || key == OS_KeyCode_D) { state->camera.velocity.x = 0.0f; }
-            }
-            break;
-
-            case OS_GraphicsEvent_Tag_MouseButtonDown:
-            case OS_GraphicsEvent_Tag_MouseButtonUp:
-            case OS_GraphicsEvent_Tag_MouseScroll:
-            case OS_GraphicsEvent_Tag_TextInput:
             default: {
             }
-                break;
+            break;
+        }
+
+        if (state->activeScene == AppSceneKind_Sponza) {
+            app_scene_sponza_handle_event(evt, state, imguiWantCaptureMouse);
+        } else if (state->activeScene == AppSceneKind_Radiance2D) {
+            app_scene_radiance_2d_handle_event(evt, state, imguiWantCaptureMouse);
         }
     }
 
@@ -275,6 +289,7 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
                            state->desiredWindow.width,
                            state->desiredWindow.height);
 
+    app_apply_scene_switch(state);
     app_tests_tick(memory, state, tests, deltaSeconds);
 
     PLATFORM_RENDERER_CALL(platform,
@@ -282,165 +297,34 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
                            host->renderer,
                            deltaSeconds);
 
-    ImGui::ShowDemoWindow(nullptr);
-    ImGui::Text("frameTime: %f", static_cast<double>(deltaSeconds));
-    ImGui::Text("FPS: %f", static_cast<double>(1.0f / deltaSeconds));
+    ImGui::Text("frameTime: %f", (double) deltaSeconds);
+    ImGui::Text("FPS: %f", (double) (1.0f / MAX(deltaSeconds, 0.000001f)));
     ImGui::Text("frameNumber: %lld", state->frameCounter);
-    {
-        ImGui::ColorEdit4("Color", tests->drawColor.v);
 
-        if (state->meshLoaded) {
-            int tempMeshCount = (int)state->meshCount;
-            ImGui::InputInt("Mesh Count", &tempMeshCount);
-            state->meshCount = (tempMeshCount < 0) ? 0 : (U32)tempMeshCount;
-            ImGui::SliderFloat("Mesh Scale", &state->meshScale, 0.01f, 1.0f, "%.3f");
-            ImGui::ColorEdit4("Mesh Color", state->meshColor.v);
-            ImGui::SliderFloat("Mesh Spacing", &state->meshSpacing, 0.1f, 2.0f, "%.2f");
-        }
-
-        ImGui::SeparatorText("Camera");
-        ImGui::Text("Position: (%.2f, %.2f, %.2f)",
-            (double)state->camera.position.x, (double)state->camera.position.y, (double)state->camera.position.z);
-        QuatF32 q = state->camera.orientation;
-        ImGui::Text("Orientation: (%.3f, %.3f, %.3f, %.3f)", (double)q.x, (double)q.y, (double)q.z, (double)q.w);
-        ImGui::SliderFloat("Sensitivity", &state->camera.sensitivity, 0.001f, 0.02f, "%.4f");
-        ImGui::SliderFloat("Move Speed", &state->camera.moveSpeed, 0.001f, 2.0f, "%.3f");
-
-        static int selected_fish = -1;
-        const char* names[] = { "Bream", "Haddock", "Mackerel", "Pollock", "Tilefish" };
-        const char* names2[] = { "Bream2", "Haddock2", "Mackerel2", "Pollock2", "Tilefish2" };
-        static B32 toggles[] = { true, false, false, false, false };
-        if (ImGui::Button("Select.."))
-            ImGui::OpenPopup("my_select_popup");
-        if (ImGui::BeginPopup("my_select_popup"))
-        {
-            for (int i = 0; i < IM_ARRAYSIZE(names); i++)
-                if (ImGui::Selectable(names[i]))
-                    selected_fish = i;
-            ImGui::SeparatorText("Aquarium");
-            for (int i = 0; i < IM_ARRAYSIZE(names2); i++)
-                if (ImGui::Selectable(names2[i]))
-                    selected_fish = i;
-            ImGui::EndPopup();
-        }
-        ImGui::Text("Selected fish index: %d", selected_fish);
+    int selectedScene = (int) state->activeScene;
+    const char* sceneNames[AppSceneKind_COUNT] = {"Sponza", "Radiance2D"};
+    if (ImGui::Combo("Scene", &selectedScene, sceneNames, AppSceneKind_COUNT)) {
+        app_switch_scene(state, (AppSceneKind) selectedScene);
     }
+
+    ImGui::Text("Active Scene: %s", app_scene_name(state->activeScene));
+
+    if (state->activeScene == AppSceneKind_Sponza) {
+        app_scene_sponza_build_ui(state);
+    } else if (state->activeScene == AppSceneKind_Radiance2D) {
+        app_scene_radiance_2d_build_ui(state);
+    }
+
     PLATFORM_RENDERER_CALL(platform,
                            renderer_imgui_end_frame,
                            host->renderer);
 
-    camera_update(&state->camera, deltaSeconds);
+    app_apply_scene_switch(state);
 
-    F32 fovY = DEG_TO_RAD(70.0f);
-    F32 aspect = (F32)state->desiredWindow.width / (F32)state->desiredWindow.height;
-    F32 zNear = 0.001f;  // Reduced for 0.01x scaled scene
-    F32 zFar = 100.0f;
-    
-    Mat4x4F32 projection = mat4_perspective(fovY, aspect, zNear, zFar);
-    Mat4x4F32 view = camera_get_view_matrix(&state->camera);
-    
-    SceneData scene = {};
-    scene.view = view;
-    scene.proj = projection;
-    scene.viewproj = view * projection;
-    
-    scene.ambientColor.r = 0.1f;
-    scene.ambientColor.g = 0.1f;
-    scene.ambientColor.b = 0.1f;
-    scene.ambientColor.a = 1.0f;
-    scene.sunDirection.x = 0.0f;
-    scene.sunDirection.y = 1.0f;
-    scene.sunDirection.z = 0.5f;
-    scene.sunDirection.w = 0.0f;
-    scene.sunColor.r = 1.0f;
-    scene.sunColor.g = 1.0f;
-    scene.sunColor.b = 1.0f;
-    scene.sunColor.a = 1.0f;
-    
-    {
-        Vec3F32 sunDir = {{scene.sunDirection.x, scene.sunDirection.y, scene.sunDirection.z}};
-        sunDir = vec3_normalize(sunDir);
-        F32 lightDistance = 4.0f;
-        F32 orthoSize = 3.0f;
-        Vec3F32 sceneCenter = state->camera.position;
-        Vec3F32 lightPos = {{sceneCenter.x + sunDir.x * lightDistance, 
-                             sceneCenter.y + sunDir.y * lightDistance, 
-                             sceneCenter.z + sunDir.z * lightDistance}};
-        Vec3F32 up = {{0.0f, 1.0f, 0.0f}};
-        if (ABS_F32(vec3_dot(sunDir, up)) > 0.99f) {
-            up = {{0.0f, 0.0f, 1.0f}};
-        }
-        Mat4x4F32 lightView = mat4_look_at(lightPos, sceneCenter, up);
-        Mat4x4F32 lightProj = mat4_ortho(-orthoSize, orthoSize, -orthoSize, orthoSize, 0.01f, 20.0f);
-        scene.lightSpaceMatrix = lightView * lightProj;
-    }
-
-    RenderObject* renderObjects = 0;
-    U32 renderObjectCount = 0;
-
-    if (state->sceneLoaded && state->scene.nodeCount > 0) {
-        U32 totalSurfaces = 0;
-        for (U32 n = 0; n < state->scene.nodeCount; ++n) {
-            SceneNode* node = &state->scene.nodes[n];
-            if (node->meshIndex >= 0 && (U32)node->meshIndex < state->gpuScene.meshCount) {
-                MeshAssetData* meshData = &state->scene.meshes[node->meshIndex];
-                totalSurfaces += (meshData->surfaceCount > 0) ? meshData->surfaceCount : 1;
-            }
-        }
-        
-        if (totalSurfaces > 0) {
-            renderObjects = ARENA_PUSH_ARRAY(host->frameArena, RenderObject, totalSurfaces);
-            if (renderObjects) {
-                F32 scale = state->meshScale;
-                Mat4x4F32 scaleMatrix = mat4_identity();
-                scaleMatrix.v[0][0] = scale;
-                scaleMatrix.v[1][1] = scale;
-                scaleMatrix.v[2][2] = scale;
-                
-                for (U32 n = 0; n < state->scene.nodeCount; ++n) {
-                    SceneNode* node = &state->scene.nodes[n];
-                    if (node->meshIndex < 0 || (U32)node->meshIndex >= state->gpuScene.meshCount) {
-                        continue;
-                    }
-                    
-                    MeshAssetData* meshData = &state->scene.meshes[node->meshIndex];
-                    Mat4x4F32 worldTransform = scaleMatrix * node->worldTransform;
-                    MeshHandle meshHandle = state->gpuScene.meshes[node->meshIndex];
-                    
-                    if (meshData->surfaceCount == 0) {
-                        RenderObject* obj = &renderObjects[renderObjectCount++];
-                        obj->mesh = meshHandle;
-                        obj->transform = worldTransform;
-                        obj->color = state->meshColor;
-                        obj->material = MATERIAL_HANDLE_INVALID;
-                        obj->firstIndex = 0;
-                        obj->indexCount = 0;
-                    } else {
-                        for (U32 s = 0; s < meshData->surfaceCount; ++s) {
-                            MeshSurface* surface = &meshData->surfaces[s];
-                            RenderObject* obj = &renderObjects[renderObjectCount++];
-                            obj->mesh = meshHandle;
-                            obj->transform = worldTransform;
-                            obj->color = state->meshColor;
-                            obj->firstIndex = surface->startIndex;
-                            obj->indexCount = surface->count;
-                            obj->material = MATERIAL_HANDLE_INVALID;
-                            if (surface->materialIndex < state->gpuScene.materialCount) {
-                                obj->material = state->gpuScene.materials[surface->materialIndex];
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    RendererFrameBeginDesc beginDesc = renderer_frame_begin_desc(state->windowHandle, &scene);
-    if (PLATFORM_RENDERER_CALL(platform, renderer_begin_frame, host->renderer, &beginDesc)) {
-        RendererSubmitDesc submitDesc = renderer_submit_desc(renderObjects, renderObjectCount);
-        PLATFORM_RENDERER_CALL(platform, renderer_submit, host->renderer, &submitDesc);
-        RendererEndFrameDesc endDesc = renderer_end_frame_desc();
-        PLATFORM_RENDERER_CALL(platform, renderer_end_frame, host->renderer, &endDesc);
+    if (state->activeScene == AppSceneKind_Sponza) {
+        app_scene_sponza_render(platform, host, state, deltaSeconds);
+    } else if (state->activeScene == AppSceneKind_Radiance2D) {
+        app_scene_radiance_2d_render(platform, host, state, deltaSeconds);
     }
 }
 
@@ -454,10 +338,8 @@ static void app_shutdown(AppPlatform* platform, AppMemory* memory, AppHostContex
     AppCoreState* state = app_get_state(memory);
     AppTestsState* tests = app_get_tests(state);
 
-    if (state->sceneLoaded) {
-        PLATFORM_RENDERER_CALL(platform, renderer_destroy_scene, host->renderer, &state->gpuScene);
-        state->sceneLoaded = 0;
-    }
+    app_scene_radiance_2d_shutdown(platform, host, state);
+    app_scene_sponza_shutdown(platform, host, state);
 
     PLATFORM_RENDERER_CALL(platform,
                            renderer_imgui_shutdown,
@@ -540,19 +422,18 @@ static void app_compile_shaders_from_folder(AppPlatform* platform, AppMemory* me
         }
 
         StringU8 fileName = str8((const char*) entry->d_name, C_STR_LEN(entry->d_name));
-        
-        // Check for .hlsl extension
+
         if (fileName.size < 5) {
             continue;
         }
-        
-        StringU8 suffix = str8((const char*)fileName.data + fileName.size - 5, 5);
+
+        StringU8 suffix = str8((const char*) fileName.data + fileName.size - 5, 5);
         if (!str8_equal(suffix, str8(".hlsl"))) {
             continue;
         }
-        
+
         StringU8 shaderPath = str8_concat(arena, shadersDir, str8("/"), fileName);
-        
+
         OS_FileInfo fileInfo = OS_get_file_info((const char*) shaderPath.data);
         if (fileInfo.exists) {
             str8list_push(&shaderFiles, shaderPath);
@@ -575,10 +456,15 @@ static void app_compile_shaders_from_folder(AppPlatform* platform, AppMemory* me
     }
     {
         TIME_SCOPE("Shader Compilation");
-        PLATFORM_RENDERER_CALL(platform, renderer_compile_shaders, host->renderer, arena, state->jobSystem, requests, (U32) shaderFiles.count);
+        PLATFORM_RENDERER_CALL(platform,
+                               renderer_compile_shaders,
+                               host->renderer,
+                               arena,
+                               state->jobSystem,
+                               requests,
+                               (U32) shaderFiles.count);
     }
 }
-
 
 APP_MODULE_EXPORT B32 app_get_entry_points(AppModuleExports* outExports) {
     ASSERT_ALWAYS(outExports != 0);

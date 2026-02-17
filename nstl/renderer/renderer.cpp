@@ -6,6 +6,7 @@ struct RendererBackendOps {
     void (*shutdown)(void* backend);
     void (*draw)(void* backend, OS_WindowHandle window, const SceneData* scene,
                  const RenderObject* objects, U32 objectCount);
+    void (*drawRadiance2D)(void* backend, OS_WindowHandle window, const RendererRadiance2DDesc* desc);
     void (*resize)(void* backend, U32 width, U32 height);
     B32 (*imguiInit)(void* backend, OS_WindowHandle window);
     void (*imguiShutdown)(void* backend);
@@ -17,6 +18,7 @@ struct RendererBackendOps {
     void (*destroyMesh)(void* backend, MeshHandle mesh);
     TextureHandle (*uploadTexture)(void* backend, const LoadedImage* image);
     void (*destroyTexture)(void* backend, TextureHandle texture);
+    B32 (*updateTexture)(void* backend, TextureHandle texture, const LoadedImage* image);
     MaterialHandle (*uploadMaterial)(void* backend, const MaterialData* material,
                                      TextureHandle colorTexture, TextureHandle metalRoughTexture);
     void (*destroyMaterial)(void* backend, MaterialHandle material);
@@ -95,6 +97,8 @@ B32 renderer_create(const RendererCreateDesc* createDesc, Renderer* outRenderer)
     core->backend = backendRenderer.backendData;
     core->ops.shutdown = (void (*)(void*))renderer_vulkan_shutdown;
     core->ops.draw = (void (*)(void*, OS_WindowHandle, const SceneData*, const RenderObject*, U32))renderer_vulkan_draw;
+    core->ops.drawRadiance2D =
+        (void (*)(void*, OS_WindowHandle, const RendererRadiance2DDesc*))renderer_vulkan_draw_radiance_2d;
     core->ops.resize = (void (*)(void*, U32, U32))renderer_vulkan_on_window_resized;
     core->ops.imguiInit = (B32 (*)(void*, OS_WindowHandle))renderer_vulkan_imgui_init;
     core->ops.imguiShutdown = (void (*)(void*))renderer_vulkan_imgui_shutdown;
@@ -106,6 +110,7 @@ B32 renderer_create(const RendererCreateDesc* createDesc, Renderer* outRenderer)
     core->ops.destroyMesh = (void (*)(void*, MeshHandle))renderer_vulkan_destroy_mesh;
     core->ops.uploadTexture = (TextureHandle (*)(void*, const LoadedImage*))renderer_vulkan_upload_texture;
     core->ops.destroyTexture = (void (*)(void*, TextureHandle))renderer_vulkan_destroy_texture;
+    core->ops.updateTexture = (B32 (*)(void*, TextureHandle, const LoadedImage*))renderer_vulkan_update_texture;
     core->ops.uploadMaterial = (MaterialHandle (*)(void*, const MaterialData*, TextureHandle, TextureHandle))
         renderer_vulkan_upload_material;
     core->ops.destroyMaterial = (void (*)(void*, MaterialHandle))renderer_vulkan_destroy_material;
@@ -169,6 +174,23 @@ void renderer_submit(Renderer* renderer, const RendererSubmitDesc* submitDesc) {
     if (core->ops.draw) {
         core->ops.draw(core->backend, renderer->activeWindow, renderer->activeScene, submitDesc->objects,
                        submitDesc->objectCount);
+    }
+}
+
+void renderer_submit_radiance_2d(Renderer* renderer, const RendererRadiance2DDesc* radianceDesc) {
+    RendererCore* core = renderer_get_core_(renderer);
+    if (!core || !radianceDesc) {
+        return;
+    }
+    if (!renderer->frameInProgress) {
+        return;
+    }
+    if (!renderer_desc_is_valid_(radianceDesc->structSize, sizeof(RendererRadiance2DDesc), radianceDesc->apiVersion)) {
+        return;
+    }
+
+    if (core->ops.drawRadiance2D) {
+        core->ops.drawRadiance2D(core->backend, renderer->activeWindow, radianceDesc);
     }
 }
 
@@ -291,6 +313,14 @@ void renderer_destroy_texture(Renderer* renderer, TextureHandle texture) {
         return;
     }
     core->ops.destroyTexture(core->backend, texture);
+}
+
+B32 renderer_update_texture(Renderer* renderer, TextureHandle texture, const LoadedImage* image) {
+    RendererCore* core = renderer_get_core_(renderer);
+    if (!core || !TEXTURE_HANDLE_IS_VALID(texture) || !image || !core->ops.updateTexture) {
+        return 0;
+    }
+    return core->ops.updateTexture(core->backend, texture, image);
 }
 
 MaterialHandle renderer_upload_material(Renderer* renderer, const MaterialData* material,

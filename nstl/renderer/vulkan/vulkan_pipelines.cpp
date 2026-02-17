@@ -6,6 +6,24 @@ struct GradientPushConstants {
     Vec4F32 tileBorderColor;
 };
 
+struct Radiance2DCascadePushConstants {
+    U32 gridWidth;
+    U32 gridHeight;
+    U32 cascadeIndex;
+    U32 cascadeCount;
+    U32 raysPerProbeBase;
+    U32 maxSteps;
+};
+
+struct Radiance2DResolvePushConstants {
+    U32 outputWidth;
+    U32 outputHeight;
+    U32 cascadeCount;
+    U32 _padding0;
+    F32 intensity;
+    F32 exposure;
+};
+
 struct DxcThreadState {
     IDxcCompiler3* compiler;
     IDxcUtils* utils;
@@ -171,6 +189,16 @@ static void pipeline_builder_set_polygon_mode(PipelineBuilder* builder, VkPolygo
 static void pipeline_builder_set_cull_mode(PipelineBuilder* builder, VkCullModeFlags cullMode, VkFrontFace frontFace) {
     builder->rasterizer.cullMode = cullMode;
     builder->rasterizer.frontFace = frontFace;
+}
+
+static void pipeline_builder_enable_depth_bias(PipelineBuilder* builder,
+                                               F32 constantFactor,
+                                               F32 slopeFactor,
+                                               F32 clampValue) {
+    builder->rasterizer.depthBiasEnable = VK_TRUE;
+    builder->rasterizer.depthBiasConstantFactor = constantFactor;
+    builder->rasterizer.depthBiasSlopeFactor = slopeFactor;
+    builder->rasterizer.depthBiasClamp = clampValue;
 }
 
 static void pipeline_builder_set_multisampling_none(PipelineBuilder* builder) {
@@ -454,6 +482,369 @@ static void vulkan_dispatch_gradient(RendererVulkan* vulkan, VkCommandBuffer cmd
 
     vkCmdPushConstants(cmd, vulkan->pipelines.gradientPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0u, sizeof(pushConstants), &pushConstants);
     vkCmdDispatch(cmd, groupCountX, groupCountY, 1u);
+}
+
+static B32 vulkan_init_radiance_2d_pipeline(RendererVulkan* vulkan) {
+    if (!vulkan || vulkan->device.device == VK_NULL_HANDLE) {
+        return 0;
+    }
+
+    if (vulkan->pipelines.radianceCascadePipeline != VK_NULL_HANDLE &&
+        vulkan->pipelines.radianceResolvePipeline != VK_NULL_HANDLE) {
+        return 1;
+    }
+
+    VkDescriptorSetLayout cascadeLayout = VK_NULL_HANDLE;
+    VkPipelineLayout cascadePipelineLayout = VK_NULL_HANDLE;
+    VkPipeline cascadePipeline = VK_NULL_HANDLE;
+    VkShaderModule cascadeShader = VK_NULL_HANDLE;
+
+    VkDescriptorSetLayout resolveLayout = VK_NULL_HANDLE;
+    VkPipelineLayout resolvePipelineLayout = VK_NULL_HANDLE;
+    VkPipeline resolvePipeline = VK_NULL_HANDLE;
+    VkShaderModule resolveShader = VK_NULL_HANDLE;
+
+    {
+        VkDescriptorSetLayoutBinding bindings[4] = {};
+        bindings[0].binding = 0u;
+        bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[0].descriptorCount = 1u;
+        bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        bindings[1].binding = 1u;
+        bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[1].descriptorCount = 1u;
+        bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        bindings[2].binding = 2u;
+        bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[2].descriptorCount = 1u;
+        bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        bindings[3].binding = 3u;
+        bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        bindings[3].descriptorCount = 1u;
+        bindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo = {};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = ARRAY_COUNT(bindings);
+        layoutInfo.pBindings = bindings;
+
+        if (vkCreateDescriptorSetLayout(vulkan->device.device, &layoutInfo, 0, &cascadeLayout) != VK_SUCCESS) {
+            goto cleanup_fail;
+        }
+    }
+
+    {
+        VkPushConstantRange pushConstantRange = {};
+        pushConstantRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pushConstantRange.offset = 0u;
+        pushConstantRange.size = sizeof(Radiance2DCascadePushConstants);
+
+        VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
+        pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pipelineLayoutInfo.setLayoutCount = 1u;
+        pipelineLayoutInfo.pSetLayouts = &cascadeLayout;
+        pipelineLayoutInfo.pushConstantRangeCount = 1u;
+        pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
+
+        if (vkCreatePipelineLayout(vulkan->device.device, &pipelineLayoutInfo, 0, &cascadePipelineLayout) != VK_SUCCESS) {
+            goto cleanup_fail;
+        }
+    }
+
+    if (!vulkan_load_shader_module(&vulkan->device, "shaders/radiance2d_cascade.comp.spv", &cascadeShader)) {
+        goto cleanup_fail;
+    }
+
+    {
+        VkPipelineShaderStageCreateInfo stageInfo = {};
+        stageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        stageInfo.module = cascadeShader;
+        stageInfo.pName = "main";
+
+        VkComputePipelineCreateInfo pipelineInfo = {};
+        pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        pipelineInfo.layout = cascadePipelineLayout;
+        pipelineInfo.stage = stageInfo;
+
+        if (vkCreateComputePipelines(vulkan->device.device, VK_NULL_HANDLE, 1u, &pipelineInfo, 0, &cascadePipeline) != VK_SUCCESS) {
+            goto cleanup_fail;
+        }
+    }
+
+    {
+        VkDescriptorSetLayoutBinding bindings[9] = {};
+        for (U32 i = 0; i < VULKAN_RADIANCE_2D_MAX_CASCADES; ++i) {
+            bindings[i].binding = i;
+            bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[i].descriptorCount = 1u;
+            bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+        bindings[8].binding = 8u;
+        bindings[8].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        bindings[8].descriptorCount = 1u;
+        bindings[8].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo = {};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = ARRAY_COUNT(bindings);
+        layoutInfo.pBindings = bindings;
+
+        if (vkCreateDescriptorSetLayout(vulkan->device.device, &layoutInfo, 0, &resolveLayout) != VK_SUCCESS) {
+            goto cleanup_fail;
+        }
+    }
+
+    {
+        VkPushConstantRange pushConstantRange = {};
+        pushConstantRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pushConstantRange.offset = 0u;
+        pushConstantRange.size = sizeof(Radiance2DResolvePushConstants);
+
+        VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
+        pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pipelineLayoutInfo.setLayoutCount = 1u;
+        pipelineLayoutInfo.pSetLayouts = &resolveLayout;
+        pipelineLayoutInfo.pushConstantRangeCount = 1u;
+        pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
+
+        if (vkCreatePipelineLayout(vulkan->device.device, &pipelineLayoutInfo, 0, &resolvePipelineLayout) != VK_SUCCESS) {
+            goto cleanup_fail;
+        }
+    }
+
+    if (!vulkan_load_shader_module(&vulkan->device, "shaders/radiance2d_resolve.comp.spv", &resolveShader)) {
+        goto cleanup_fail;
+    }
+
+    {
+        VkPipelineShaderStageCreateInfo stageInfo = {};
+        stageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        stageInfo.module = resolveShader;
+        stageInfo.pName = "main";
+
+        VkComputePipelineCreateInfo pipelineInfo = {};
+        pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        pipelineInfo.layout = resolvePipelineLayout;
+        pipelineInfo.stage = stageInfo;
+
+        if (vkCreateComputePipelines(vulkan->device.device, VK_NULL_HANDLE, 1u, &pipelineInfo, 0, &resolvePipeline) != VK_SUCCESS) {
+            goto cleanup_fail;
+        }
+    }
+
+    vkDestroyShaderModule(vulkan->device.device, cascadeShader, 0);
+    vkDestroyShaderModule(vulkan->device.device, resolveShader, 0);
+
+    vulkan->pipelines.radianceCascadeDescriptorLayout = cascadeLayout;
+    vulkan->pipelines.radianceCascadePipelineLayout = cascadePipelineLayout;
+    vulkan->pipelines.radianceCascadePipeline = cascadePipeline;
+
+    vulkan->pipelines.radianceResolveDescriptorLayout = resolveLayout;
+    vulkan->pipelines.radianceResolvePipelineLayout = resolvePipelineLayout;
+    vulkan->pipelines.radianceResolvePipeline = resolvePipeline;
+
+    vkdefer_destroy_VkDescriptorSetLayout(&vulkan->deferCtx.globalBuf, cascadeLayout);
+    vkdefer_destroy_VkPipelineLayout(&vulkan->deferCtx.globalBuf, cascadePipelineLayout);
+    vkdefer_destroy_VkPipeline(&vulkan->deferCtx.globalBuf, cascadePipeline);
+    vkdefer_destroy_VkDescriptorSetLayout(&vulkan->deferCtx.globalBuf, resolveLayout);
+    vkdefer_destroy_VkPipelineLayout(&vulkan->deferCtx.globalBuf, resolvePipelineLayout);
+    vkdefer_destroy_VkPipeline(&vulkan->deferCtx.globalBuf, resolvePipeline);
+
+    return 1;
+
+cleanup_fail:
+    if (cascadeShader != VK_NULL_HANDLE) {
+        vkDestroyShaderModule(vulkan->device.device, cascadeShader, 0);
+    }
+    if (resolveShader != VK_NULL_HANDLE) {
+        vkDestroyShaderModule(vulkan->device.device, resolveShader, 0);
+    }
+    if (cascadePipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(vulkan->device.device, cascadePipeline, 0);
+    }
+    if (resolvePipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(vulkan->device.device, resolvePipeline, 0);
+    }
+    if (cascadePipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(vulkan->device.device, cascadePipelineLayout, 0);
+    }
+    if (resolvePipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(vulkan->device.device, resolvePipelineLayout, 0);
+    }
+    if (cascadeLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(vulkan->device.device, cascadeLayout, 0);
+    }
+    if (resolveLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(vulkan->device.device, resolveLayout, 0);
+    }
+    return 0;
+}
+
+static B32 vulkan_dispatch_radiance_2d(RendererVulkan* vulkan,
+                                       VkCommandBuffer cmd,
+                                       RendererVulkanFrame* frame,
+                                       const RendererRadiance2DDesc* desc,
+                                       GPUTexture* emissiveTexture,
+                                       GPUTexture* occluderTexture) {
+    if (!vulkan || cmd == VK_NULL_HANDLE || !frame || !desc || !emissiveTexture || !occluderTexture) {
+        return 0;
+    }
+    if (emissiveTexture->image.imageView == VK_NULL_HANDLE || occluderTexture->image.imageView == VK_NULL_HANDLE) {
+        return 0;
+    }
+    if (vulkan->drawImage.imageView == VK_NULL_HANDLE) {
+        return 0;
+    }
+    if (vulkan->drawExtent.width == 0u || vulkan->drawExtent.height == 0u) {
+        return 0;
+    }
+
+    U32 cascadeCount = CLAMP(desc->cascadeCount, 1u, VULKAN_RADIANCE_2D_MAX_CASCADES);
+    if (!vulkan_ensure_radiance_images(vulkan, desc->gridWidth, desc->gridHeight, cascadeCount)) {
+        return 0;
+    }
+    if (!vulkan_init_radiance_2d_pipeline(vulkan)) {
+        return 0;
+    }
+
+    U32 groupCountX = (desc->gridWidth + 15u) / 16u;
+    U32 groupCountY = (desc->gridHeight + 15u) / 16u;
+    if (groupCountX == 0u || groupCountY == 0u) {
+        return 0;
+    }
+
+    for (S32 cascade = (S32) cascadeCount - 1; cascade >= 0; --cascade) {
+        RendererVulkanAllocatedImage* outImage = &vulkan->radianceCascadeImages[(U32) cascade];
+        RendererVulkanAllocatedImage* prevImage = (cascade + 1 < (S32) cascadeCount)
+                                                      ? &vulkan->radianceCascadeImages[(U32) (cascade + 1)]
+                                                      : &vulkan->blackImage;
+
+        vulkan_transition_image(cmd, outImage->image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
+
+        VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+        if (!vulkan_descriptor_allocator_allocate(&vulkan->device,
+                                                  frame->frameDescriptors,
+                                                  vulkan->pipelines.radianceCascadeDescriptorLayout,
+                                                  &descriptorSet)) {
+            return 0;
+        }
+
+        VulkanDescriptorWriter writer = {};
+        vulkan_descriptor_writer_write_image(&writer,
+                                             0u,
+                                             emissiveTexture->image.imageView,
+                                             vulkan->samplerNearest,
+                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+        vulkan_descriptor_writer_write_image(&writer,
+                                             1u,
+                                             occluderTexture->image.imageView,
+                                             vulkan->samplerNearest,
+                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+        vulkan_descriptor_writer_write_image(&writer,
+                                             2u,
+                                             prevImage->imageView,
+                                             vulkan->samplerNearest,
+                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+        vulkan_descriptor_writer_write_image(&writer,
+                                             3u,
+                                             outImage->imageView,
+                                             VK_NULL_HANDLE,
+                                             VK_IMAGE_LAYOUT_GENERAL,
+                                             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+        vulkan_descriptor_writer_update_set(&vulkan->device, &writer, descriptorSet);
+
+        Radiance2DCascadePushConstants pushConstants = {};
+        pushConstants.gridWidth = desc->gridWidth;
+        pushConstants.gridHeight = desc->gridHeight;
+        pushConstants.cascadeIndex = (U32) cascade;
+        pushConstants.cascadeCount = cascadeCount;
+        pushConstants.raysPerProbeBase = desc->raysPerProbeBase;
+        pushConstants.maxSteps = desc->maxSteps;
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, vulkan->pipelines.radianceCascadePipeline);
+        vkCmdBindDescriptorSets(cmd,
+                                VK_PIPELINE_BIND_POINT_COMPUTE,
+                                vulkan->pipelines.radianceCascadePipelineLayout,
+                                0u,
+                                1u,
+                                &descriptorSet,
+                                0u,
+                                0);
+        vkCmdPushConstants(cmd,
+                           vulkan->pipelines.radianceCascadePipelineLayout,
+                           VK_SHADER_STAGE_COMPUTE_BIT,
+                           0u,
+                           sizeof(pushConstants),
+                           &pushConstants);
+        vkCmdDispatch(cmd, groupCountX, groupCountY, 1u);
+
+        vulkan_transition_image(cmd, outImage->image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+
+    VkDescriptorSet resolveSet = VK_NULL_HANDLE;
+    if (!vulkan_descriptor_allocator_allocate(&vulkan->device,
+                                              frame->frameDescriptors,
+                                              vulkan->pipelines.radianceResolveDescriptorLayout,
+                                              &resolveSet)) {
+        return 0;
+    }
+
+    VulkanDescriptorWriter resolveWriter = {};
+    for (U32 i = 0; i < VULKAN_RADIANCE_2D_MAX_CASCADES; ++i) {
+        RendererVulkanAllocatedImage* inputImage = (i < cascadeCount)
+                                                       ? &vulkan->radianceCascadeImages[i]
+                                                       : &vulkan->blackImage;
+        vulkan_descriptor_writer_write_image(&resolveWriter,
+                                             i,
+                                             inputImage->imageView,
+                                             vulkan->samplerNearest,
+                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+    }
+    vulkan_descriptor_writer_write_image(&resolveWriter,
+                                         8u,
+                                         vulkan->drawImage.imageView,
+                                         VK_NULL_HANDLE,
+                                         VK_IMAGE_LAYOUT_GENERAL,
+                                         VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+    vulkan_descriptor_writer_update_set(&vulkan->device, &resolveWriter, resolveSet);
+
+    U32 outGroupCountX = (vulkan->drawExtent.width + 15u) / 16u;
+    U32 outGroupCountY = (vulkan->drawExtent.height + 15u) / 16u;
+    if (outGroupCountX == 0u || outGroupCountY == 0u) {
+        return 0;
+    }
+
+    Radiance2DResolvePushConstants resolveConstants = {};
+    resolveConstants.outputWidth = vulkan->drawExtent.width;
+    resolveConstants.outputHeight = vulkan->drawExtent.height;
+    resolveConstants.cascadeCount = cascadeCount;
+    resolveConstants.intensity = desc->intensity;
+    resolveConstants.exposure = desc->exposure;
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, vulkan->pipelines.radianceResolvePipeline);
+    vkCmdBindDescriptorSets(cmd,
+                            VK_PIPELINE_BIND_POINT_COMPUTE,
+                            vulkan->pipelines.radianceResolvePipelineLayout,
+                            0u,
+                            1u,
+                            &resolveSet,
+                            0u,
+                            0);
+    vkCmdPushConstants(cmd,
+                       vulkan->pipelines.radianceResolvePipelineLayout,
+                       VK_SHADER_STAGE_COMPUTE_BIT,
+                       0u,
+                       sizeof(resolveConstants),
+                       &resolveConstants);
+    vkCmdDispatch(cmd, outGroupCountX, outGroupCountY, 1u);
+
+    return 1;
 }
 
 // ////////////////////////

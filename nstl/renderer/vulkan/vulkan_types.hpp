@@ -179,6 +179,7 @@ struct VulkanMaterialSlot {
 };
 
 static const U32 VULKAN_DESCRIPTOR_ALLOCATOR_MAX_RATIOS = 8;
+static const U32 VULKAN_RADIANCE_2D_MAX_CASCADES = 8u;
 
 struct VulkanDescriptorAllocator {
     Arena* arena;
@@ -208,6 +209,14 @@ struct VulkanPipelines {
     VkDescriptorSetLayout drawImageDescriptorLayout;
     VkPipelineLayout gradientPipelineLayout;
     VkPipeline gradientPipeline;
+
+    VkDescriptorSetLayout radianceCascadeDescriptorLayout;
+    VkPipelineLayout radianceCascadePipelineLayout;
+    VkPipeline radianceCascadePipeline;
+
+    VkDescriptorSetLayout radianceResolveDescriptorLayout;
+    VkPipelineLayout radianceResolvePipelineLayout;
+    VkPipeline radianceResolvePipeline;
     
     VkPipelineLayout meshPipelineLayout;
     VkPipeline meshPipeline;
@@ -237,6 +246,12 @@ struct RendererVulkan {
     RendererVulkanAllocatedImage drawImage;
     RendererVulkanAllocatedImage depthImage;
     VkExtent2D drawExtent;
+
+    RendererVulkanAllocatedImage radianceCascadeImages[VULKAN_RADIANCE_2D_MAX_CASCADES];
+    U32 radianceCascadeImageCount;
+    U32 radianceGridWidth;
+    U32 radianceGridHeight;
+    B32 radianceImagesInitialized;
     
     Arena* frameArena;
     

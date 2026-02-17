@@ -201,7 +201,7 @@ struct Renderer {
     const SceneData* activeScene;
 };
 
-static const U32 RENDERER_API_VERSION = 1u;
+static const U32 RENDERER_API_VERSION = 2u;
 
 struct RendererCreateDesc {
     U32 structSize;
@@ -238,6 +238,21 @@ struct RendererResizeDesc {
     const void* next;
     U32 width;
     U32 height;
+};
+
+struct RendererRadiance2DDesc {
+    U32 structSize;
+    U32 apiVersion;
+    const void* next;
+    TextureHandle emissiveTexture;
+    TextureHandle occluderTexture;
+    U32 gridWidth;
+    U32 gridHeight;
+    U32 cascadeCount;
+    U32 raysPerProbeBase;
+    U32 maxSteps;
+    F32 intensity;
+    F32 exposure;
 };
 
 inline RendererCreateDesc renderer_create_desc(Arena* arena) {
@@ -287,9 +302,35 @@ inline RendererResizeDesc renderer_resize_desc(U32 width, U32 height) {
     return desc;
 }
 
+inline RendererRadiance2DDesc renderer_radiance_2d_desc(TextureHandle emissiveTexture,
+                                                         TextureHandle occluderTexture,
+                                                         U32 gridWidth,
+                                                         U32 gridHeight,
+                                                         U32 cascadeCount,
+                                                         U32 raysPerProbeBase,
+                                                         U32 maxSteps,
+                                                         F32 intensity,
+                                                         F32 exposure) {
+    RendererRadiance2DDesc desc = {};
+    desc.structSize = sizeof(RendererRadiance2DDesc);
+    desc.apiVersion = RENDERER_API_VERSION;
+    desc.next = 0;
+    desc.emissiveTexture = emissiveTexture;
+    desc.occluderTexture = occluderTexture;
+    desc.gridWidth = gridWidth;
+    desc.gridHeight = gridHeight;
+    desc.cascadeCount = cascadeCount;
+    desc.raysPerProbeBase = raysPerProbeBase;
+    desc.maxSteps = maxSteps;
+    desc.intensity = intensity;
+    desc.exposure = exposure;
+    return desc;
+}
+
 B32 renderer_create(const RendererCreateDesc* createDesc, Renderer* outRenderer);
 B32 renderer_begin_frame(Renderer* renderer, const RendererFrameBeginDesc* frameBeginDesc);
 void renderer_submit(Renderer* renderer, const RendererSubmitDesc* submitDesc);
+void renderer_submit_radiance_2d(Renderer* renderer, const RendererRadiance2DDesc* radianceDesc);
 void renderer_end_frame(Renderer* renderer, const RendererEndFrameDesc* endFrameDesc);
 void renderer_resize(Renderer* renderer, const RendererResizeDesc* resizeDesc);
 
@@ -324,6 +365,7 @@ struct GPUSceneData {
 
 TextureHandle renderer_upload_texture(Renderer* renderer, const LoadedImage* image);
 void renderer_destroy_texture(Renderer* renderer, TextureHandle texture);
+B32 renderer_update_texture(Renderer* renderer, TextureHandle texture, const LoadedImage* image);
 
 MaterialHandle renderer_upload_material(Renderer* renderer, const MaterialData* material,
                                         TextureHandle colorTexture, TextureHandle metalRoughTexture);

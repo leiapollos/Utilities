@@ -210,6 +210,7 @@ static B32 vulkan_init_material_pipelines(RendererVulkan* vulkan) {
         pipeline_builder_set_input_topology(&builder, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         pipeline_builder_set_polygon_mode(&builder, VK_POLYGON_MODE_FILL);
         pipeline_builder_set_cull_mode(&builder, VK_CULL_MODE_BACK_BIT, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+        pipeline_builder_enable_depth_bias(&builder, 1.25f, 1.75f, 0.0f);
         pipeline_builder_set_multisampling_none(&builder);
         pipeline_builder_disable_blending(&builder);
         pipeline_builder_enable_depth_test(&builder, 1, VK_COMPARE_OP_LESS_OR_EQUAL);

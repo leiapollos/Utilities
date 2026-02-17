@@ -54,7 +54,12 @@ B32 renderer_vulkan_backend_init(Arena* arena, Renderer* renderer) {
         return 0;
     }
 
+    MEMSET(vulkan, 0, sizeof(*vulkan));
     vulkan->arena = arena;
+    vulkan->radianceCascadeImageCount = 0u;
+    vulkan->radianceGridWidth = 0u;
+    vulkan->radianceGridHeight = 0u;
+    vulkan->radianceImagesInitialized = 0;
     
     U32 perFrameTotalBytes = KB(64) * VULKAN_FRAME_OVERLAP;
     vulkan->deferPerFrameMem = (U8*) arena_push(arena, perFrameTotalBytes, 8);
@@ -140,6 +145,7 @@ void renderer_vulkan_shutdown(RendererVulkan* vulkan) {
     }
 
     vulkan_destroy_swapchain(&vulkan->swapchain, vulkan->device.device);
+    vulkan_destroy_radiance_images(vulkan);
     vulkan_destroy_draw_image(vulkan);
     vulkan_destroy_depth_image(vulkan);
     vulkan_destroy_shadow_map(vulkan);
@@ -559,6 +565,120 @@ void renderer_vulkan_draw(RendererVulkan* vulkan, OS_WindowHandle window,
     vulkan_end_frame(vulkan);
 }
 
+void renderer_vulkan_draw_radiance_2d(RendererVulkan* vulkan, OS_WindowHandle window,
+                                      const RendererRadiance2DDesc* desc) {
+    if (!vulkan || !window.handle || !desc) {
+        return;
+    }
+    if (desc->gridWidth == 0u || desc->gridHeight == 0u) {
+        return;
+    }
+    if (!TEXTURE_HANDLE_IS_VALID(desc->emissiveTexture) || !TEXTURE_HANDLE_IS_VALID(desc->occluderTexture)) {
+        return;
+    }
+
+    if (vulkan->device.device == VK_NULL_HANDLE || vulkan->device.graphicsQueue == VK_NULL_HANDLE) {
+        return;
+    }
+
+    if (vulkan->swapchain.handle == VK_NULL_HANDLE) {
+        if (!vulkan_create_swapchain(vulkan, window)) {
+            return;
+        }
+    }
+
+    if (!vulkan->imguiInitialized && window.handle) {
+        if (renderer_vulkan_imgui_init(vulkan, window)) {
+            renderer_vulkan_imgui_on_swapchain_updated(vulkan);
+        }
+    }
+
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    if (!vulkan_begin_frame(vulkan, &cmd)) {
+        return;
+    }
+
+    RendererVulkanFrame* frame = &vulkan->commands.frames[vulkan->commands.currentFrameIndex];
+    vulkan_descriptor_allocator_clear(&vulkan->device, frame->frameDescriptors);
+
+    U32 imageIndex = frame->imageIndex;
+    RendererVulkanSwapchainImage* image = &vulkan->swapchain.images[imageIndex];
+
+    B32 hasDrawImage = (vulkan->drawImage.image != VK_NULL_HANDLE) &&
+                       (vulkan->drawImage.imageView != VK_NULL_HANDLE);
+    VkImageLayout swapchainLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    Vec4F32 clearColor = {{0.1f, 0.1f, 0.1f, 1.0f}};
+
+    if (hasDrawImage) {
+        vulkan_transition_image(cmd,
+                                vulkan->drawImage.image,
+                                VK_IMAGE_LAYOUT_UNDEFINED,
+                                VK_IMAGE_LAYOUT_GENERAL);
+
+        B32 dispatchedRadiance = 0;
+        GPUTexture* emissiveTexture = vulkan_get_texture(vulkan, desc->emissiveTexture);
+        GPUTexture* occluderTexture = vulkan_get_texture(vulkan, desc->occluderTexture);
+        if (emissiveTexture && occluderTexture) {
+            dispatchedRadiance = vulkan_dispatch_radiance_2d(vulkan, cmd, frame, desc, emissiveTexture, occluderTexture);
+        }
+        if (!dispatchedRadiance) {
+            vulkan_dispatch_gradient(vulkan, cmd, clearColor);
+        }
+
+        vulkan_transition_image(cmd,
+                                vulkan->drawImage.image,
+                                VK_IMAGE_LAYOUT_GENERAL,
+                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+        vulkan_transition_image(cmd,
+                                image->handle,
+                                VK_IMAGE_LAYOUT_UNDEFINED,
+                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+        vulkan_copy_image_to_image(cmd,
+                                   vulkan->drawImage.image,
+                                   image->handle,
+                                   vulkan->drawExtent,
+                                   vulkan->swapchain.extent);
+        swapchainLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    } else {
+        VkClearColorValue clearValue = {{clearColor.r, clearColor.g, clearColor.b, clearColor.a}};
+        VkImageSubresourceRange clearRange = vulkan_image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
+
+        vulkan_transition_image(cmd,
+                                image->handle,
+                                VK_IMAGE_LAYOUT_UNDEFINED,
+                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        vkCmdClearColorImage(cmd,
+                             image->handle,
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                             &clearValue,
+                             1u,
+                             &clearRange);
+        swapchainLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    }
+
+    if (vulkan->imguiInitialized) {
+        vulkan_transition_image(cmd,
+                                image->handle,
+                                swapchainLayout,
+                                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        renderer_vulkan_imgui_render(vulkan, cmd, image->view, vulkan->swapchain.extent);
+        vulkan_transition_image(cmd,
+                                image->handle,
+                                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    } else {
+        vulkan_transition_image(cmd,
+                                image->handle,
+                                swapchainLayout,
+                                VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    }
+
+    arena_pop_to(vulkan->frameArena, ARENA_HEADER_SIZE);
+    vulkan_end_frame(vulkan);
+}
+
 void renderer_vulkan_on_window_resized(RendererVulkan* vulkan, U32 width, U32 height) {
     if (!vulkan || vulkan->device.device == VK_NULL_HANDLE) {
         return;
@@ -710,6 +830,34 @@ void renderer_vulkan_destroy_texture(RendererVulkan* vulkan, TextureHandle handl
         vulkan_destroy_image(vulkan, &textureSlot->texture->image);
         textureSlot->texture = 0;
     }
+}
+
+B32 renderer_vulkan_update_texture(RendererVulkan* vulkan, TextureHandle handle, const LoadedImage* image) {
+    if (!vulkan || !image || !image->pixels || !TEXTURE_HANDLE_IS_VALID(handle)) {
+        return 0;
+    }
+
+    GPUTexture* texture = vulkan_get_texture(vulkan, handle);
+    if (!texture || texture->image.image == VK_NULL_HANDLE) {
+        return 0;
+    }
+
+    if (texture->image.imageExtent.width != image->width || texture->image.imageExtent.height != image->height) {
+        LOG_WARNING(VULKAN_LOG_DOMAIN,
+                    "Texture update skipped due to size mismatch (existing={}x{}, incoming={}x{})",
+                    texture->image.imageExtent.width,
+                    texture->image.imageExtent.height,
+                    image->width,
+                    image->height);
+        return 0;
+    }
+
+    return vulkan_upload_pixels_to_image(vulkan,
+                                         &texture->image,
+                                         image->pixels,
+                                         image->width,
+                                         image->height,
+                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
 // ////////////////////////
