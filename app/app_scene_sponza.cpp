@@ -113,6 +113,91 @@ static void app_scene_sponza_compute_scene_bounds_(const SponzaSceneState* scene
     *outRadius = MAX(radius, 0.25f);
 }
 
+static void app_scene_sponza_release_cpu_images_(SponzaSceneState* sceneState) {
+    ASSERT_ALWAYS(sceneState != 0);
+    if (!sceneState->scene.images || sceneState->scene.imageCount == 0u) {
+        return;
+    }
+
+    for (U32 i = 0; i < sceneState->scene.imageCount; ++i) {
+        image_free(&sceneState->scene.images[i]);
+    }
+}
+
+static void app_scene_sponza_release_cpu_scene_(SponzaSceneState* sceneState) {
+    ASSERT_ALWAYS(sceneState != 0);
+
+    if (sceneState->sceneArena) {
+        arena_release(sceneState->sceneArena);
+        sceneState->sceneArena = 0;
+    }
+
+    MEMSET(&sceneState->scene, 0, sizeof(sceneState->scene));
+}
+
+static B32 app_scene_sponza_build_render_units_(Arena* arena, const LoadedScene* scene,
+                                                SponzaRenderUnit** outRenderUnits, U32* outRenderUnitCount) {
+    ASSERT_ALWAYS(arena != 0);
+    ASSERT_ALWAYS(scene != 0);
+    ASSERT_ALWAYS(outRenderUnits != 0);
+    ASSERT_ALWAYS(outRenderUnitCount != 0);
+
+    *outRenderUnits = 0;
+    *outRenderUnitCount = 0;
+
+    U32 totalRenderUnits = 0;
+    for (U32 nodeIndex = 0; nodeIndex < scene->nodeCount; ++nodeIndex) {
+        const SceneNode* node = &scene->nodes[nodeIndex];
+        if (node->meshIndex < 0 || (U32)node->meshIndex >= scene->meshCount) {
+            continue;
+        }
+
+        const MeshAssetData* mesh = &scene->meshes[node->meshIndex];
+        totalRenderUnits += (mesh->surfaceCount > 0u) ? mesh->surfaceCount : 1u;
+    }
+
+    if (totalRenderUnits == 0u) {
+        return 1;
+    }
+
+    SponzaRenderUnit* renderUnits = ARENA_PUSH_ARRAY(arena, SponzaRenderUnit, totalRenderUnits);
+    if (!renderUnits) {
+        return 0;
+    }
+
+    U32 renderUnitCount = 0;
+    for (U32 nodeIndex = 0; nodeIndex < scene->nodeCount; ++nodeIndex) {
+        const SceneNode* node = &scene->nodes[nodeIndex];
+        if (node->meshIndex < 0 || (U32)node->meshIndex >= scene->meshCount) {
+            continue;
+        }
+
+        const MeshAssetData* mesh = &scene->meshes[node->meshIndex];
+        if (mesh->surfaceCount == 0u) {
+            SponzaRenderUnit* unit = &renderUnits[renderUnitCount++];
+            unit->meshIndex = (U32)node->meshIndex;
+            unit->materialIndex = (U32)-1;
+            unit->firstIndex = 0u;
+            unit->indexCount = 0u;
+            unit->transform = node->worldTransform;
+        } else {
+            for (U32 surfaceIndex = 0; surfaceIndex < mesh->surfaceCount; ++surfaceIndex) {
+                const MeshSurface* surface = &mesh->surfaces[surfaceIndex];
+                SponzaRenderUnit* unit = &renderUnits[renderUnitCount++];
+                unit->meshIndex = (U32)node->meshIndex;
+                unit->materialIndex = surface->materialIndex;
+                unit->firstIndex = surface->startIndex;
+                unit->indexCount = surface->count;
+                unit->transform = node->worldTransform;
+            }
+        }
+    }
+
+    *outRenderUnits = renderUnits;
+    *outRenderUnitCount = renderUnitCount;
+    return 1;
+}
+
 static void app_scene_sponza_init(AppPlatform* platform, AppMemory* memory, AppHostContext* host, AppCoreState* state) {
     ASSERT_ALWAYS(platform != 0);
     ASSERT_ALWAYS(memory != 0);
@@ -125,7 +210,13 @@ static void app_scene_sponza_init(AppPlatform* platform, AppMemory* memory, AppH
         return;
     }
 
-    if (scene_load_from_file(memory->programArena, "assets/sponza.glb", &sceneState->scene)) {
+    sceneState->sceneArena = arena_alloc();
+    if (!sceneState->sceneArena) {
+        LOG_ERROR("app", "Failed to allocate temporary scene arena");
+        return;
+    }
+
+    if (scene_load_from_file(sceneState->sceneArena, "assets/sponza.glb", &sceneState->scene)) {
         LOG_INFO("app", "Scene loaded: {} meshes, {} materials, {} nodes, {} images",
                  sceneState->scene.meshCount,
                  sceneState->scene.materialCount,
@@ -138,18 +229,34 @@ static void app_scene_sponza_init(AppPlatform* platform, AppMemory* memory, AppH
                                    memory->programArena,
                                    &sceneState->scene,
                                    &sceneState->gpuScene)) {
+            app_scene_sponza_release_cpu_images_(sceneState);
+            if (!app_scene_sponza_build_render_units_(memory->programArena,
+                                                      &sceneState->scene,
+                                                      &sceneState->renderUnits,
+                                                      &sceneState->renderUnitCount)) {
+                LOG_ERROR("app", "Failed to allocate Sponza render units");
+                PLATFORM_RENDERER_CALL(platform, renderer_destroy_scene, host->renderer, &sceneState->gpuScene);
+                app_scene_sponza_release_cpu_scene_(sceneState);
+                return;
+            }
+
+            app_scene_sponza_compute_scene_bounds_(sceneState, &sceneState->sceneBoundsCenter, &sceneState->sceneBoundsRadius);
             sceneState->sceneLoaded = 1;
             sceneState->meshScale = 0.01f;
             sceneState->meshColor = {{1.0f, 1.0f, 1.0f, 1.0f}};
-            app_scene_sponza_compute_scene_bounds_(sceneState, &sceneState->sceneBoundsCenter, &sceneState->sceneBoundsRadius);
             sceneState->shadowLightAzimuthDeg = 90.0f;
             sceneState->shadowLightElevationDeg = 63.4349f;
-            sceneState->shadowLightAnimate = 0;
+            sceneState->shadowLightAnimate = 1;
             sceneState->shadowLightAnimateSpeedDegPerSec = 45.0f;
+
+            app_scene_sponza_release_cpu_scene_(sceneState);
         } else {
+            app_scene_sponza_release_cpu_images_(sceneState);
+            app_scene_sponza_release_cpu_scene_(sceneState);
             LOG_ERROR("app", "Failed to upload scene to GPU");
         }
     } else {
+        app_scene_sponza_release_cpu_scene_(sceneState);
         LOG_ERROR("app", "Failed to load Sponza scene");
     }
 }
@@ -165,6 +272,9 @@ static void app_scene_sponza_shutdown(AppPlatform* platform, AppHostContext* hos
         PLATFORM_RENDERER_CALL(platform, renderer_destroy_scene, host->renderer, &sceneState->gpuScene);
         sceneState->sceneLoaded = 0;
     }
+    app_scene_sponza_release_cpu_scene_(sceneState);
+    sceneState->renderUnits = 0;
+    sceneState->renderUnitCount = 0;
 }
 
 static void app_scene_sponza_on_enter(AppCoreState* state) {
@@ -322,58 +432,30 @@ static void app_scene_sponza_render(AppPlatform* platform, AppHostContext* host,
     RenderObject* renderObjects = 0;
     U32 renderObjectCount = 0;
 
-    if (sceneState->sceneLoaded && sceneState->scene.nodeCount > 0) {
-        U32 totalSurfaces = 0;
-        for (U32 n = 0; n < sceneState->scene.nodeCount; ++n) {
-            SceneNode* node = &sceneState->scene.nodes[n];
-            if (node->meshIndex >= 0 && (U32) node->meshIndex < sceneState->gpuScene.meshCount) {
-                MeshAssetData* meshData = &sceneState->scene.meshes[node->meshIndex];
-                totalSurfaces += (meshData->surfaceCount > 0) ? meshData->surfaceCount : 1;
-            }
-        }
+    if (sceneState->sceneLoaded && sceneState->renderUnitCount > 0u) {
+        renderObjects = ARENA_PUSH_ARRAY(host->frameArena, RenderObject, sceneState->renderUnitCount);
+        if (renderObjects != 0) {
+            F32 scale = sceneState->meshScale;
+            Mat4x4F32 scaleMatrix = mat4_identity();
+            scaleMatrix.v[0][0] = scale;
+            scaleMatrix.v[1][1] = scale;
+            scaleMatrix.v[2][2] = scale;
 
-        if (totalSurfaces > 0) {
-            renderObjects = ARENA_PUSH_ARRAY(host->frameArena, RenderObject, totalSurfaces);
-            if (renderObjects != 0) {
-                F32 scale = sceneState->meshScale;
-                Mat4x4F32 scaleMatrix = mat4_identity();
-                scaleMatrix.v[0][0] = scale;
-                scaleMatrix.v[1][1] = scale;
-                scaleMatrix.v[2][2] = scale;
+            for (U32 i = 0; i < sceneState->renderUnitCount; ++i) {
+                const SponzaRenderUnit* unit = &sceneState->renderUnits[i];
+                if (unit->meshIndex >= sceneState->gpuScene.meshCount) {
+                    continue;
+                }
 
-                for (U32 n = 0; n < sceneState->scene.nodeCount; ++n) {
-                    SceneNode* node = &sceneState->scene.nodes[n];
-                    if (node->meshIndex < 0 || (U32) node->meshIndex >= sceneState->gpuScene.meshCount) {
-                        continue;
-                    }
-
-                    MeshAssetData* meshData = &sceneState->scene.meshes[node->meshIndex];
-                    Mat4x4F32 worldTransform = scaleMatrix * node->worldTransform;
-                    MeshHandle meshHandle = sceneState->gpuScene.meshes[node->meshIndex];
-
-                    if (meshData->surfaceCount == 0) {
-                        RenderObject* obj = &renderObjects[renderObjectCount++];
-                        obj->mesh = meshHandle;
-                        obj->transform = worldTransform;
-                        obj->color = sceneState->meshColor;
-                        obj->material = MATERIAL_HANDLE_INVALID;
-                        obj->firstIndex = 0;
-                        obj->indexCount = 0;
-                    } else {
-                        for (U32 s = 0; s < meshData->surfaceCount; ++s) {
-                            MeshSurface* surface = &meshData->surfaces[s];
-                            RenderObject* obj = &renderObjects[renderObjectCount++];
-                            obj->mesh = meshHandle;
-                            obj->transform = worldTransform;
-                            obj->color = sceneState->meshColor;
-                            obj->firstIndex = surface->startIndex;
-                            obj->indexCount = surface->count;
-                            obj->material = MATERIAL_HANDLE_INVALID;
-                            if (surface->materialIndex < sceneState->gpuScene.materialCount) {
-                                obj->material = sceneState->gpuScene.materials[surface->materialIndex];
-                            }
-                        }
-                    }
+                RenderObject* obj = &renderObjects[renderObjectCount++];
+                obj->mesh = sceneState->gpuScene.meshes[unit->meshIndex];
+                obj->transform = scaleMatrix * unit->transform;
+                obj->color = sceneState->meshColor;
+                obj->firstIndex = unit->firstIndex;
+                obj->indexCount = unit->indexCount;
+                obj->material = MATERIAL_HANDLE_INVALID;
+                if (unit->materialIndex < sceneState->gpuScene.materialCount) {
+                    obj->material = sceneState->gpuScene.materials[unit->materialIndex];
                 }
             }
         }

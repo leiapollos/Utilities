@@ -364,6 +364,7 @@ static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
         sob_target_link(hostTarget, "Metal", .kind = Sob_LibKind_Framework);
         sob_target_link(hostTarget, "vulkan", .searchPath = VULKAN_LIB_DIR);
         sob_target_link(hostTarget, "dxcompiler", .searchPath = VULKAN_LIB_DIR);
+        sob_target_add_ldflags(hostTarget, "-Wl,-export_dynamic");
         sob_target_add_ldflags(hostTarget, "-Wl,-rpath,@loader_path");
 #endif
     }

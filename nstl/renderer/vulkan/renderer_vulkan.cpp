@@ -993,9 +993,15 @@ B32 renderer_vulkan_upload_scene(RendererVulkan* vulkan, Arena* arena, const Loa
             return 0;
         }
         outGPU->textureCount = scene->imageCount;
+        U64 uploadedTextureBytes = 0;
         for (U32 i = 0; i < scene->imageCount; ++i) {
             outGPU->textures[i] = renderer_vulkan_upload_texture(vulkan, &scene->images[i]);
+            uploadedTextureBytes += ((U64)scene->images[i].width * (U64)scene->images[i].height * 4u);
         }
+        LOG_INFO(VULKAN_LOG_DOMAIN,
+                 "Scene texture upload footprint: {} bytes ~= {} MB",
+                 uploadedTextureBytes,
+                 (uploadedTextureBytes / MB(1)));
     }
 
     if (scene->materialCount > 0) {
@@ -1038,6 +1044,7 @@ B32 renderer_vulkan_upload_scene(RendererVulkan* vulkan, Arena* arena, const Loa
     
     LOG_INFO(VULKAN_LOG_DOMAIN, "Scene upload complete: {} textures, {} materials, {} meshes",
              outGPU->textureCount, outGPU->materialCount, outGPU->meshCount);
+    vulkan_log_allocator_stats_(vulkan, "after scene upload");
     return 1;
 }
 

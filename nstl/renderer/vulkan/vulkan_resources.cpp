@@ -145,6 +145,41 @@ static RendererVulkanAllocatedImage vulkan_create_image(RendererVulkan* vulkan,
                                                         VkImageUsageFlags usage);
 static void vulkan_destroy_image(RendererVulkan* vulkan, RendererVulkanAllocatedImage* img);
 
+static void vulkan_log_allocator_stats_(RendererVulkan* vulkan, const char* label) {
+    if (!vulkan || vulkan->device.allocator == 0 || vulkan->device.physicalDevice == VK_NULL_HANDLE) {
+        return;
+    }
+
+    VmaTotalStatistics stats = {};
+    vmaCalculateStatistics(vulkan->device.allocator, &stats);
+    LOG_INFO(VULKAN_LOG_DOMAIN,
+             "VMA {} total: block={} MB, allocated={} MB, blocks={}, allocations={}",
+             label ? label : "stats",
+             (stats.total.statistics.blockBytes / MB(1)),
+             (stats.total.statistics.allocationBytes / MB(1)),
+             stats.total.statistics.blockCount,
+             stats.total.statistics.allocationCount);
+
+    VkPhysicalDeviceMemoryProperties memProps = {};
+    vkGetPhysicalDeviceMemoryProperties(vulkan->device.physicalDevice, &memProps);
+
+    VmaBudget budgets[VK_MAX_MEMORY_HEAPS] = {};
+    vmaGetHeapBudgets(vulkan->device.allocator, budgets);
+    for (U32 heapIndex = 0; heapIndex < memProps.memoryHeapCount; ++heapIndex) {
+        const VkMemoryHeap* heap = &memProps.memoryHeaps[heapIndex];
+        const VmaBudget* budget = &budgets[heapIndex];
+        const char* heapKind = FLAGS_HAS(heap->flags, VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) ? "device-local" : "host-visible";
+        LOG_INFO(VULKAN_LOG_DOMAIN,
+                 "VMA heap {} ({}): usage={} MB, budget={} MB, heapSize={} MB, block={} MB",
+                 heapIndex,
+                 heapKind,
+                 (budget->usage / MB(1)),
+                 (budget->budget / MB(1)),
+                 (heap->size / MB(1)),
+                 (budget->statistics.blockBytes / MB(1)));
+    }
+}
+
 // ////////////////////////
 // Draw Image Management
 
@@ -270,6 +305,16 @@ static B32 vulkan_create_draw_image(RendererVulkan* vulkan, VkExtent3D extent) {
     // Note: We are managing draw image lifecycle manually to handle resizing correctly
     // without complex defer logic. It is destroyed above if it exists, and on shutdown
     // we should manually destroy it.
+
+    VmaAllocationInfo allocInfo = {};
+    vmaGetAllocationInfo(vulkan->device.allocator, vulkan->drawImage.allocation, &allocInfo);
+    LOG_INFO(VULKAN_LOG_DOMAIN,
+             "Created draw image: format={}, extent={}x{}, alloc={} MB",
+             (U32)vulkan->drawImage.imageFormat,
+             extent.width,
+             extent.height,
+             (allocInfo.size / MB(1)));
+    vulkan_log_allocator_stats_(vulkan, "after draw image");
 
     return 1;
 }
@@ -512,6 +557,15 @@ static B32 vulkan_create_depth_image(RendererVulkan* vulkan, VkExtent3D extent) 
         return 0;
     }
 
+    VmaAllocationInfo allocInfo = {};
+    vmaGetAllocationInfo(vulkan->device.allocator, vulkan->depthImage.allocation, &allocInfo);
+    LOG_INFO(VULKAN_LOG_DOMAIN,
+             "Created depth image: extent={}x{}, alloc={} MB",
+             extent.width,
+             extent.height,
+             (allocInfo.size / MB(1)));
+    vulkan_log_allocator_stats_(vulkan, "after depth image");
+
     return 1;
 }
 
@@ -586,7 +640,14 @@ static B32 vulkan_create_shadow_map(RendererVulkan* vulkan, U32 resolution) {
         return 0;
     }
 
-    LOG_INFO(VULKAN_LOG_DOMAIN, "Created {}x{} shadow map", resolution, resolution);
+    VmaAllocationInfo allocStats = {};
+    vmaGetAllocationInfo(vulkan->device.allocator, vulkan->shadowMap.allocation, &allocStats);
+    LOG_INFO(VULKAN_LOG_DOMAIN,
+             "Created {}x{} shadow map (alloc={} MB)",
+             resolution,
+             resolution,
+             (allocStats.size / MB(1)));
+    vulkan_log_allocator_stats_(vulkan, "after shadow map");
     return 1;
 }
 

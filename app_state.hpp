@@ -21,8 +21,19 @@ enum AppSceneKind {
     AppSceneKind_COUNT,
 };
 
+struct SponzaRenderUnit {
+    U32 meshIndex;
+    U32 materialIndex;
+    U32 firstIndex;
+    U32 indexCount;
+    Mat4x4F32 transform;
+};
+
 struct SponzaSceneState {
     LoadedScene scene;
+    Arena* sceneArena;
+    SponzaRenderUnit* renderUnits;
+    U32 renderUnitCount;
     GPUSceneData gpuScene;
     B32 sceneLoaded;
 

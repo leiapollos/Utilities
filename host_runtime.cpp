@@ -362,7 +362,7 @@ static B32 host_allocate_memory(HostState* state) {
 
     state->programArena = arena_alloc(
         .arenaSize = MB(256),
-        .committedSize = MB(256),
+        .committedSize = MB(8),
         .flags = ArenaFlags_DoChain
     );
     if (!state->programArena) {

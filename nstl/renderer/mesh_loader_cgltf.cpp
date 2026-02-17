@@ -249,6 +249,10 @@ B32 scene_load_from_file(Arena* arena, const char* path, LoadedScene* outScene) 
     if (outScene->imageCount > 0) {
         outScene->images = ARENA_PUSH_ARRAY(arena, LoadedImage, outScene->imageCount);
         MEMSET(outScene->images, 0, sizeof(LoadedImage) * outScene->imageCount);
+        U64 decodedImageBytes = 0;
+        U32 decodedImageCount = 0;
+        U32 maxImageWidth = 0;
+        U32 maxImageHeight = 0;
         
         for (U32 i = 0; i < outScene->imageCount; ++i) {
             cgltf_image* img = &data->images[i];
@@ -284,8 +288,22 @@ B32 scene_load_from_file(Arena* arena, const char* path, LoadedScene* outScene) 
             
             if (!success) {
                 LOG_WARNING("mesh_loader", "Failed to load image {} from scene", i);
+            } else {
+                decodedImageBytes += ((U64)loaded->width * (U64)loaded->height * (U64)loaded->channels);
+                decodedImageCount += 1u;
+                maxImageWidth = MAX(maxImageWidth, loaded->width);
+                maxImageHeight = MAX(maxImageHeight, loaded->height);
             }
         }
+
+        LOG_INFO("mesh_loader",
+                 "Decoded images: {} / {} ({} bytes ~= {} MB, max={}x{})",
+                 decodedImageCount,
+                 outScene->imageCount,
+                 decodedImageBytes,
+                 (decodedImageBytes / MB(1)),
+                 maxImageWidth,
+                 maxImageHeight);
     }
 
     outScene->meshCount = (U32)data->meshes_count;
@@ -420,4 +438,3 @@ B32 scene_load_from_file(Arena* arena, const char* path, LoadedScene* outScene) 
              path, outScene->meshCount, outScene->materialCount, outScene->nodeCount);
     return 1;
 }
-
