@@ -209,7 +209,7 @@ static B32 vulkan_init_material_pipelines(RendererVulkan* vulkan) {
         builder.shaderStageCount = 1;
         pipeline_builder_set_input_topology(&builder, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         pipeline_builder_set_polygon_mode(&builder, VK_POLYGON_MODE_FILL);
-        pipeline_builder_set_cull_mode(&builder, VK_CULL_MODE_FRONT_BIT, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+        pipeline_builder_set_cull_mode(&builder, VK_CULL_MODE_BACK_BIT, VK_FRONT_FACE_COUNTER_CLOCKWISE);
         pipeline_builder_set_multisampling_none(&builder);
         pipeline_builder_disable_blending(&builder);
         pipeline_builder_enable_depth_test(&builder, 1, VK_COMPARE_OP_LESS_OR_EQUAL);
@@ -430,4 +430,3 @@ static void vulkan_destroy_default_resources(RendererVulkan* vulkan) {
     vulkan_destroy_image(vulkan, &vulkan->blackImage);
     vulkan_destroy_image(vulkan, &vulkan->errorImage);
 }
-

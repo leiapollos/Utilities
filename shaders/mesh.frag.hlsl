@@ -30,7 +30,7 @@ struct PSInput {
     float4 position : SV_Position;
 };
 
-float calculate_shadow_pcf(float4 lightSpacePos) {
+float calculate_shadow_pcf(float4 lightSpacePos, float nDotL) {
     float3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
     projCoords.xy = projCoords.xy * 0.5 + 0.5;
     
@@ -41,7 +41,7 @@ float calculate_shadow_pcf(float4 lightSpacePos) {
     }
     
     float currentDepth = projCoords.z;
-    float bias = 0.002;
+    float bias = max(0.0004f * (1.0f - nDotL), 0.00005f);
     
     float shadow = 0.0;
     float2 texelSize;
@@ -65,7 +65,10 @@ float4 main(PSInput input) : SV_Target {
     float3 N = normalize(input.normal);
     float3 L = normalize(sunDirection.xyz);
     
-    float NdotL = dot(N, L) * 0.5 + 0.5;
+    float NdotL = dot(N, L);
+    if (NdotL < 0.0f) {
+        NdotL = 0.0f;
+    }
     
     float4 texColor = colorTex.Sample(colorSampler, input.uv);
     
@@ -73,7 +76,7 @@ float4 main(PSInput input) : SV_Target {
         discard;
     }
     
-    float shadow = calculate_shadow_pcf(input.lightSpacePos);
+    float shadow = calculate_shadow_pcf(input.lightSpacePos, NdotL);
 
 #if SHADOW_DEBUG_VISUALIZE
     float3 projCoords = input.lightSpacePos.xyz / input.lightSpacePos.w;

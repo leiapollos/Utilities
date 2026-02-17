@@ -345,8 +345,8 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
     {
         Vec3F32 sunDir = {{scene.sunDirection.x, scene.sunDirection.y, scene.sunDirection.z}};
         sunDir = vec3_normalize(sunDir);
-        F32 lightDistance = 2.0f;
-        F32 orthoSize = 1.5f;
+        F32 lightDistance = 4.0f;
+        F32 orthoSize = 3.0f;
         Vec3F32 sceneCenter = state->camera.position;
         Vec3F32 lightPos = {{sceneCenter.x + sunDir.x * lightDistance, 
                              sceneCenter.y + sunDir.y * lightDistance, 
@@ -356,7 +356,7 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
             up = {{0.0f, 0.0f, 1.0f}};
         }
         Mat4x4F32 lightView = mat4_look_at(lightPos, sceneCenter, up);
-        Mat4x4F32 lightProj = mat4_ortho(-orthoSize, orthoSize, -orthoSize, orthoSize, 0.1f, 10.0f);
+        Mat4x4F32 lightProj = mat4_ortho(-orthoSize, orthoSize, -orthoSize, orthoSize, 0.01f, 20.0f);
         scene.lightSpaceMatrix = lightView * lightProj;
     }
 
