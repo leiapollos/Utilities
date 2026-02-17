@@ -669,7 +669,7 @@ static void host_try_build_module(HostState* state) {
     }
 
     LOG_INFO("host", "Detected source change in '{}' -> rebuilding module", APP_SOURCE_PATH);
-    S32 buildResult = PLATFORM_OS_CALL(&state->platformAPI, OS_execute, str8("sh build.sh debug module"));
+    S32 buildResult = PLATFORM_OS_CALL(&state->platformAPI, OS_execute, str8("./sob module debug"));
     if (buildResult != 0) {
         LOG_ERROR("host", "Module rebuild failed (exit code {})", buildResult);
         state->sourceTimestamp = sourceTimestamp;

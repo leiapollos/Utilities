@@ -408,3 +408,6 @@ Utilities
 
 # MacOS
 .DS_Store
+
+# sob bootstrap executable
+/sob

@@ -15,7 +15,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 
-#define APP_CORE_STATE_VERSION 4u
+#define APP_CORE_STATE_VERSION 5u
 
 static U64 app_total_permanent_size(void);
 static AppCoreState* app_get_state(AppMemory* memory);
@@ -56,8 +56,6 @@ static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostConte
         state->windowHandle.handle = 0;
         state->frameCounter = 0;
         state->reloadCount = 0;
-        state->appStartTimeNs = 0;
-        state->autoCloseTriggered = 0;
         set_log_level(LogLevel_Info);
         StringU8 eventsDomain = str8((const char*) "events", 6);
         set_log_domain_level(eventsDomain, LogLevel_Debug);
@@ -90,9 +88,6 @@ static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostConte
 
     ASSERT_ALWAYS(state->windowHandle.handle != 0);
     ASSERT_ALWAYS(host->renderer != 0);
-    if (state->appStartTimeNs == 0u) {
-        state->appStartTimeNs = PLATFORM_OS_CALL(platform, OS_get_time_nanoseconds);
-    }
 
     if (state->desiredWindow.width > 0u && state->desiredWindow.height > 0u) {
         PLATFORM_RENDERER_CALL(platform,
@@ -186,19 +181,6 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
     AppTestsState* tests = app_get_tests(state);
 
     state->frameCounter += 1ull;
-
-    if (state->appStartTimeNs == 0u) {
-        state->appStartTimeNs = PLATFORM_OS_CALL(platform, OS_get_time_nanoseconds);
-    }
-    if (!state->autoCloseTriggered) {
-        U64 nowNs = PLATFORM_OS_CALL(platform, OS_get_time_nanoseconds);
-        U64 elapsedNs = nowNs - state->appStartTimeNs;
-        if (elapsedNs >= 10000000000ull) {
-            state->autoCloseTriggered = 1;
-            app_request_close(platform, host, state);
-            return;
-        }
-    }
 
     PLATFORM_RENDERER_CALL(platform,
                            renderer_imgui_process_events,
