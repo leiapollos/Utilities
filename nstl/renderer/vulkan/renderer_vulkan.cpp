@@ -112,6 +112,7 @@ void renderer_vulkan_shutdown(RendererVulkan* vulkan) {
     vulkan_destroy_swapchain(&vulkan->swapchain, vulkan->device.device);
     vulkan_destroy_draw_image(vulkan);
     vulkan_destroy_depth_image(vulkan);
+    vulkan_destroy_shadow_map(vulkan);
     vulkan_destroy_immediate_submit(vulkan, &vulkan->immSubmit);
     
     vulkan_destroy_default_resources(vulkan);
@@ -211,6 +212,97 @@ void renderer_vulkan_draw(RendererVulkan* vulkan, OS_WindowHandle window,
 
         B32 hasDrawCommands = (objects != 0 && objectCount > 0);
         if (hasDrawCommands && vulkan->opaquePipeline != VK_NULL_HANDLE) {
+            
+            if (vulkan->shadowMap.image == VK_NULL_HANDLE) {
+                U32 shadowRes = (vulkan->shadowMapResolution > 0) ? vulkan->shadowMapResolution : 2048;
+                vulkan_create_shadow_map(vulkan, shadowRes);
+            }
+            
+            if (vulkan->shadowMap.image != VK_NULL_HANDLE) {
+                vulkan_transition_image(cmd, vulkan->shadowMap.image,
+                                        VK_IMAGE_LAYOUT_UNDEFINED,
+                                        VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
+
+                VkRenderingAttachmentInfo shadowDepth = {};
+                shadowDepth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                shadowDepth.imageView = vulkan->shadowMap.imageView;
+                shadowDepth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                shadowDepth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                shadowDepth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                shadowDepth.clearValue.depthStencil.depth = 1.0f;
+
+                VkRenderingInfo shadowRenderInfo = {};
+                shadowRenderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+                shadowRenderInfo.renderArea.extent = {vulkan->shadowMapResolution, vulkan->shadowMapResolution};
+                shadowRenderInfo.layerCount = 1;
+                shadowRenderInfo.colorAttachmentCount = 0;
+                shadowRenderInfo.pColorAttachments = nullptr;
+                shadowRenderInfo.pDepthAttachment = &shadowDepth;
+
+                vkCmdBeginRendering(cmd, &shadowRenderInfo);
+
+                VkViewport shadowViewport = {};
+                shadowViewport.x = 0;
+                shadowViewport.y = 0;
+                shadowViewport.width = (F32)vulkan->shadowMapResolution;
+                shadowViewport.height = (F32)vulkan->shadowMapResolution;
+                shadowViewport.minDepth = 0.0f;
+                shadowViewport.maxDepth = 1.0f;
+                vkCmdSetViewport(cmd, 0, 1, &shadowViewport);
+
+                VkRect2D shadowScissor = {};
+                shadowScissor.extent = {vulkan->shadowMapResolution, vulkan->shadowMapResolution};
+                vkCmdSetScissor(cmd, 0, 1, &shadowScissor);
+
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vulkan->shadowPipeline);
+                
+                VkDescriptorSet shadowSceneSet;
+                if (vulkan_descriptor_allocator_allocate(&vulkan->device, frame->frameDescriptors,
+                                                          vulkan->sceneDataLayout, &shadowSceneSet)) {
+                    VulkanDescriptorWriter writer = {};
+                    vulkan_descriptor_writer_write_buffer(&writer, 0, frame->sceneBuffer->buffer,
+                                                           sizeof(SceneData), 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+                    vulkan_descriptor_writer_update_set(&vulkan->device, &writer, shadowSceneSet);
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                            vulkan->shadowPipelineLayout, 0, 1, &shadowSceneSet, 0, 0);
+                }
+
+                for (U32 i = 0; i < objectCount; ++i) {
+                    const RenderObject* obj = &objects[i];
+                    GPUMesh* mesh = vulkan_get_mesh(vulkan, obj->mesh);
+                    if (mesh) {
+                        GPUMaterial* mat = vulkan_get_material(vulkan, obj->material);
+                        if (mat->type != MaterialType_Opaque) {
+                            continue;
+                        }
+                        
+                        GPUDrawPushConstants pushConstants = {};
+                        pushConstants.worldMatrix = obj->transform;
+                        pushConstants.vertexBuffer = mesh->gpu.vertexBufferAddress;
+                        pushConstants.color = obj->color;
+                        
+                        vkCmdPushConstants(cmd,
+                                           vulkan->shadowPipelineLayout,
+                                           VK_SHADER_STAGE_VERTEX_BIT,
+                                           0,
+                                           sizeof(GPUDrawPushConstants),
+                                           &pushConstants);
+                        
+                        vkCmdBindIndexBuffer(cmd, mesh->gpu.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+                        
+                        U32 firstIdx = obj->firstIndex;
+                        U32 idxCount = (obj->indexCount > 0) ? obj->indexCount : mesh->indexCount;
+                        vkCmdDrawIndexed(cmd, idxCount, 1, firstIdx, 0, 0);
+                    }
+                }
+
+                vkCmdEndRendering(cmd);
+
+                vulkan_transition_image(cmd, vulkan->shadowMap.image,
+                                        VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            }
+
             vulkan_transition_image(cmd,
                                     vulkan->drawImage.image,
                                     VK_IMAGE_LAYOUT_GENERAL,
@@ -245,6 +337,19 @@ void renderer_vulkan_draw(RendererVulkan* vulkan, OS_WindowHandle window,
 
             vkCmdBeginRendering(cmd, &renderingInfo);
             
+            VkViewport mainViewport = {};
+            mainViewport.x = 0;
+            mainViewport.y = 0;
+            mainViewport.width = (F32)vulkan->drawExtent.width;
+            mainViewport.height = (F32)vulkan->drawExtent.height;
+            mainViewport.minDepth = 0.0f;
+            mainViewport.maxDepth = 1.0f;
+            vkCmdSetViewport(cmd, 0, 1, &mainViewport);
+
+            VkRect2D mainScissor = {};
+            mainScissor.extent = vulkan->drawExtent;
+            vkCmdSetScissor(cmd, 0, 1, &mainScissor);
+            
             VkDescriptorSet sceneDescSet;
             if (vulkan_descriptor_allocator_allocate(&vulkan->device, frame->frameDescriptors,
                                                       vulkan->sceneDataLayout, &sceneDescSet)) {
@@ -255,6 +360,19 @@ void renderer_vulkan_draw(RendererVulkan* vulkan, OS_WindowHandle window,
                 
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         vulkan->materialPipelineLayout, 0, 1, &sceneDescSet, 0, 0);
+            }
+            
+            VkDescriptorSet shadowDescSet;
+            if (vulkan->shadowMap.image != VK_NULL_HANDLE &&
+                vulkan_descriptor_allocator_allocate(&vulkan->device, frame->frameDescriptors,
+                                                      vulkan->shadowMapLayout, &shadowDescSet)) {
+                VulkanDescriptorWriter writer = {};
+                vulkan_descriptor_writer_write_image(&writer, 0, vulkan->shadowMap.imageView, vulkan->shadowSampler,
+                                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                                      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+                vulkan_descriptor_writer_update_set(&vulkan->device, &writer, shadowDescSet);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        vulkan->materialPipelineLayout, 2, 1, &shadowDescSet, 0, 0);
             }
             
             GPUMaterial* lastMaterial = 0;

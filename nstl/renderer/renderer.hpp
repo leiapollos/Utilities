@@ -115,6 +115,7 @@ struct SceneData {
     Mat4x4F32 view;
     Mat4x4F32 proj;
     Mat4x4F32 viewproj;
+    Mat4x4F32 lightSpaceMatrix;
     Vec4F32 ambientColor;
     Vec4F32 sunDirection;
     Vec4F32 sunColor;

@@ -2,6 +2,7 @@ cbuffer SceneData : register(b0, space0) {
     float4x4 view;
     float4x4 proj;
     float4x4 viewproj;
+    float4x4 lightSpaceMatrix;
     float4 ambientColor;
     float4 sunDirection;
     float4 sunColor;
@@ -36,6 +37,7 @@ struct VSOutput {
     [[vk::location(0)]] float3 normal : NORMAL;
     [[vk::location(1)]] float4 color : COLOR;
     [[vk::location(2)]] float2 uv : TEXCOORD0;
+    [[vk::location(3)]] float4 lightSpacePos : TEXCOORD1;
 };
 
 VSOutput main(uint vertexId : SV_VertexID) {
@@ -54,6 +56,7 @@ VSOutput main(uint vertexId : SV_VertexID) {
     output.color.rgb = vertColor * colorFactor.rgb * g_pushConstants.color.rgb;
     output.color.a = g_pushConstants.color.a;
     output.uv = float2(v.uvX, v.uvY);
+    output.lightSpacePos = mul(lightSpaceMatrix, worldPos);
     return output;
 }
 

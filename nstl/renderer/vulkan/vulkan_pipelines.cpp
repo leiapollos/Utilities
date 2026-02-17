@@ -221,6 +221,7 @@ static void pipeline_builder_set_color_attachment_format(PipelineBuilder* builde
 }
 
 static void pipeline_builder_set_depth_format(PipelineBuilder* builder, VkFormat format) {
+    builder->renderingInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
     builder->renderingInfo.depthAttachmentFormat = format;
 }
 
@@ -254,8 +255,8 @@ static VkPipeline pipeline_builder_build(PipelineBuilder* builder, VkDevice devi
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     colorBlending.logicOpEnable = VK_FALSE;
     colorBlending.logicOp = VK_LOGIC_OP_COPY;
-    colorBlending.attachmentCount = 1;
-    colorBlending.pAttachments = &builder->colorBlendAttachment;
+    colorBlending.attachmentCount = builder->renderingInfo.colorAttachmentCount;
+    colorBlending.pAttachments = (colorBlending.attachmentCount > 0) ? &builder->colorBlendAttachment : nullptr;
 
     VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;

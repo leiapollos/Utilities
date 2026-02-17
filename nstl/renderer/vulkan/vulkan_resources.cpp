@@ -66,9 +66,13 @@ static VkImageMemoryBarrier2 vulkan_image_memory_barrier2(VkImage image,
     barrier.dstAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT;
     barrier.oldLayout = oldLayout;
     barrier.newLayout = newLayout;
-    VkImageAspectFlags aspectMask = (newLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
-                                        ? VK_IMAGE_ASPECT_DEPTH_BIT
-                                        : VK_IMAGE_ASPECT_COLOR_BIT;
+    B32 isDepth = (oldLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL ||
+                   newLayout == VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL ||
+                   oldLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL ||
+                   newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL ||
+                   oldLayout == VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL ||
+                   newLayout == VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL);
+    VkImageAspectFlags aspectMask = isDepth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
     barrier.subresourceRange = vulkan_image_subresource_range(aspectMask);
     barrier.image = image;
     return barrier;
@@ -380,6 +384,106 @@ static void vulkan_destroy_depth_image(RendererVulkan* vulkan) {
         vmaDestroyImage(vulkan->device.allocator, vulkan->depthImage.image, vulkan->depthImage.allocation);
         vulkan_reset_depth_image(vulkan);
     }
+}
+
+// ////////////////////////
+// Shadow Map Management
+
+static void vulkan_reset_shadow_map(RendererVulkan* vulkan) {
+    if (!vulkan) {
+        return;
+    }
+    vulkan->shadowMap.image = VK_NULL_HANDLE;
+    vulkan->shadowMap.imageView = VK_NULL_HANDLE;
+    vulkan->shadowMap.allocation = 0;
+    vulkan->shadowMap.imageExtent = {};
+    vulkan->shadowMap.imageFormat = VK_FORMAT_UNDEFINED;
+}
+
+static B32 vulkan_create_shadow_map(RendererVulkan* vulkan, U32 resolution) {
+    if (!vulkan || vulkan->device.allocator == 0) {
+        return 0;
+    }
+
+    if (vulkan->shadowMap.image != VK_NULL_HANDLE) {
+        vkDestroyImageView(vulkan->device.device, vulkan->shadowMap.imageView, 0);
+        vmaDestroyImage(vulkan->device.allocator, vulkan->shadowMap.image, vulkan->shadowMap.allocation);
+        vulkan_reset_shadow_map(vulkan);
+    }
+
+    vulkan->shadowMapResolution = resolution;
+    vulkan->shadowMap.imageFormat = VK_FORMAT_D32_SFLOAT;
+    vulkan->shadowMap.imageExtent = {resolution, resolution, 1};
+
+    VkImageUsageFlags shadowMapUsages = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+
+    VkImageCreateInfo imgInfo = vulkan_image_create_info(vulkan->shadowMap.imageFormat, shadowMapUsages,
+                                                          vulkan->shadowMap.imageExtent);
+
+    VmaAllocationCreateInfo allocInfo = {};
+    allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    allocInfo.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    VkResult result = vmaCreateImage(vulkan->device.allocator, &imgInfo, &allocInfo,
+                                     &vulkan->shadowMap.image, &vulkan->shadowMap.allocation, nullptr);
+    if (result != VK_SUCCESS) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create shadow map: {}", result);
+        vulkan_reset_shadow_map(vulkan);
+        return 0;
+    }
+
+    VkImageViewCreateInfo viewInfo = vulkan_image_view_create_info(vulkan->shadowMap.imageFormat,
+                                                                    vulkan->shadowMap.image,
+                                                                    VK_IMAGE_ASPECT_DEPTH_BIT);
+
+    result = vkCreateImageView(vulkan->device.device, &viewInfo, nullptr, &vulkan->shadowMap.imageView);
+    if (result != VK_SUCCESS) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create shadow map view: {}", result);
+        vmaDestroyImage(vulkan->device.allocator, vulkan->shadowMap.image, vulkan->shadowMap.allocation);
+        vulkan_reset_shadow_map(vulkan);
+        return 0;
+    }
+
+    LOG_INFO(VULKAN_LOG_DOMAIN, "Created {}x{} shadow map", resolution, resolution);
+    return 1;
+}
+
+static void vulkan_destroy_shadow_map(RendererVulkan* vulkan) {
+    if (!vulkan) {
+        return;
+    }
+    if (vulkan->shadowMap.image != VK_NULL_HANDLE) {
+        if (vulkan->shadowMap.imageView != VK_NULL_HANDLE) {
+            vkDestroyImageView(vulkan->device.device, vulkan->shadowMap.imageView, 0);
+        }
+        vmaDestroyImage(vulkan->device.allocator, vulkan->shadowMap.image, vulkan->shadowMap.allocation);
+        vulkan_reset_shadow_map(vulkan);
+    }
+}
+
+static VkSampler vulkan_create_shadow_sampler(VulkanDevice* device) {
+    if (!device || device->device == VK_NULL_HANDLE) {
+        return VK_NULL_HANDLE;
+    }
+
+    VkSamplerCreateInfo samplerInfo = {};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+    samplerInfo.compareEnable = VK_FALSE;
+
+    VkSampler sampler = VK_NULL_HANDLE;
+    VkResult result = vkCreateSampler(device->device, &samplerInfo, 0, &sampler);
+    if (result != VK_SUCCESS) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create shadow sampler: {}", result);
+        return VK_NULL_HANDLE;
+    }
+
+    return sampler;
 }
 
 // ////////////////////////

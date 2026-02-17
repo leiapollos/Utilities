@@ -398,6 +398,62 @@ inline Mat4x4F32 mat4_perspective(F32 fovYRadians, F32 aspect, F32 zNear, F32 zF
     return m;
 }
 
+inline Mat4x4F32 mat4_ortho(F32 left, F32 right, F32 bottom, F32 top, F32 zNear, F32 zFar) {
+    Mat4x4F32 m = mat4_identity();
+
+    F32 invWidth = right - left;
+    F32 invHeight = top - bottom;
+    F32 invDepth = zNear - zFar;
+    if (invWidth == 0.0f || invHeight == 0.0f || invDepth == 0.0f) {
+        return mat4_identity();
+    }
+
+    invWidth = 1.0f / invWidth;
+    invHeight = 1.0f / invHeight;
+    invDepth = 1.0f / invDepth;
+
+    m.v[0][0] = 2.0f * invWidth;
+    m.v[1][1] = -2.0f * invHeight;
+    m.v[2][2] = invDepth;
+    m.v[3][0] = -(right + left) * invWidth;
+    m.v[3][1] = -(top + bottom) * invHeight;
+    m.v[3][2] = zNear * invDepth;
+
+    return m;
+}
+
+inline Mat4x4F32 mat4_look_at(Vec3F32 eye, Vec3F32 center, Vec3F32 up) {
+    Vec3F32 forward = {{center.x - eye.x, center.y - eye.y, center.z - eye.z}};
+    if (vec3_length(forward) == 0.0f) {
+        return mat4_identity();
+    }
+    forward = vec3_normalize(forward);
+
+    Vec3F32 side = vec3_cross(forward, up);
+    if (vec3_length(side) == 0.0f) {
+        return mat4_identity();
+    }
+    side = vec3_normalize(side);
+
+    Vec3F32 upOrtho = vec3_cross(side, forward);
+
+    Mat4x4F32 m = mat4_identity();
+    m.v[0][0] = side.x;
+    m.v[1][0] = side.y;
+    m.v[2][0] = side.z;
+    m.v[0][1] = upOrtho.x;
+    m.v[1][1] = upOrtho.y;
+    m.v[2][1] = upOrtho.z;
+    m.v[0][2] = -forward.x;
+    m.v[1][2] = -forward.y;
+    m.v[2][2] = -forward.z;
+    m.v[3][0] = -vec3_dot(side, eye);
+    m.v[3][1] = -vec3_dot(upOrtho, eye);
+    m.v[3][2] = vec3_dot(forward, eye);
+
+    return m;
+}
+
 inline Mat4x4F32 mat4_inverse(Mat4x4F32 m) {
     Mat4x4F32 inv = {};
 

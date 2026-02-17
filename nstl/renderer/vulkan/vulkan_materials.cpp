@@ -57,7 +57,28 @@ static B32 vulkan_init_material_pipelines(RendererVulkan* vulkan) {
     }
 
     {
-        VkDescriptorSetLayout layouts[] = { vulkan->sceneDataLayout, vulkan->materialLayout };
+        VkDescriptorSetLayoutBinding binding = {};
+        binding.binding = 0;
+        binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        binding.descriptorCount = 1;
+        binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo = {};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = 1;
+        layoutInfo.pBindings = &binding;
+
+        VkResult result = vkCreateDescriptorSetLayout(vulkan->device.device, &layoutInfo, 0, &vulkan->shadowMapLayout);
+        if (result != VK_SUCCESS) {
+            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create shadow map descriptor layout: {}", result);
+            vkDestroyDescriptorSetLayout(vulkan->device.device, vulkan->materialLayout, 0);
+            vkDestroyDescriptorSetLayout(vulkan->device.device, vulkan->sceneDataLayout, 0);
+            return 0;
+        }
+    }
+
+    {
+        VkDescriptorSetLayout layouts[] = { vulkan->sceneDataLayout, vulkan->materialLayout, vulkan->shadowMapLayout };
 
         VkPushConstantRange pushConstant = {};
         pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
@@ -66,7 +87,7 @@ static B32 vulkan_init_material_pipelines(RendererVulkan* vulkan) {
 
         VkPipelineLayoutCreateInfo layoutInfo = {};
         layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        layoutInfo.setLayoutCount = 2;
+        layoutInfo.setLayoutCount = 3;
         layoutInfo.pSetLayouts = layouts;
         layoutInfo.pushConstantRangeCount = 1;
         layoutInfo.pPushConstantRanges = &pushConstant;
@@ -74,6 +95,7 @@ static B32 vulkan_init_material_pipelines(RendererVulkan* vulkan) {
         VkResult result = vkCreatePipelineLayout(vulkan->device.device, &layoutInfo, 0, &vulkan->materialPipelineLayout);
         if (result != VK_SUCCESS) {
             LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create material pipeline layout: {}", result);
+            vkDestroyDescriptorSetLayout(vulkan->device.device, vulkan->shadowMapLayout, 0);
             vkDestroyDescriptorSetLayout(vulkan->device.device, vulkan->materialLayout, 0);
             vkDestroyDescriptorSetLayout(vulkan->device.device, vulkan->sceneDataLayout, 0);
             return 0;
@@ -151,6 +173,64 @@ static B32 vulkan_init_material_pipelines(RendererVulkan* vulkan) {
     vkDestroyShaderModule(vulkan->device.device, fragShader, 0);
 
     {
+        VkShaderModule shadowVertShader = VK_NULL_HANDLE;
+        if (!vulkan_load_shader_module(&vulkan->device, "shaders/shadow.vert.spv", &shadowVertShader)) {
+            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to load shadow vertex shader");
+            goto cleanup_fail;
+        }
+
+        VkDescriptorSetLayout shadowLayouts[] = { vulkan->sceneDataLayout };
+        
+        VkPushConstantRange pushConstant = {};
+        pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        pushConstant.offset = 0;
+        pushConstant.size = sizeof(GPUDrawPushConstants);
+
+        VkPipelineLayoutCreateInfo layoutInfo = {};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layoutInfo.setLayoutCount = 1;
+        layoutInfo.pSetLayouts = shadowLayouts;
+        layoutInfo.pushConstantRangeCount = 1;
+        layoutInfo.pPushConstantRanges = &pushConstant;
+
+        VkResult result = vkCreatePipelineLayout(vulkan->device.device, &layoutInfo, 0, &vulkan->shadowPipelineLayout);
+        if (result != VK_SUCCESS) {
+            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create shadow pipeline layout: {}", result);
+            vkDestroyShaderModule(vulkan->device.device, shadowVertShader, 0);
+            goto cleanup_fail;
+        }
+
+        PipelineBuilder builder;
+        pipeline_builder_clear(&builder);
+        builder.shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        builder.shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+        builder.shaderStages[0].module = shadowVertShader;
+        builder.shaderStages[0].pName = "main";
+        builder.shaderStageCount = 1;
+        pipeline_builder_set_input_topology(&builder, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        pipeline_builder_set_polygon_mode(&builder, VK_POLYGON_MODE_FILL);
+        pipeline_builder_set_cull_mode(&builder, VK_CULL_MODE_FRONT_BIT, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+        pipeline_builder_set_multisampling_none(&builder);
+        pipeline_builder_disable_blending(&builder);
+        pipeline_builder_enable_depth_test(&builder, 1, VK_COMPARE_OP_LESS_OR_EQUAL);
+        builder.renderingInfo.colorAttachmentCount = 0;
+        builder.renderingInfo.pColorAttachmentFormats = nullptr;
+        pipeline_builder_set_depth_format(&builder, VK_FORMAT_D32_SFLOAT);
+        builder.pipelineLayout = vulkan->shadowPipelineLayout;
+
+        vulkan->shadowPipeline = pipeline_builder_build(&builder, vulkan->device.device);
+        vkDestroyShaderModule(vulkan->device.device, shadowVertShader, 0);
+        
+        if (vulkan->shadowPipeline == VK_NULL_HANDLE) {
+            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create shadow pipeline");
+            goto cleanup_fail;
+        }
+
+        vkdefer_destroy_VkPipelineLayout(&vulkan->deferCtx.globalBuf, vulkan->shadowPipelineLayout);
+        vkdefer_destroy_VkPipeline(&vulkan->deferCtx.globalBuf, vulkan->shadowPipeline);
+    }
+
+    {
         VkDescriptorType types[] = {
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
@@ -205,6 +285,7 @@ static B32 vulkan_init_material_pipelines(RendererVulkan* vulkan) {
     vkdefer_destroy_VkDescriptorPool(&vulkan->deferCtx.globalBuf, vulkan->globalDescriptorPool);
     vkdefer_destroy_VkDescriptorSetLayout(&vulkan->deferCtx.globalBuf, vulkan->sceneDataLayout);
     vkdefer_destroy_VkDescriptorSetLayout(&vulkan->deferCtx.globalBuf, vulkan->materialLayout);
+    vkdefer_destroy_VkDescriptorSetLayout(&vulkan->deferCtx.globalBuf, vulkan->shadowMapLayout);
     vkdefer_destroy_VkPipelineLayout(&vulkan->deferCtx.globalBuf, vulkan->materialPipelineLayout);
     vkdefer_destroy_VkPipeline(&vulkan->deferCtx.globalBuf, vulkan->opaquePipeline);
     vkdefer_destroy_VkPipeline(&vulkan->deferCtx.globalBuf, vulkan->transparentPipeline);
@@ -216,6 +297,10 @@ cleanup_fail:
     if (vulkan->materialPipelineLayout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(vulkan->device.device, vulkan->materialPipelineLayout, 0);
         vulkan->materialPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (vulkan->shadowMapLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(vulkan->device.device, vulkan->shadowMapLayout, 0);
+        vulkan->shadowMapLayout = VK_NULL_HANDLE;
     }
     if (vulkan->materialLayout != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(vulkan->device.device, vulkan->materialLayout, 0);
@@ -240,6 +325,7 @@ static void vulkan_destroy_material_pipelines(RendererVulkan* vulkan) {
     vulkan->materialPipelineLayout = VK_NULL_HANDLE;
     vulkan->sceneDataLayout = VK_NULL_HANDLE;
     vulkan->materialLayout = VK_NULL_HANDLE;
+    vulkan->shadowMapLayout = VK_NULL_HANDLE;
     vulkan->globalDescriptorPool = VK_NULL_HANDLE;
 }
 
@@ -322,8 +408,15 @@ static B32 vulkan_init_default_resources(RendererVulkan* vulkan) {
         return 0;
     }
 
+    vulkan->shadowSampler = vulkan_create_shadow_sampler(&vulkan->device);
+    if (vulkan->shadowSampler == VK_NULL_HANDLE) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to create shadow sampler");
+        return 0;
+    }
+
     vkdefer_destroy_VkSampler(&vulkan->deferCtx.globalBuf, vulkan->samplerLinear);
     vkdefer_destroy_VkSampler(&vulkan->deferCtx.globalBuf, vulkan->samplerNearest);
+    vkdefer_destroy_VkSampler(&vulkan->deferCtx.globalBuf, vulkan->shadowSampler);
 
     LOG_INFO(VULKAN_LOG_DOMAIN, "Default resources initialized");
     return 1;

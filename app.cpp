@@ -341,6 +341,24 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
     scene.sunColor.g = 1.0f;
     scene.sunColor.b = 1.0f;
     scene.sunColor.a = 1.0f;
+    
+    {
+        Vec3F32 sunDir = {{scene.sunDirection.x, scene.sunDirection.y, scene.sunDirection.z}};
+        sunDir = vec3_normalize(sunDir);
+        F32 lightDistance = 2.0f;
+        F32 orthoSize = 1.5f;
+        Vec3F32 sceneCenter = state->camera.position;
+        Vec3F32 lightPos = {{sceneCenter.x + sunDir.x * lightDistance, 
+                             sceneCenter.y + sunDir.y * lightDistance, 
+                             sceneCenter.z + sunDir.z * lightDistance}};
+        Vec3F32 up = {{0.0f, 1.0f, 0.0f}};
+        if (ABS_F32(vec3_dot(sunDir, up)) > 0.99f) {
+            up = {{0.0f, 0.0f, 1.0f}};
+        }
+        Mat4x4F32 lightView = mat4_look_at(lightPos, sceneCenter, up);
+        Mat4x4F32 lightProj = mat4_ortho(-orthoSize, orthoSize, -orthoSize, orthoSize, 0.1f, 10.0f);
+        scene.lightSpaceMatrix = lightView * lightProj;
+    }
 
     RenderObject* renderObjects = 0;
     U32 renderObjectCount = 0;

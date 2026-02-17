@@ -243,6 +243,13 @@ struct RendererVulkan {
     VkPipeline opaquePipeline;
     VkPipeline transparentPipeline;
     
+    RendererVulkanAllocatedImage shadowMap;
+    VkSampler shadowSampler;
+    VkDescriptorSetLayout shadowMapLayout;
+    VkPipelineLayout shadowPipelineLayout;
+    VkPipeline shadowPipeline;
+    U32 shadowMapResolution;
+    
     VkDescriptorPool globalDescriptorPool;
     GPUMaterial defaultMaterial;
     RendererVulkanAllocatedBuffer defaultMaterialBuffer;
