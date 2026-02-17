@@ -134,11 +134,19 @@ struct GPUMesh {
     U32 indexCount;
 };
 
+struct VulkanMeshSlot {
+    GPUMesh* mesh;
+};
+
 // ////////////////////////
 // Texture Types
 
 struct GPUTexture {
     RendererVulkanAllocatedImage image;
+};
+
+struct VulkanTextureSlot {
+    GPUTexture* texture;
 };
 
 // ////////////////////////
@@ -166,6 +174,10 @@ struct GPUMaterial {
     RendererVulkanAllocatedBuffer uniformBuffer;
 };
 
+struct VulkanMaterialSlot {
+    GPUMaterial* material;
+};
+
 static const U32 VULKAN_DESCRIPTOR_ALLOCATOR_MAX_RATIOS = 8;
 
 struct VulkanDescriptorAllocator {
@@ -188,6 +200,10 @@ struct RendererVulkanShader {
     StringU8 path;
 };
 
+struct VulkanShaderSlot {
+    RendererVulkanShader shader;
+};
+
 struct VulkanPipelines {
     VkDescriptorSetLayout drawImageDescriptorLayout;
     VkPipelineLayout gradientPipelineLayout;
@@ -196,9 +212,7 @@ struct VulkanPipelines {
     VkPipelineLayout meshPipelineLayout;
     VkPipeline meshPipeline;
     
-    RendererVulkanShader* shaders;
-    U32 shaderCount;
-    U32 shaderCapacity;
+    SlotMap shaderSlots;
 };
 
 struct ImmediateSubmitContext {
@@ -254,20 +268,9 @@ struct RendererVulkan {
     GPUMaterial defaultMaterial;
     RendererVulkanAllocatedBuffer defaultMaterialBuffer;
     
-    GPUMesh** gpuMeshes;
-    U32 gpuMeshCount;
-    U32 gpuMeshCapacity;
-    U64 nextMeshHandle;
-    
-    GPUTexture** gpuTextures;
-    U32 gpuTextureCount;
-    U32 gpuTextureCapacity;
-    U64 nextTextureHandle;
-    
-    GPUMaterial** gpuMaterials;
-    U32 gpuMaterialCount;
-    U32 gpuMaterialCapacity;
-    U64 nextMaterialHandle;
+    SlotMap meshSlots;
+    SlotMap textureSlots;
+    SlotMap materialSlots;
 
     VkDescriptorPool imguiDescriptorPool;
     ImGuiContext* imguiContext;

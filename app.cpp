@@ -15,7 +15,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 
-#define APP_CORE_STATE_VERSION 3u
+#define APP_CORE_STATE_VERSION 4u
 
 static U64 app_total_permanent_size(void);
 static AppCoreState* app_get_state(AppMemory* memory);
@@ -23,6 +23,7 @@ static void app_assign_tests_state(AppCoreState* state);
 static AppTestsState* app_get_tests(AppCoreState* state);
 static U32 app_select_worker_count(const AppHostContext* host);
 static void app_compile_shaders_from_folder(AppPlatform* platform, AppMemory* memory, AppHostContext* host);
+static void app_request_close(AppPlatform* platform, AppHostContext* host, AppCoreState* state);
 
 
 static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostContext* host) {
@@ -55,6 +56,8 @@ static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostConte
         state->windowHandle.handle = 0;
         state->frameCounter = 0;
         state->reloadCount = 0;
+        state->appStartTimeNs = 0;
+        state->autoCloseTriggered = 0;
         set_log_level(LogLevel_Info);
         StringU8 eventsDomain = str8((const char*) "events", 6);
         set_log_domain_level(eventsDomain, LogLevel_Debug);
@@ -87,6 +90,9 @@ static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostConte
 
     ASSERT_ALWAYS(state->windowHandle.handle != 0);
     ASSERT_ALWAYS(host->renderer != 0);
+    if (state->appStartTimeNs == 0u) {
+        state->appStartTimeNs = PLATFORM_OS_CALL(platform, OS_get_time_nanoseconds);
+    }
 
     if (state->desiredWindow.width > 0u && state->desiredWindow.height > 0u) {
         PLATFORM_RENDERER_CALL(platform,
@@ -150,6 +156,22 @@ static void app_reload(AppPlatform* platform, AppMemory* memory, AppHostContext*
     app_tests_reload(memory, state, tests);
 }
 
+static void app_request_close(AppPlatform* platform, AppHostContext* host, AppCoreState* state) {
+    ASSERT_ALWAYS(platform != 0);
+    ASSERT_ALWAYS(host != 0);
+    ASSERT_ALWAYS(state != 0);
+
+    if (!state->windowHandle.handle) {
+        host->shouldQuit = 1;
+        return;
+    }
+
+    OS_WindowHandle closedHandle = state->windowHandle;
+    state->windowHandle.handle = 0;
+    host->shouldQuit = 1;
+    PLATFORM_OS_CALL(platform, OS_window_destroy, closedHandle);
+}
+
 static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext* host, const AppInput* input,
                        F32 deltaSeconds) {
     ASSERT_ALWAYS(platform != 0);
@@ -164,6 +186,19 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
     AppTestsState* tests = app_get_tests(state);
 
     state->frameCounter += 1ull;
+
+    if (state->appStartTimeNs == 0u) {
+        state->appStartTimeNs = PLATFORM_OS_CALL(platform, OS_get_time_nanoseconds);
+    }
+    if (!state->autoCloseTriggered) {
+        U64 nowNs = PLATFORM_OS_CALL(platform, OS_get_time_nanoseconds);
+        U64 elapsedNs = nowNs - state->appStartTimeNs;
+        if (elapsedNs >= 10000000000ull) {
+            state->autoCloseTriggered = 1;
+            app_request_close(platform, host, state);
+            return;
+        }
+    }
 
     PLATFORM_RENDERER_CALL(platform,
                            renderer_imgui_process_events,
@@ -195,10 +230,7 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
             case OS_GraphicsEvent_Tag_WindowClosed:
             case OS_GraphicsEvent_Tag_WindowDestroyed: {
                 if (state->windowHandle.handle == evt->window.handle) {
-                    OS_WindowHandle closedHandle = state->windowHandle;
-                    state->windowHandle.handle = 0;
-                    host->shouldQuit = 1;
-                    PLATFORM_OS_CALL(platform, OS_window_destroy, closedHandle);
+                    app_request_close(platform, host, state);
                     return;
                 }
             }
@@ -208,11 +240,12 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
                 if (state->windowHandle.handle == evt->window.handle) {
                     state->desiredWindow.width = evt->windowResized.width;
                     state->desiredWindow.height = evt->windowResized.height;
+                    RendererResizeDesc resizeDesc =
+                        renderer_resize_desc(state->desiredWindow.width, state->desiredWindow.height);
                     PLATFORM_RENDERER_CALL(platform,
-                                           renderer_on_window_resized,
+                                           renderer_resize,
                                            host->renderer,
-                                           state->desiredWindow.width,
-                                           state->desiredWindow.height);
+                                           &resizeDesc);
                 }
             }
             break;
@@ -420,7 +453,13 @@ static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext*
         }
     }
 
-    PLATFORM_RENDERER_CALL(platform, renderer_draw, host->renderer, state->windowHandle, &scene, renderObjects, renderObjectCount);
+    RendererFrameBeginDesc beginDesc = renderer_frame_begin_desc(state->windowHandle, &scene);
+    if (PLATFORM_RENDERER_CALL(platform, renderer_begin_frame, host->renderer, &beginDesc)) {
+        RendererSubmitDesc submitDesc = renderer_submit_desc(renderObjects, renderObjectCount);
+        PLATFORM_RENDERER_CALL(platform, renderer_submit, host->renderer, &submitDesc);
+        RendererEndFrameDesc endDesc = renderer_end_frame_desc();
+        PLATFORM_RENDERER_CALL(platform, renderer_end_frame, host->renderer, &endDesc);
+    }
 }
 
 static void app_shutdown(AppPlatform* platform, AppMemory* memory, AppHostContext* host) {
@@ -497,8 +536,6 @@ static void app_compile_shaders_from_folder(AppPlatform* platform, AppMemory* me
     ASSERT_ALWAYS(memory != 0);
     ASSERT_ALWAYS(host != 0);
     ASSERT_ALWAYS(host->renderer != 0);
-    ASSERT_ALWAYS(host->renderer->backendData != 0);
-
     AppCoreState* state = app_get_state(memory);
     ASSERT_ALWAYS(state->jobSystem != 0);
 

@@ -780,7 +780,7 @@ B32 renderer_vulkan_compile_shader_to_result(RendererVulkan* vulkan, Arena* aren
     outResult->module = (void*) shaderModule;
     outResult->path = shaderPath;
     outResult->valid = 1;
-    outResult->handle = 0;
+    outResult->handle = SHADER_HANDLE_INVALID;
 
     return 1;
 }
@@ -789,54 +789,32 @@ static void vulkan_merge_shader_results_wrapper(void* backendData, Arena* arena,
                                                 U32 resultCount, const ShaderCompileRequest* requests,
                                                 U32 requestCount) {
     RendererVulkan* vulkan = (RendererVulkan*) backendData;
+    (void)arena;
     if (!vulkan || !results || resultCount == 0u) {
         return;
     }
-    
-    // ... implementation ...
-    // Since I didn't copy this implementation, I should.
-    // It was in renderer_vulkan.cpp.
-    
-    if (vulkan->pipelines.shaderCount + resultCount > vulkan->pipelines.shaderCapacity) {
-        U32 newCapacity = vulkan->pipelines.shaderCount + resultCount;
-        if (newCapacity < vulkan->pipelines.shaderCapacity * 2u) {
-            newCapacity = vulkan->pipelines.shaderCapacity * 2u;
-        }
-        if (newCapacity < 16u) {
-            newCapacity = 16u;
-        }
 
-        RendererVulkanShader* newShaders = (RendererVulkanShader*) arena_push(vulkan->arena,
-                                                                              sizeof(RendererVulkanShader) *
-                                                                              newCapacity,
-                                                                              alignof(RendererVulkanShader));
-        if (!newShaders) {
-            return;
-        }
-
-        if (vulkan->pipelines.shaders) {
-            MEMMOVE(newShaders, vulkan->pipelines.shaders, sizeof(RendererVulkanShader) * vulkan->pipelines.shaderCount);
-        }
-        vulkan->pipelines.shaders = newShaders;
-        vulkan->pipelines.shaderCapacity = newCapacity;
-    }
-
-    U32 baseIndex = vulkan->pipelines.shaderCount;
     for (U32 i = 0; i < resultCount; ++i) {
         if (!results[i].valid) {
             continue;
         }
 
-        U32 shaderIndex = baseIndex;
-        RendererVulkanShader* shader = &vulkan->pipelines.shaders[shaderIndex];
-        shader->module = (VkShaderModule) results[i].module;
-        shader->path = str8_cpy(vulkan->arena, results[i].path);
-        baseIndex++;
+        void* slotItem = 0;
+        U32 slotIndex = 0;
+        U32 generation = 0;
+        if (!slot_map_alloc(&vulkan->pipelines.shaderSlots, &slotItem, &slotIndex, &generation)) {
+            continue;
+        }
+
+        VulkanShaderSlot* shaderSlot = (VulkanShaderSlot*)slotItem;
+        shaderSlot->shader.module = (VkShaderModule)results[i].module;
+        shaderSlot->shader.path = str8_cpy(vulkan->arena, results[i].path);
 
         for (U32 reqIdx = 0; reqIdx < requestCount; ++reqIdx) {
             if (str8_equal(requests[reqIdx].shaderPath, results[i].path)) {
                 if (requests[reqIdx].outHandle) {
-                    *requests[reqIdx].outHandle = (ShaderHandle)(shaderIndex + 1u);
+                    requests[reqIdx].outHandle->slot = slotIndex;
+                    requests[reqIdx].outHandle->generation = generation;
                 }
                 break;
             }
@@ -844,8 +822,6 @@ static void vulkan_merge_shader_results_wrapper(void* backendData, Arena* arena,
 
         vkdefer_destroy_VkShaderModule(&vulkan->deferCtx.globalBuf, (VkShaderModule) results[i].module);
     }
-
-    vulkan->pipelines.shaderCount = baseIndex;
 }
 
 static B32 vulkan_compile_shader_wrapper(void* backendData, Arena* arena, StringU8 shaderPath,
@@ -853,4 +829,3 @@ static B32 vulkan_compile_shader_wrapper(void* backendData, Arena* arena, String
     RendererVulkan* vulkan = (RendererVulkan*) backendData;
     return renderer_vulkan_compile_shader_to_result(vulkan, arena, shaderPath, outResult);
 }
-

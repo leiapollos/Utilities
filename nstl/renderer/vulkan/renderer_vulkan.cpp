@@ -16,11 +16,33 @@
 
 static GPUMesh* vulkan_get_mesh(RendererVulkan* vulkan, MeshHandle handle);
 static GPUMaterial* vulkan_get_material(RendererVulkan* vulkan, MaterialHandle handle);
+static GPUTexture* vulkan_get_texture(RendererVulkan* vulkan, TextureHandle handle);
+
+static MeshHandle mesh_handle_from_slot_(U32 slot, U32 generation) {
+    MeshHandle handle = {};
+    handle.slot = slot;
+    handle.generation = generation;
+    return handle;
+}
+
+static TextureHandle texture_handle_from_slot_(U32 slot, U32 generation) {
+    TextureHandle handle = {};
+    handle.slot = slot;
+    handle.generation = generation;
+    return handle;
+}
+
+static MaterialHandle material_handle_from_slot_(U32 slot, U32 generation) {
+    MaterialHandle handle = {};
+    handle.slot = slot;
+    handle.generation = generation;
+    return handle;
+}
 
 // ////////////////////////
 // Lifetime
 
-B32 renderer_init(Arena* arena, Renderer* renderer) {
+B32 renderer_vulkan_backend_init(Arena* arena, Renderer* renderer) {
     if (!arena || !renderer) {
         ASSERT_ALWAYS(false && "Invalid arguments");
         return 0;
@@ -90,6 +112,15 @@ B32 renderer_init(Arena* arena, Renderer* renderer) {
     vulkan->frameArena = arena_alloc(.arenaSize = MB(1));
     ASSERT_ALWAYS(vulkan->frameArena != 0);
 
+    INIT_SUCCESS(slot_map_init(&vulkan->meshSlots, arena, sizeof(VulkanMeshSlot), 256u) &&
+                 "Failed to initialize mesh slot map");
+    INIT_SUCCESS(slot_map_init(&vulkan->textureSlots, arena, sizeof(VulkanTextureSlot), 256u) &&
+                 "Failed to initialize texture slot map");
+    INIT_SUCCESS(slot_map_init(&vulkan->materialSlots, arena, sizeof(VulkanMaterialSlot), 256u) &&
+                 "Failed to initialize material slot map");
+    INIT_SUCCESS(slot_map_init(&vulkan->pipelines.shaderSlots, arena, sizeof(VulkanShaderSlot), 64u) &&
+                 "Failed to initialize shader slot map");
+
     LOG_INFO(VULKAN_LOG_DOMAIN, "Vulkan renderer initialized successfully");
 
     renderer->backendData = vulkan;
@@ -99,7 +130,6 @@ B32 renderer_init(Arena* arena, Renderer* renderer) {
 }
 
 void renderer_vulkan_shutdown(RendererVulkan* vulkan) {
-    Renderer* renderer = (Renderer*)((U8*)vulkan - offsetof(Renderer, backendData));
     if (!vulkan) {
         return;
     }
@@ -116,6 +146,47 @@ void renderer_vulkan_shutdown(RendererVulkan* vulkan) {
     vulkan_destroy_immediate_submit(vulkan, &vulkan->immSubmit);
     
     vulkan_destroy_default_resources(vulkan);
+
+    for (U32 slot = 0; slot < vulkan->meshSlots.capacity; ++slot) {
+        if (!slot_map_is_occupied(&vulkan->meshSlots, slot)) {
+            continue;
+        }
+        VulkanMeshSlot* meshSlot = (VulkanMeshSlot*)slot_map_item_at(&vulkan->meshSlots, slot);
+        if (meshSlot && meshSlot->mesh) {
+            vulkan_destroy_mesh(vulkan, &meshSlot->mesh->gpu);
+            meshSlot->mesh->indexCount = 0;
+            meshSlot->mesh = 0;
+        }
+    }
+
+    for (U32 slot = 0; slot < vulkan->textureSlots.capacity; ++slot) {
+        if (!slot_map_is_occupied(&vulkan->textureSlots, slot)) {
+            continue;
+        }
+        VulkanTextureSlot* textureSlot = (VulkanTextureSlot*)slot_map_item_at(&vulkan->textureSlots, slot);
+        if (textureSlot && textureSlot->texture && textureSlot->texture->image.image != VK_NULL_HANDLE) {
+            vulkan_destroy_image(vulkan, &textureSlot->texture->image);
+            textureSlot->texture = 0;
+        }
+    }
+
+    for (U32 slot = 0; slot < vulkan->materialSlots.capacity; ++slot) {
+        if (!slot_map_is_occupied(&vulkan->materialSlots, slot)) {
+            continue;
+        }
+        VulkanMaterialSlot* materialSlot = (VulkanMaterialSlot*)slot_map_item_at(&vulkan->materialSlots, slot);
+        if (materialSlot && materialSlot->material &&
+            materialSlot->material->uniformBuffer.buffer != VK_NULL_HANDLE) {
+            vulkan_destroy_buffer(vulkan->device.allocator, &materialSlot->material->uniformBuffer);
+            materialSlot->material->uniformBuffer = {};
+            materialSlot->material = 0;
+        }
+    }
+
+    slot_map_clear(&vulkan->meshSlots);
+    slot_map_clear(&vulkan->textureSlots);
+    slot_map_clear(&vulkan->materialSlots);
+    slot_map_clear(&vulkan->pipelines.shaderSlots);
     
     for (U32 i = 0; i < VULKAN_FRAME_OVERLAP; ++i) {
         RendererVulkanFrame* frame = &vulkan->commands.frames[i];
@@ -503,33 +574,20 @@ void renderer_vulkan_on_window_resized(RendererVulkan* vulkan, U32 width, U32 he
 // Mesh API
 
 static GPUMesh* vulkan_get_mesh(RendererVulkan* vulkan, MeshHandle handle) {
-    if (handle == MESH_HANDLE_INVALID || !vulkan || !vulkan->gpuMeshes) {
+    if (!vulkan || !MESH_HANDLE_IS_VALID(handle)) {
         return 0;
     }
-    U64 index = handle - 1;
-    if (index >= vulkan->gpuMeshCount) {
+    VulkanMeshSlot* meshSlot =
+        (VulkanMeshSlot*)slot_map_get(&vulkan->meshSlots, handle.slot, handle.generation);
+    if (!meshSlot) {
         return 0;
     }
-    return vulkan->gpuMeshes[index];
+    return meshSlot->mesh;
 }
 
 MeshHandle renderer_vulkan_upload_mesh(RendererVulkan* vulkan, const MeshAssetData* meshData) {
     if (!vulkan || !meshData || !meshData->data.vertices || !meshData->data.indices) {
         return MESH_HANDLE_INVALID;
-    }
-    
-    if (vulkan->gpuMeshCount >= vulkan->gpuMeshCapacity) {
-        U32 newCapacity = (vulkan->gpuMeshCapacity == 0) ? 64 : vulkan->gpuMeshCapacity * 2;
-        GPUMesh** newArray = ARENA_PUSH_ARRAY(vulkan->arena, GPUMesh*, newCapacity);
-        if (!newArray) {
-            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to grow GPU mesh array");
-            return MESH_HANDLE_INVALID;
-        }
-        if (vulkan->gpuMeshes && vulkan->gpuMeshCount > 0) {
-            MEMCPY(newArray, vulkan->gpuMeshes, sizeof(GPUMesh*) * vulkan->gpuMeshCount);
-        }
-        vulkan->gpuMeshes = newArray;
-        vulkan->gpuMeshCapacity = newCapacity;
     }
 
     GPUMesh* mesh = ARENA_PUSH_STRUCT(vulkan->arena, GPUMesh);
@@ -549,57 +607,73 @@ MeshHandle renderer_vulkan_upload_mesh(RendererVulkan* vulkan, const MeshAssetDa
         LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to upload mesh GPU buffers");
         return MESH_HANDLE_INVALID;
     }
-    
-    U32 index = vulkan->gpuMeshCount++;
-    vulkan->gpuMeshes[index] = mesh;
-    MeshHandle handle = (MeshHandle)(index + 1);  // +1 so 0 is invalid
+
+    void* slotItem = 0;
+    U32 slotIndex = 0;
+    U32 generation = 0;
+    if (!slot_map_alloc(&vulkan->meshSlots, &slotItem, &slotIndex, &generation)) {
+        LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to allocate mesh slot");
+        vulkan_destroy_mesh(vulkan, &mesh->gpu);
+        mesh->indexCount = 0;
+        return MESH_HANDLE_INVALID;
+    }
+
+    VulkanMeshSlot* meshSlot = (VulkanMeshSlot*)slotItem;
+    meshSlot->mesh = mesh;
+    MeshHandle handle = mesh_handle_from_slot_(slotIndex, generation);
 
     LOG_DEBUG(VULKAN_LOG_DOMAIN,
-             "Uploaded mesh ({} vertices, {} indices) -> handle {}",
+             "Uploaded mesh ({} vertices, {} indices) -> slot {} gen {}",
              meshData->data.vertexCount,
              meshData->data.indexCount,
-             handle);
+             handle.slot,
+             handle.generation);
     return handle;
 }
 
 void renderer_vulkan_destroy_mesh(RendererVulkan* vulkan, MeshHandle handle) {
-    if (handle == MESH_HANDLE_INVALID || !vulkan) {
+    if (!vulkan || !MESH_HANDLE_IS_VALID(handle)) {
         return;
     }
-    
-    GPUMesh* mesh = vulkan_get_mesh(vulkan, handle);
-    if (mesh) {
-        vulkan_destroy_mesh(vulkan, &mesh->gpu);
-        mesh->indexCount = 0;
+
+    void* slotItem = 0;
+    if (!slot_map_release(&vulkan->meshSlots, handle.slot, handle.generation, &slotItem)) {
+        return;
+    }
+
+    VulkanMeshSlot* meshSlot = (VulkanMeshSlot*)slotItem;
+    if (meshSlot && meshSlot->mesh) {
+        vulkan_destroy_mesh(vulkan, &meshSlot->mesh->gpu);
+        meshSlot->mesh->indexCount = 0;
+        meshSlot->mesh = 0;
     }
 }
 
 // ////////////////////////
 // Texture API
 
+static GPUTexture* vulkan_get_texture(RendererVulkan* vulkan, TextureHandle handle) {
+    if (!vulkan || !TEXTURE_HANDLE_IS_VALID(handle)) {
+        return 0;
+    }
+    VulkanTextureSlot* textureSlot =
+        (VulkanTextureSlot*)slot_map_get(&vulkan->textureSlots, handle.slot, handle.generation);
+    if (!textureSlot) {
+        return 0;
+    }
+    return textureSlot->texture;
+}
+
 TextureHandle renderer_vulkan_upload_texture(RendererVulkan* vulkan, const LoadedImage* image) {
     if (!vulkan || !image || !image->pixels) {
         return TEXTURE_HANDLE_INVALID;
     }
-    
-    if (vulkan->gpuTextureCount >= vulkan->gpuTextureCapacity) {
-        U32 newCapacity = (vulkan->gpuTextureCapacity == 0) ? 64 : vulkan->gpuTextureCapacity * 2;
-        GPUTexture** newArray = ARENA_PUSH_ARRAY(vulkan->arena, GPUTexture*, newCapacity);
-        if (!newArray) {
-            return TEXTURE_HANDLE_INVALID;
-        }
-        if (vulkan->gpuTextures && vulkan->gpuTextureCount > 0) {
-            MEMCPY(newArray, vulkan->gpuTextures, sizeof(GPUTexture*) * vulkan->gpuTextureCount);
-        }
-        vulkan->gpuTextures = newArray;
-        vulkan->gpuTextureCapacity = newCapacity;
-    }
-    
+
     GPUTexture* tex = ARENA_PUSH_STRUCT(vulkan->arena, GPUTexture);
     if (!tex) {
         return TEXTURE_HANDLE_INVALID;
     }
-    
+
     VkExtent3D extent = {image->width, image->height, 1};
     tex->image = vulkan_create_image_data(vulkan, image->pixels, extent,
                                            VK_FORMAT_R8G8B8A8_UNORM,
@@ -607,25 +681,34 @@ TextureHandle renderer_vulkan_upload_texture(RendererVulkan* vulkan, const Loade
     if (tex->image.image == VK_NULL_HANDLE) {
         return TEXTURE_HANDLE_INVALID;
     }
-    
-    U32 index = vulkan->gpuTextureCount++;
-    vulkan->gpuTextures[index] = tex;
-    return (TextureHandle)(index + 1);
+
+    void* slotItem = 0;
+    U32 slotIndex = 0;
+    U32 generation = 0;
+    if (!slot_map_alloc(&vulkan->textureSlots, &slotItem, &slotIndex, &generation)) {
+        vulkan_destroy_image(vulkan, &tex->image);
+        return TEXTURE_HANDLE_INVALID;
+    }
+
+    VulkanTextureSlot* textureSlot = (VulkanTextureSlot*)slotItem;
+    textureSlot->texture = tex;
+    return texture_handle_from_slot_(slotIndex, generation);
 }
 
 void renderer_vulkan_destroy_texture(RendererVulkan* vulkan, TextureHandle handle) {
-    if (handle == TEXTURE_HANDLE_INVALID || !vulkan) {
+    if (!vulkan || !TEXTURE_HANDLE_IS_VALID(handle)) {
         return;
     }
-    
-    U64 index = handle - 1;
-    if (index >= vulkan->gpuTextureCount || !vulkan->gpuTextures[index]) {
+
+    void* slotItem = 0;
+    if (!slot_map_release(&vulkan->textureSlots, handle.slot, handle.generation, &slotItem)) {
         return;
     }
-    
-    GPUTexture* tex = vulkan->gpuTextures[index];
-    if (tex->image.image != VK_NULL_HANDLE) {
-        vulkan_destroy_image(vulkan, &tex->image);
+
+    VulkanTextureSlot* textureSlot = (VulkanTextureSlot*)slotItem;
+    if (textureSlot && textureSlot->texture && textureSlot->texture->image.image != VK_NULL_HANDLE) {
+        vulkan_destroy_image(vulkan, &textureSlot->texture->image);
+        textureSlot->texture = 0;
     }
 }
 
@@ -637,39 +720,31 @@ MaterialHandle renderer_vulkan_upload_material(RendererVulkan* vulkan, const Mat
     if (!vulkan || !material) {
         return MATERIAL_HANDLE_INVALID;
     }
-    
+    (void)metalRoughTexture;
+
     if (vulkan->opaquePipeline == VK_NULL_HANDLE) {
         vulkan_init_material_pipelines(vulkan);
     }
-    
-    if (vulkan->gpuMaterialCount >= vulkan->gpuMaterialCapacity) {
-        U32 newCapacity = (vulkan->gpuMaterialCapacity == 0) ? 64 : vulkan->gpuMaterialCapacity * 2;
-        GPUMaterial** newArray = ARENA_PUSH_ARRAY(vulkan->arena, GPUMaterial*, newCapacity);
-        if (!newArray) {
-            return MATERIAL_HANDLE_INVALID;
-        }
-        if (vulkan->gpuMaterials && vulkan->gpuMaterialCount > 0) {
-            MEMCPY(newArray, vulkan->gpuMaterials, sizeof(GPUMaterial*) * vulkan->gpuMaterialCount);
-        }
-        vulkan->gpuMaterials = newArray;
-        vulkan->gpuMaterialCapacity = newCapacity;
-    }
-    
+
     GPUMaterial* mat = ARENA_PUSH_STRUCT(vulkan->arena, GPUMaterial);
     if (!mat) {
         return MATERIAL_HANDLE_INVALID;
     }
-    
+
     mat->uniformBuffer = vulkan_create_buffer(vulkan->device.allocator,
                                                sizeof(MaterialConstants),
                                                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                                                VMA_MEMORY_USAGE_CPU_TO_GPU);
-    
+    if (mat->uniformBuffer.buffer == VK_NULL_HANDLE) {
+        return MATERIAL_HANDLE_INVALID;
+    }
+
     MaterialConstants* consts = (MaterialConstants*)mat->uniformBuffer.info.pMappedData;
     consts->colorFactor = material->colorFactor;
     consts->metalRoughFactor.r = material->metallicFactor;
     consts->metalRoughFactor.g = material->roughnessFactor;
-    
+    consts->alphaCutoff = material->alphaCutoff;
+
     VkDescriptorSet descSet = VK_NULL_HANDLE;
     VkDescriptorSetAllocateInfo allocInfo = {};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -680,18 +755,13 @@ MaterialHandle renderer_vulkan_upload_material(RendererVulkan* vulkan, const Mat
         vulkan_destroy_buffer(vulkan->device.allocator, &mat->uniformBuffer);
         return MATERIAL_HANDLE_INVALID;
     }
-    
+
     VkImageView texView = vulkan->whiteImage.imageView;
-    if (colorTexture != TEXTURE_HANDLE_INVALID) {
-        U64 texIndex = colorTexture - 1;
-        if (texIndex < vulkan->gpuTextureCount && vulkan->gpuTextures[texIndex]) {
-            GPUTexture* gpuTex = vulkan->gpuTextures[texIndex];
-            if (gpuTex->image.imageView != VK_NULL_HANDLE) {
-                texView = gpuTex->image.imageView;
-            }
-        }
+    GPUTexture* gpuTex = vulkan_get_texture(vulkan, colorTexture);
+    if (gpuTex && gpuTex->image.imageView != VK_NULL_HANDLE) {
+        texView = gpuTex->image.imageView;
     }
-    
+
     VulkanDescriptorWriter writer = {};
     vulkan_descriptor_writer_write_buffer(&writer, 0, mat->uniformBuffer.buffer,
                                            sizeof(MaterialConstants), 0,
@@ -700,47 +770,61 @@ MaterialHandle renderer_vulkan_upload_material(RendererVulkan* vulkan, const Mat
                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                           VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
     vulkan_descriptor_writer_update_set(&vulkan->device, &writer, descSet);
-    
-    material_fill(mat, vulkan, MaterialType_Opaque, descSet);
-    
-    U32 index = vulkan->gpuMaterialCount++;
-    vulkan->gpuMaterials[index] = mat;
-    return (MaterialHandle)(index + 1);
+
+    MaterialType materialType = (material->alphaMode == AlphaMode_Blend)
+                                ? MaterialType_Transparent
+                                : MaterialType_Opaque;
+    material_fill(mat, vulkan, materialType, descSet);
+
+    void* slotItem = 0;
+    U32 slotIndex = 0;
+    U32 generation = 0;
+    if (!slot_map_alloc(&vulkan->materialSlots, &slotItem, &slotIndex, &generation)) {
+        if (mat->uniformBuffer.buffer != VK_NULL_HANDLE) {
+            vulkan_destroy_buffer(vulkan->device.allocator, &mat->uniformBuffer);
+        }
+        return MATERIAL_HANDLE_INVALID;
+    }
+
+    VulkanMaterialSlot* materialSlot = (VulkanMaterialSlot*)slotItem;
+    materialSlot->material = mat;
+    return material_handle_from_slot_(slotIndex, generation);
 }
 
 void renderer_vulkan_destroy_material(RendererVulkan* vulkan, MaterialHandle handle) {
-    if (handle == MATERIAL_HANDLE_INVALID || !vulkan) {
+    if (!vulkan || !MATERIAL_HANDLE_IS_VALID(handle)) {
         return;
     }
-    
-    U64 index = handle - 1;
-    if (index >= vulkan->gpuMaterialCount || !vulkan->gpuMaterials[index]) {
+
+    void* slotItem = 0;
+    if (!slot_map_release(&vulkan->materialSlots, handle.slot, handle.generation, &slotItem)) {
         return;
     }
-    
-    GPUMaterial* mat = vulkan->gpuMaterials[index];
-    if (mat->uniformBuffer.buffer != VK_NULL_HANDLE) {
-        vulkan_destroy_buffer(vulkan->device.allocator, &mat->uniformBuffer);
+
+    VulkanMaterialSlot* materialSlot = (VulkanMaterialSlot*)slotItem;
+    if (materialSlot && materialSlot->material &&
+        materialSlot->material->uniformBuffer.buffer != VK_NULL_HANDLE) {
+        vulkan_destroy_buffer(vulkan->device.allocator, &materialSlot->material->uniformBuffer);
+        materialSlot->material->uniformBuffer = {};
+        materialSlot->material = 0;
     }
 }
 
 // ////////////////////////
 // Scene API
 
-struct VulkanSceneTexture {
-    RendererVulkanAllocatedImage image;
-};
-
-struct VulkanSceneMaterial {
-    GPUMaterial material;
-    RendererVulkanAllocatedBuffer uniformBuffer;
-};
-
 static GPUMaterial* vulkan_get_material(RendererVulkan* vulkan, MaterialHandle handle) {
-    if (handle == MATERIAL_HANDLE_INVALID || !vulkan) {
+    if (!vulkan || !MATERIAL_HANDLE_IS_VALID(handle)) {
         return &vulkan->defaultMaterial;
     }
-    return (GPUMaterial*)(uintptr_t)handle;
+
+    VulkanMaterialSlot* materialSlot =
+        (VulkanMaterialSlot*)slot_map_get(&vulkan->materialSlots, handle.slot, handle.generation);
+    if (!materialSlot || !materialSlot->material) {
+        return &vulkan->defaultMaterial;
+    }
+
+    return materialSlot->material;
 }
 
 B32 renderer_vulkan_upload_scene(RendererVulkan* vulkan, Arena* arena, const LoadedScene* scene, GPUSceneData* outGPU) {
@@ -753,120 +837,55 @@ B32 renderer_vulkan_upload_scene(RendererVulkan* vulkan, Arena* arena, const Loa
     if (vulkan->opaquePipeline == VK_NULL_HANDLE) {
         vulkan_init_material_pipelines(vulkan);
     }
-    
-    U32 texCount = scene->imageCount;
-    if (texCount > 0) {
-        outGPU->textures = ARENA_PUSH_ARRAY(arena, TextureHandle, texCount);
-        VulkanSceneTexture* internalTextures = ARENA_PUSH_ARRAY(arena, VulkanSceneTexture, texCount);
-        if (!outGPU->textures || !internalTextures) {
-            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to allocate texture arrays");
+
+    if (scene->imageCount > 0) {
+        outGPU->textures = ARENA_PUSH_ARRAY(arena, TextureHandle, scene->imageCount);
+        if (!outGPU->textures) {
+            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to allocate scene texture handles");
             return 0;
         }
-        
-        for (U32 i = 0; i < texCount; ++i) {
-            LoadedImage* img = &scene->images[i];
-            if (img->pixels && img->width > 0 && img->height > 0) {
-                VkExtent3D extent = {img->width, img->height, 1};
-                internalTextures[i].image = vulkan_create_image_data(vulkan, img->pixels, extent,
-                                                                      VK_FORMAT_R8G8B8A8_UNORM,
-                                                                      VK_IMAGE_USAGE_SAMPLED_BIT);
-                if (internalTextures[i].image.image == VK_NULL_HANDLE) {
-                    LOG_WARNING(VULKAN_LOG_DOMAIN, "Failed to upload texture {}", i);
-                    outGPU->textures[i] = TEXTURE_HANDLE_INVALID;
-                } else {
-                    outGPU->textures[i] = (TextureHandle)(uintptr_t)&internalTextures[i];
-                }
-            } else {
-                outGPU->textures[i] = TEXTURE_HANDLE_INVALID;
-            }
+        outGPU->textureCount = scene->imageCount;
+        for (U32 i = 0; i < scene->imageCount; ++i) {
+            outGPU->textures[i] = renderer_vulkan_upload_texture(vulkan, &scene->images[i]);
         }
-        
-        outGPU->textureCount = texCount;
-        LOG_INFO(VULKAN_LOG_DOMAIN, "Uploaded {} scene textures", texCount);
     }
-    
-    U32 matCount = scene->materialCount;
-    if (matCount > 0) {
-        outGPU->materials = ARENA_PUSH_ARRAY(arena, MaterialHandle, matCount);
-        VulkanSceneMaterial* internalMaterials = ARENA_PUSH_ARRAY(arena, VulkanSceneMaterial, matCount);
-        if (!outGPU->materials || !internalMaterials) {
-            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to allocate material arrays");
+
+    if (scene->materialCount > 0) {
+        outGPU->materials = ARENA_PUSH_ARRAY(arena, MaterialHandle, scene->materialCount);
+        if (!outGPU->materials) {
+            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to allocate scene material handles");
             return 0;
         }
-        
-        for (U32 i = 0; i < matCount; ++i) {
-            MaterialData* matData = &scene->materials[i];
-            
-            internalMaterials[i].uniformBuffer = vulkan_create_buffer(vulkan->device.allocator,
-                                                                       sizeof(MaterialConstants),
-                                                                       VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                                                                       VMA_MEMORY_USAGE_CPU_TO_GPU);
-            
-            MaterialConstants* consts = (MaterialConstants*)internalMaterials[i].uniformBuffer.info.pMappedData;
-            consts->colorFactor = matData->colorFactor;
-            consts->metalRoughFactor.r = matData->metallicFactor;
-            consts->metalRoughFactor.g = matData->roughnessFactor;
-            consts->alphaCutoff = matData->alphaCutoff;
-            
-            VkDescriptorSet descSet = VK_NULL_HANDLE;
-            VkDescriptorSetAllocateInfo allocInfo = {};
-            allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            allocInfo.descriptorPool = vulkan->globalDescriptorPool;
-            allocInfo.descriptorSetCount = 1;
-            allocInfo.pSetLayouts = &vulkan->materialLayout;
-            VkResult allocResult = vkAllocateDescriptorSets(vulkan->device.device, &allocInfo, &descSet);
-            if (allocResult != VK_SUCCESS) {
-                LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to allocate material descriptor set: {}", allocResult);
-                outGPU->materials[i] = MATERIAL_HANDLE_INVALID;
-                continue;
-            }
-            
-            VkImageView texView = vulkan->whiteImage.imageView;
-            if (matData->colorTextureIndex != MATERIAL_NO_TEXTURE && 
+        outGPU->materialCount = scene->materialCount;
+        for (U32 i = 0; i < scene->materialCount; ++i) {
+            const MaterialData* matData = &scene->materials[i];
+            TextureHandle colorTexture = TEXTURE_HANDLE_INVALID;
+            TextureHandle metalRoughTexture = TEXTURE_HANDLE_INVALID;
+
+            if (matData->colorTextureIndex != MATERIAL_NO_TEXTURE &&
                 matData->colorTextureIndex < outGPU->textureCount) {
-                TextureHandle texHandle = outGPU->textures[matData->colorTextureIndex];
-                if (texHandle != TEXTURE_HANDLE_INVALID) {
-                    VulkanSceneTexture* sceneTex = (VulkanSceneTexture*)(uintptr_t)texHandle;
-                    if (sceneTex->image.imageView != VK_NULL_HANDLE) {
-                        texView = sceneTex->image.imageView;
-                    }
-                }
+                colorTexture = outGPU->textures[matData->colorTextureIndex];
             }
-            
-            VulkanDescriptorWriter writer = {};
-            vulkan_descriptor_writer_write_buffer(&writer, 0, internalMaterials[i].uniformBuffer.buffer,
-                                                   sizeof(MaterialConstants), 0,
-                                                   VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-            vulkan_descriptor_writer_write_image(&writer, 1, texView, vulkan->samplerLinear,
-                                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                                  VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
-            vulkan_descriptor_writer_update_set(&vulkan->device, &writer, descSet);
-            
-            MaterialType matType = (matData->alphaMode == AlphaMode_Blend) 
-                                   ? MaterialType_Transparent 
-                                   : MaterialType_Opaque;
-            material_fill(&internalMaterials[i].material, vulkan, matType, descSet);
-            
-            outGPU->materials[i] = (MaterialHandle)(uintptr_t)&internalMaterials[i].material;
+
+            if (matData->metalRoughTextureIndex != MATERIAL_NO_TEXTURE &&
+                matData->metalRoughTextureIndex < outGPU->textureCount) {
+                metalRoughTexture = outGPU->textures[matData->metalRoughTextureIndex];
+            }
+
+            outGPU->materials[i] = renderer_vulkan_upload_material(vulkan, matData, colorTexture, metalRoughTexture);
         }
-        
-        outGPU->materialCount = matCount;
-        LOG_INFO(VULKAN_LOG_DOMAIN, "Created {} GPU materials", matCount);
     }
-    
+
     if (scene->meshCount > 0) {
         outGPU->meshes = ARENA_PUSH_ARRAY(arena, MeshHandle, scene->meshCount);
         if (!outGPU->meshes) {
-            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to allocate GPU mesh array");
+            LOG_ERROR(VULKAN_LOG_DOMAIN, "Failed to allocate scene mesh handles");
             return 0;
         }
-        
+        outGPU->meshCount = scene->meshCount;
         for (U32 m = 0; m < scene->meshCount; ++m) {
             outGPU->meshes[m] = renderer_vulkan_upload_mesh(vulkan, &scene->meshes[m]);
         }
-        
-        outGPU->meshCount = scene->meshCount;
-        LOG_INFO(VULKAN_LOG_DOMAIN, "Uploaded {} GPU meshes", scene->meshCount);
     }
     
     LOG_INFO(VULKAN_LOG_DOMAIN, "Scene upload complete: {} textures, {} materials, {} meshes",
@@ -885,30 +904,23 @@ void renderer_vulkan_destroy_scene(RendererVulkan* vulkan, GPUSceneData* gpu) {
     
     if (gpu->textures && gpu->textureCount > 0) {
         for (U32 i = 0; i < gpu->textureCount; ++i) {
-            if (gpu->textures[i] != TEXTURE_HANDLE_INVALID) {
-                VulkanSceneTexture* sceneTex = (VulkanSceneTexture*)(uintptr_t)gpu->textures[i];
-                if (sceneTex->image.image != VK_NULL_HANDLE) {
-                    vulkan_destroy_image(vulkan, &sceneTex->image);
-                }
+            if (TEXTURE_HANDLE_IS_VALID(gpu->textures[i])) {
+                renderer_vulkan_destroy_texture(vulkan, gpu->textures[i]);
             }
         }
     }
     
     if (gpu->materials && gpu->materialCount > 0) {
         for (U32 i = 0; i < gpu->materialCount; ++i) {
-            if (gpu->materials[i] != MATERIAL_HANDLE_INVALID) {
-                GPUMaterial* mat = (GPUMaterial*)(uintptr_t)gpu->materials[i];
-                VulkanSceneMaterial* sceneMat = (VulkanSceneMaterial*)((U8*)mat - offsetof(VulkanSceneMaterial, material));
-                if (sceneMat->uniformBuffer.buffer != VK_NULL_HANDLE) {
-                    vulkan_destroy_buffer(vulkan->device.allocator, &sceneMat->uniformBuffer);
-                }
+            if (MATERIAL_HANDLE_IS_VALID(gpu->materials[i])) {
+                renderer_vulkan_destroy_material(vulkan, gpu->materials[i]);
             }
         }
     }
     
     if (gpu->meshes && gpu->meshCount > 0) {
         for (U32 m = 0; m < gpu->meshCount; ++m) {
-            if (gpu->meshes[m] != MESH_HANDLE_INVALID) {
+            if (MESH_HANDLE_IS_VALID(gpu->meshes[m])) {
                 renderer_vulkan_destroy_mesh(vulkan, gpu->meshes[m]);
             }
         }

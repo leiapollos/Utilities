@@ -759,7 +759,8 @@ static B32 host_ensure_graphics_initialized(HostState* state) {
     }
 
     MEMSET(&state->renderer, 0, sizeof(state->renderer));
-    if (!renderer_init(state->programArena, &state->renderer)) {
+    RendererCreateDesc createDesc = renderer_create_desc(state->programArena);
+    if (!renderer_create(&createDesc, &state->renderer)) {
         LOG_ERROR("host", "Failed to initialize renderer");
         return 0;
     }

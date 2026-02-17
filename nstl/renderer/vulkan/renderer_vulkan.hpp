@@ -9,6 +9,7 @@
 // ////////////////////////
 // Vulkan Renderer Backend
 
+B32 renderer_vulkan_backend_init(Arena* arena, Renderer* renderer);
 void renderer_vulkan_shutdown(RendererVulkan* vulkan);
 void renderer_vulkan_draw(RendererVulkan* vulkan, OS_WindowHandle window,
                           const SceneData* scene, const RenderObject* objects, U32 objectCount);
@@ -37,4 +38,3 @@ void renderer_vulkan_destroy_material(RendererVulkan* vulkan, MaterialHandle mat
 
 B32 renderer_vulkan_upload_scene(RendererVulkan* vulkan, Arena* arena, const LoadedScene* scene, GPUSceneData* outGPU);
 void renderer_vulkan_destroy_scene(RendererVulkan* vulkan, GPUSceneData* gpu);
-

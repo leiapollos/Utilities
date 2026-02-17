@@ -9,7 +9,7 @@
 #include "nstl/os/graphics/os_graphics.hpp"
 #include "nstl/renderer/renderer.hpp"
 
-#define APP_INTERFACE_VERSION 4u
+#define APP_INTERFACE_VERSION 5u
 
 #define PLATFORM_OS_FUNCTIONS(X) \
     X(OS_graphics_init) \
@@ -65,17 +65,19 @@ struct PlatformOSApi {
 #define PLATFORM_OS_CALL(platform, name, ...) ((platform)->os.name(__VA_ARGS__))
 
 #define PLATFORM_RENDERER_FUNCTIONS(X) \
-    X(renderer_init) \
+    X(renderer_create) \
     X(renderer_shutdown) \
+    X(renderer_begin_frame) \
+    X(renderer_submit) \
+    X(renderer_end_frame) \
+    X(renderer_resize) \
     X(renderer_compile_shaders) \
-    X(renderer_draw) \
     X(renderer_imgui_init) \
     X(renderer_imgui_shutdown) \
     X(renderer_imgui_process_events) \
     X(renderer_imgui_begin_frame) \
     X(renderer_imgui_end_frame) \
     X(renderer_imgui_set_window_size) \
-    X(renderer_on_window_resized) \
     X(renderer_upload_mesh) \
     X(renderer_destroy_mesh) \
     X(renderer_upload_scene) \

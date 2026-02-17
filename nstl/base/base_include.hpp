@@ -10,6 +10,7 @@
 #include "base_core.hpp"
 #include "base_math.hpp"
 #include "base_arena.hpp"
+#include "base_slot_map.hpp"
 #include "base_string.hpp"
 #include "base_spmc.hpp"
 #include "base_job_system.hpp"

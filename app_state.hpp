@@ -16,6 +16,8 @@ struct AppCoreState {
     OS_WindowHandle windowHandle;
     U64 frameCounter;
     U32 reloadCount;
+    U64 appStartTimeNs;
+    B32 autoCloseTriggered;
 
     JobSystem* jobSystem;
     U32 workerCount;
@@ -35,4 +37,3 @@ struct AppCoreState {
     GPUSceneData gpuScene;
     B32 sceneLoaded;
 };
-

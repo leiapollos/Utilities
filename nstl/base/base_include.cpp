@@ -7,6 +7,7 @@
 #include "base_random.cpp"
 #include "base_math.cpp"
 #include "base_arena.cpp"
+#include "base_slot_map.cpp"
 #include "base_string.cpp"
 #include "base_spmc.cpp"
 #include "base_job_system.cpp"
