@@ -9,6 +9,7 @@
 #include "app/app_camera.hpp"
 
 struct AppTestsState;
+struct ArtifactCache;
 
 static const U32 APP_RADIANCE_2D_GRID_WIDTH = 512u;
 static const U32 APP_RADIANCE_2D_GRID_HEIGHT = 512u;
@@ -82,6 +83,7 @@ struct AppCoreState {
     JobSystem* jobSystem;
     U32 workerCount;
     AppTestsState* tests;
+    ArtifactCache* artifactCache;
 
     Camera camera;
 

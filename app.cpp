@@ -12,22 +12,50 @@
 #include "app_tests.cpp"
 #include "app/app_scene_sponza.cpp"
 #include "app/app_scene_radiance_2d.cpp"
+#include "nstl/artifact/artifact_include.hpp"
+#include "nstl/artifact/artifact_include.cpp"
 
 #include <dirent.h>
 #include <sys/stat.h>
 
-#define APP_CORE_STATE_VERSION 8u
+#define APP_CORE_STATE_VERSION 9u
+#define APP_ARTIFACT_TYPE_SHADER 1u
+#define APP_SHADER_COMPILE_SIGNATURE "backend=vulkan|compiler=dxc|spirv=1|entry=main"
+
+#define APP_ARTIFACT_CACHE_INITIAL_SLOTS 256u
+#define APP_ARTIFACT_CACHE_INITIAL_HASH 512u
+#define APP_ARTIFACT_CACHE_BUDGET_BYTES MB(16)
 
 static U64 app_total_permanent_size(void);
 static AppCoreState* app_get_state(AppMemory* memory);
 static void app_assign_tests_state(AppCoreState* state);
 static AppTestsState* app_get_tests(AppCoreState* state);
 static U32 app_select_worker_count(const AppHostContext* host);
+static B32 app_initialize_artifact_cache(AppPlatform* platform, AppMemory* memory, AppHostContext* host,
+                                         AppCoreState* state, B32 forceReset);
+static B32 app_register_artifact_types(AppPlatform* platform, AppHostContext* host, AppCoreState* state);
+static StringU8 app_shader_path_from_artifact_key(StringU8 key);
+static B32 app_shader_artifact_loader(void* userData, Arena* arena, U32 typeId, StringU8 key,
+                                      ArtifactPayload* outPayload);
+static void app_shader_artifact_release(void* userData, U32 typeId, StringU8 key, ArtifactPayload payload);
 static void app_compile_shaders_from_folder(AppPlatform* platform, AppMemory* memory, AppHostContext* host);
 static void app_request_close(AppPlatform* platform, AppHostContext* host, AppCoreState* state);
 static void app_switch_scene(AppCoreState* state, AppSceneKind scene);
 static void app_apply_scene_switch(AppCoreState* state);
 static const char* app_scene_name(AppSceneKind scene);
+
+struct AppShaderArtifactContext {
+    AppPlatform* platform;
+    AppHostContext* host;
+    AppCoreState* state;
+};
+
+struct AppShaderArtifactPayload {
+    ShaderHandle handle;
+    StringU8 shaderPath;
+};
+
+static AppShaderArtifactContext g_appShaderArtifactContext = {};
 
 static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostContext* host) {
     ASSERT_ALWAYS(platform != 0);
@@ -60,6 +88,7 @@ static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostConte
         state->windowHandle.handle = 0;
         state->frameCounter = 0;
         state->reloadCount = 0;
+        state->artifactCache = 0;
         state->activeScene = AppSceneKind_Sponza;
         state->pendingSceneSwitch = AppSceneKind_Sponza;
 
@@ -110,6 +139,10 @@ static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostConte
                                              state->windowHandle);
     ASSERT_ALWAYS(imguiInitOk != 0);
 
+    if (!app_initialize_artifact_cache(platform, memory, host, state, 0)) {
+        return 0;
+    }
+
     app_compile_shaders_from_folder(platform, memory, host);
 
     app_scene_sponza_init(platform, memory, host, state);
@@ -138,6 +171,12 @@ static void app_reload(AppPlatform* platform, AppMemory* memory, AppHostContext*
 
     state->reloadCount += 1;
     host->reloadCount = state->reloadCount;
+
+    if (!app_initialize_artifact_cache(platform, memory, host, state, 1)) {
+        LOG_ERROR("artifact", "Failed to reset artifact cache during reload");
+    } else {
+        app_compile_shaders_from_folder(platform, memory, host);
+    }
 
     app_tests_reload(memory, state, tests);
 }
@@ -347,6 +386,11 @@ static void app_shutdown(AppPlatform* platform, AppMemory* memory, AppHostContex
 
     app_tests_shutdown(memory, state, tests);
 
+    if (state->artifactCache) {
+        artifact_cache_destroy(state->artifactCache);
+        state->artifactCache = 0;
+    }
+
     if (state->jobSystem) {
         job_system_destroy(state->jobSystem);
         state->jobSystem = 0;
@@ -395,6 +439,148 @@ static U32 app_select_worker_count(const AppHostContext* host) {
     return workers;
 }
 
+static B32 app_initialize_artifact_cache(AppPlatform* platform, AppMemory* memory, AppHostContext* host,
+                                         AppCoreState* state, B32 forceReset) {
+    ASSERT_ALWAYS(platform != 0);
+    ASSERT_ALWAYS(memory != 0);
+    ASSERT_ALWAYS(host != 0);
+    ASSERT_ALWAYS(state != 0);
+    ASSERT_ALWAYS(memory->programArena != 0);
+
+    g_appShaderArtifactContext.platform = platform;
+    g_appShaderArtifactContext.host = host;
+    g_appShaderArtifactContext.state = state;
+
+    if (!state->artifactCache) {
+        state->artifactCache = ARENA_PUSH_STRUCT(memory->programArena, ArtifactCache);
+        ASSERT_ALWAYS(state->artifactCache != 0);
+        if (!state->artifactCache) {
+            return 0;
+        }
+
+        ArtifactCacheDesc cacheDesc = {};
+        cacheDesc.structSize = sizeof(cacheDesc);
+        cacheDesc.apiVersion = ARTIFACT_CACHE_API_VERSION;
+        cacheDesc.arena = memory->programArena;
+        cacheDesc.jobSystem = state->jobSystem;
+        cacheDesc.initialSlotCapacity = APP_ARTIFACT_CACHE_INITIAL_SLOTS;
+        cacheDesc.initialHashCapacity = APP_ARTIFACT_CACHE_INITIAL_HASH;
+        cacheDesc.budgetBytes = APP_ARTIFACT_CACHE_BUDGET_BYTES;
+        cacheDesc.maxTypeId = 16u;
+
+        if (!artifact_cache_create(&cacheDesc, state->artifactCache)) {
+            LOG_ERROR("artifact", "artifact_cache_create failed");
+            state->artifactCache = 0;
+            return 0;
+        }
+    } else if (forceReset) {
+        artifact_cache_reset(state->artifactCache);
+    }
+
+    return app_register_artifact_types(platform, host, state);
+}
+
+static B32 app_register_artifact_types(AppPlatform* platform, AppHostContext* host, AppCoreState* state) {
+    ASSERT_ALWAYS(platform != 0);
+    ASSERT_ALWAYS(host != 0);
+    ASSERT_ALWAYS(state != 0);
+    ASSERT_ALWAYS(state->artifactCache != 0);
+
+    g_appShaderArtifactContext.platform = platform;
+    g_appShaderArtifactContext.host = host;
+    g_appShaderArtifactContext.state = state;
+
+    ArtifactTypeOps shaderOps = {};
+    shaderOps.load = app_shader_artifact_loader;
+    shaderOps.release = app_shader_artifact_release;
+    shaderOps.userData = &g_appShaderArtifactContext;
+
+    if (!artifact_cache_register_type(state->artifactCache, APP_ARTIFACT_TYPE_SHADER, &shaderOps)) {
+        LOG_ERROR("artifact", "Failed to register shader artifact type");
+        return 0;
+    }
+
+    return 1;
+}
+
+static StringU8 app_shader_path_from_artifact_key(StringU8 key) {
+    for (U64 i = 0u; i < key.size; ++i) {
+        if (key.data[i] == (U8)'|') {
+            return str8(key.data, i);
+        }
+    }
+    return key;
+}
+
+static B32 app_shader_artifact_loader(void* userData, Arena* arena, U32 typeId, StringU8 key,
+                                      ArtifactPayload* outPayload) {
+    if (!userData || !arena || !outPayload) {
+        return 0;
+    }
+    if (typeId != APP_ARTIFACT_TYPE_SHADER) {
+        return 0;
+    }
+
+    AppShaderArtifactContext* context = (AppShaderArtifactContext*)userData;
+    if (!context->platform || !context->host || !context->state || !context->host->renderer || !context->state->jobSystem) {
+        return 0;
+    }
+
+    StringU8 shaderPath = app_shader_path_from_artifact_key(key);
+    if (str8_is_nil(shaderPath) || shaderPath.size == 0u) {
+        return 0;
+    }
+
+    Temp scratch = get_scratch(0, 0);
+    if (!scratch.arena) {
+        return 0;
+    }
+    DEFER_REF(temp_end(&scratch));
+
+    Renderer* renderer = context->host->renderer;
+    if (!renderer->compileShader || !renderer->mergeShaderResults) {
+        return 0;
+    }
+
+    StringU8 shaderPathCopy = str8_cpy(scratch.arena, shaderPath);
+
+    ShaderCompileResult result = {};
+    if (!renderer->compileShader(renderer->backendData, scratch.arena, shaderPathCopy, &result) || !result.valid) {
+        LOG_ERROR("artifact", "Shader compile failed for '{}'", shaderPath);
+        return 0;
+    }
+
+    ShaderHandle handle = SHADER_HANDLE_INVALID;
+    ShaderCompileRequest request = {};
+    request.shaderPath = shaderPathCopy;
+    request.outHandle = &handle;
+    renderer->mergeShaderResults(renderer->backendData, scratch.arena, &result, 1u, &request, 1u);
+
+    if (SHADER_HANDLE_IS_INVALID(handle)) {
+        LOG_ERROR("artifact", "Shader merge failed for '{}'", shaderPath);
+        return 0;
+    }
+
+    AppShaderArtifactPayload* payloadData = ARENA_PUSH_STRUCT(arena, AppShaderArtifactPayload);
+    if (!payloadData) {
+        return 0;
+    }
+
+    payloadData->handle = handle;
+    payloadData->shaderPath = str8_cpy(arena, shaderPath);
+
+    outPayload->data = payloadData;
+    outPayload->size = sizeof(*payloadData);
+    return 1;
+}
+
+static void app_shader_artifact_release(void* userData, U32 typeId, StringU8 key, ArtifactPayload payload) {
+    (void)userData;
+    (void)typeId;
+    (void)key;
+    (void)payload;
+}
+
 static void app_compile_shaders_from_folder(AppPlatform* platform, AppMemory* memory, AppHostContext* host) {
     ASSERT_ALWAYS(platform != 0);
     ASSERT_ALWAYS(memory != 0);
@@ -402,6 +588,7 @@ static void app_compile_shaders_from_folder(AppPlatform* platform, AppMemory* me
     ASSERT_ALWAYS(host->renderer != 0);
     AppCoreState* state = app_get_state(memory);
     ASSERT_ALWAYS(state->jobSystem != 0);
+    ASSERT_ALWAYS(state->artifactCache != 0);
 
     Temp scratch = get_scratch(0, 0);
     ASSERT_ALWAYS(scratch.arena != 0);
@@ -441,28 +628,51 @@ static void app_compile_shaders_from_folder(AppPlatform* platform, AppMemory* me
     }
     closedir(dir);
 
-    ASSERT_ALWAYS(shaderFiles.count > 0u);
+    if (shaderFiles.count == 0u) {
+        LOG_WARNING("artifact", "No .hlsl shader files found in '{}'", shadersDir);
+        return;
+    }
 
-    ShaderCompileRequest* requests = ARENA_PUSH_ARRAY(arena, ShaderCompileRequest, shaderFiles.count);
-    ShaderHandle* handles = ARENA_PUSH_ARRAY(arena, ShaderHandle, shaderFiles.count);
+    ArtifactUseScope scope = {};
+    if (!artifact_use_scope_open(state->artifactCache, arena, &scope)) {
+        LOG_ERROR("artifact", "Failed to open artifact use scope");
+        return;
+    }
 
-    ASSERT_ALWAYS(requests != 0);
+    ArtifactHandle* handles = ARENA_PUSH_ARRAY(arena, ArtifactHandle, shaderFiles.count);
     ASSERT_ALWAYS(handles != 0);
 
     for (U64 i = 0u; i < shaderFiles.count; ++i) {
-        requests[i].shaderPath = str8_cpy(arena, shaderFiles.items[i]);
-        requests[i].outHandle = &handles[i];
-        handles[i] = SHADER_HANDLE_INVALID;
+        StringU8 shaderPath = str8_cpy(arena, shaderFiles.items[i]);
+        StringU8 artifactKey = str8_concat(arena, shaderPath, str8("|"), str8(APP_SHADER_COMPILE_SIGNATURE));
+        handles[i] = artifact_acquire(&scope,
+                                      APP_ARTIFACT_TYPE_SHADER,
+                                      artifactKey,
+                                      ArtifactAcquireFlags_Async);
     }
+
+    B32 hadErrors = 0;
     {
         TIME_SCOPE("Shader Compilation");
-        PLATFORM_RENDERER_CALL(platform,
-                               renderer_compile_shaders,
-                               host->renderer,
-                               arena,
-                               state->jobSystem,
-                               requests,
-                               (U32) shaderFiles.count);
+        for (U64 i = 0u; i < shaderFiles.count; ++i) {
+            if (ARTIFACT_HANDLE_IS_INVALID(handles[i])) {
+                hadErrors = 1;
+                continue;
+            }
+
+            ArtifactStatus status = artifact_wait(state->artifactCache, handles[i], ARTIFACT_WAIT_INFINITE);
+            if (status != ArtifactStatus_Ready) {
+                hadErrors = 1;
+                LOG_ERROR("artifact", "Shader artifact wait failed (status={})", (U32)status);
+            }
+        }
+    }
+
+    artifact_use_scope_close(&scope);
+    artifact_cache_evict(state->artifactCache, 16u);
+
+    if (hadErrors) {
+        LOG_ERROR("artifact", "Shader artifact prewarm finished with errors");
     }
 }
 

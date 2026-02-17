@@ -335,8 +335,6 @@ void renderer_end_frame(Renderer* renderer, const RendererEndFrameDesc* endFrame
 void renderer_resize(Renderer* renderer, const RendererResizeDesc* resizeDesc);
 
 void renderer_shutdown(Renderer* renderer);
-void renderer_compile_shaders(Renderer* renderer, Arena* arena, JobSystem* jobSystem,
-                              const ShaderCompileRequest* requests, U32 requestCount);
 B32 renderer_imgui_init(Renderer* renderer, OS_WindowHandle window);
 void renderer_imgui_shutdown(Renderer* renderer);
 void renderer_imgui_process_events(Renderer* renderer, const OS_GraphicsEvent* events, U32 eventCount);

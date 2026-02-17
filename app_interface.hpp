@@ -72,7 +72,6 @@ struct PlatformOSApi {
     X(renderer_submit_radiance_2d) \
     X(renderer_end_frame) \
     X(renderer_resize) \
-    X(renderer_compile_shaders) \
     X(renderer_imgui_init) \
     X(renderer_imgui_shutdown) \
     X(renderer_imgui_process_events) \
