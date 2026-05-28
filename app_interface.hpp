@@ -7,8 +7,9 @@
 #include "nstl/base/base_include.hpp"
 #include "nstl/os/core/os_core.hpp"
 #include "nstl/os/graphics/os_graphics.hpp"
+#include "nstl/gfx/gfx_include.hpp"
 
-#define APP_ABI_VERSION 11u
+#define APP_ABI_VERSION 14u
 #define APP_STATE_SCHEMA_VERSION 2u
 #define APP_MODULE_SOURCE_RELATIVE "hot/utilities_app.dylib"
 #define HOT_STATE_STORE_MAGIC 0x4853544F52453031ull
@@ -197,6 +198,7 @@ struct AppHost {
     Arena* frameArena;
     Arena* stateArena;
     OS_WindowHandle window;
+    GfxDevice* gfxDevice;
     U32 windowWidth;
     U32 windowHeight;
 

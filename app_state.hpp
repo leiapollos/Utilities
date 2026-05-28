@@ -33,6 +33,12 @@ struct AppCoreState {
     JobSystem* jobSystem;
     U32 workerCount;
     B32 testsEnabled;
+
+    B32 gfxDemoInitialized;
+    B32 gfxTestsRan;
+    GfxBuffer gfxTriangleVertexBuffer;
+    GfxBuffer gfxTriangleIndexBuffer;
+    GfxPipeline gfxTrianglePipeline;
 };
 
 struct APP_Context {

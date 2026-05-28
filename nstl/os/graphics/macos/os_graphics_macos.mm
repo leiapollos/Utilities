@@ -180,15 +180,42 @@ static OS_WindowHandle os_window_handle_from_event(NSEvent* event) {
     return os_make_window_handle_from_nswindow(window);
 }
 
+static void os_window_get_drawable_size(NSWindow* window, U32* outWidth, U32* outHeight) {
+    ASSERT_DEBUG(outWidth != 0);
+    ASSERT_DEBUG(outHeight != 0);
+
+    if (outWidth) {
+        *outWidth = 0u;
+    }
+    if (outHeight) {
+        *outHeight = 0u;
+    }
+    if (!window || !outWidth || !outHeight) {
+        return;
+    }
+
+    NSView* contentView = [window contentView];
+    if (!contentView) {
+        return;
+    }
+
+    NSRect bounds = [contentView bounds];
+    NSSize backingSize = [contentView convertSizeToBacking:bounds.size];
+    if (backingSize.width > 0.0) {
+        *outWidth = (U32)(backingSize.width + 0.5);
+    }
+    if (backingSize.height > 0.0) {
+        *outHeight = (U32)(backingSize.height + 0.5);
+    }
+}
+
 static void os_push_window_event(OS_MACOS_GraphicsEntity* entity, OS_GraphicsEvent_Tag tag, NSWindow* window) {
     OS_WindowHandle handle = os_make_window_handle_from_entity(entity);
     
     U32 width = 0;
     U32 height = 0;
     if (window) {
-        NSRect frame = [window frame];
-        width = (U32) frame.size.width;
-        height = (U32) frame.size.height;
+        os_window_get_drawable_size(window, &width, &height);
     }
     
     OS_GraphicsEvent event = {};
@@ -684,7 +711,11 @@ static void free_OS_graphics_entity(OS_MACOS_GraphicsEntity* entity) {
 B32 OS_graphics_has_metal_device() {
     @autoreleasepool {
         id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-        return device ? 1 : 0;
+        B32 result = device ? 1 : 0;
+        if (device) {
+            [device release];
+        }
+        return result;
     }
 }
 
@@ -769,6 +800,7 @@ OS_WindowHandle OS_window_create(OS_WindowDesc desc) {
                                                        styleMask:styleMask
                                                          backing:NSBackingStoreBuffered
                                                            defer:NO];
+        [window setReleasedWhenClosed:NO];
 
         if (desc.title) {
             NSString* titleString = [NSString stringWithUTF8String:desc.title];
@@ -778,13 +810,13 @@ OS_WindowHandle OS_window_create(OS_WindowDesc desc) {
         NSView* contentView = [[NSView alloc] initWithFrame:frame];
         [contentView setWantsLayer:YES];
 
-        CAMetalLayer* metalLayer = [CAMetalLayer layer];
-        [metalLayer setDevice:MTLCreateSystemDefaultDevice()];
+        CAMetalLayer* metalLayer = [[CAMetalLayer alloc] init];
         [metalLayer setPixelFormat:MTLPixelFormatBGRA8Unorm];
         NSScreen* screen = [window screen];
         CGFloat scaleFactor = (screen) ? [screen backingScaleFactor] : 1.0;
         [metalLayer setContentsScale:scaleFactor];
         [contentView setLayer:metalLayer];
+        [metalLayer release];
         [contentView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
 
         [window setContentView:contentView];
@@ -797,7 +829,7 @@ OS_WindowHandle OS_window_create(OS_WindowDesc desc) {
         [window makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];
 
-        entity->window.window = [window retain];
+        entity->window.window = window;
 
         os_push_window_event(entity, OS_GraphicsEvent_Tag_WindowShown, window);
     }
@@ -876,6 +908,7 @@ OS_WindowSurfaceInfo OS_window_get_surface_info(OS_WindowHandle windowHandle) {
         NSView* contentView = [entity->window.window contentView];
         if (contentView) {
             info.viewPtr = (__bridge void*) contentView;
+            os_window_get_drawable_size(entity->window.window, &info.drawableWidth, &info.drawableHeight);
 
             CALayer* layer = [contentView layer];
             if (layer && [layer isKindOfClass:[CAMetalLayer class]]) {

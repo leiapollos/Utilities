@@ -4,10 +4,12 @@
 
 #include "nstl/base/base_include.hpp"
 #include "nstl/os/os_include.hpp"
+#include "nstl/gfx/gfx_include.hpp"
 #include "app_interface.hpp"
 
 #include "nstl/base/base_include.cpp"
 #include "nstl/os/os_include.cpp"
+#include "nstl/gfx/gfx_include.cpp"
 
 
 #define HOT_MODULE_HISTORY_MAX 32
@@ -20,6 +22,8 @@
 #define HOST_MAX_TARGET_FPS 240u
 #define HOST_DEFAULT_MIN_SLEEP_MS 1u
 #define HOST_MAX_MIN_SLEEP_MS 16u
+#define HOST_GFX_FRAMES_IN_FLIGHT 2u
+#define HOST_GFX_TEMP_BUFFER_SIZE MB(8)
 
 #if !defined(UTILITIES_STATIC_APP)
 #define UTILITIES_STATIC_APP 0
@@ -31,6 +35,8 @@ static const char* HOST_MODULE_BUILD_INPUTS[] = {
     "app_state.hpp",
     "app_tests.hpp",
     "app_tests.cpp",
+    "nstl/gfx/gfx.hpp",
+    "nstl/gfx/gfx_include.hpp",
 };
 
 typedef B32 (*AppLoadProc)(AppLoadParams* params, AppCode* outCode);
@@ -148,6 +154,8 @@ static void host_release_memory(HostState* state);
 static B32 host_ensure_graphics_initialized(HostState* state);
 static B32 host_create_main_window(HostState* state);
 static void host_destroy_main_window(HostState* state);
+static B32 host_create_gfx_device(HostState* state);
+static void host_destroy_gfx_device(HostState* state);
 static StringU8 host_build_module_path(StringU8 relativePath, Arena* arena);
 static void host_record_retired_module(HostState* state, OS_SharedLibrary library, StringU8 path);
 static B32 host_copy_file(StringU8 srcPath, StringU8 dstPath);
@@ -244,6 +252,13 @@ static B32 host_init(HostState* state) {
         return 0;
     }
 
+    B32 gfxOk = host_create_gfx_device(state);
+    ASSERT_ALWAYS(gfxOk);
+    if (!gfxOk) {
+        LOG_ERROR("host", "Failed to create gfx device");
+        return 0;
+    }
+
     B32 loadOk = host_load_initial_module(state);
     ASSERT_ALWAYS(loadOk);
     if (!loadOk) {
@@ -277,6 +292,7 @@ static void host_shutdown(HostState* state) {
     host_unload_module(state);
 
     if (state->graphicsInitialized) {
+        host_destroy_gfx_device(state);
         host_destroy_main_window(state);
         OS_graphics_shutdown();
         state->graphicsInitialized = 0;
@@ -323,6 +339,7 @@ static void host_release_memory(HostState* state) {
     state->host.frameArena = 0;
     state->host.stateArena = 0;
     state->host.window.handle = 0;
+    state->host.gfxDevice = 0;
     state->host.windowWidth = 0;
     state->host.windowHeight = 0;
 }
@@ -617,6 +634,12 @@ static B32 host_commit_candidate(HostState* state, LoadedModule* candidate, Stri
         }
         if (!candidate->code.after_reload(&state->host, &state->store)) {
             LOG_ERROR("host", "App after_reload reported failure; keeping active module");
+            if (state->module.code.after_reload) {
+                if (!state->module.code.after_reload(&state->host, &state->store)) {
+                    LOG_ERROR("host", "Active module failed to restore after rejected reload; quitting");
+                    state->host.shouldQuit = 1;
+                }
+            }
             commitOk = 0;
         }
     }
@@ -875,6 +898,12 @@ static B32 host_create_main_window(HostState* state) {
         return 0;
     }
 
+    OS_WindowSurfaceInfo surface = OS_window_get_surface_info(state->window);
+    if (surface.drawableWidth != 0u && surface.drawableHeight != 0u) {
+        state->windowWidth = surface.drawableWidth;
+        state->windowHeight = surface.drawableHeight;
+    }
+
     state->host.window = state->window;
     state->host.windowWidth = state->windowWidth;
     state->host.windowHeight = state->windowHeight;
@@ -894,6 +923,41 @@ static void host_destroy_main_window(HostState* state) {
     state->host.window.handle = 0;
     state->host.windowWidth = 0;
     state->host.windowHeight = 0;
+}
+
+static B32 host_create_gfx_device(HostState* state) {
+    ASSERT_ALWAYS(state != 0);
+    ASSERT_ALWAYS(state->window.handle != 0);
+    ASSERT_ALWAYS(state->programArena != 0);
+
+    if (state->host.gfxDevice) {
+        return 1;
+    }
+
+    GfxDeviceDesc desc = {};
+    desc.backend = GfxBackend_Metal;
+    desc.window = state->window;
+    desc.framesInFlight = HOST_GFX_FRAMES_IN_FLIGHT;
+    desc.tempBufferSize = HOST_GFX_TEMP_BUFFER_SIZE;
+    desc.enableValidation = 1;
+
+    GfxDevice* device = 0;
+    if (!gfx_device_create(&desc, state->programArena, &device)) {
+        return 0;
+    }
+
+    gfx_device_resize(device, state->windowWidth, state->windowHeight);
+    state->host.gfxDevice = device;
+    return 1;
+}
+
+static void host_destroy_gfx_device(HostState* state) {
+    if (!state || !state->host.gfxDevice) {
+        return;
+    }
+
+    gfx_device_destroy(state->host.gfxDevice);
+    state->host.gfxDevice = 0;
 }
 
 static void host_update_input(HostState* state, F32 deltaSeconds) {
@@ -947,6 +1011,9 @@ static void host_update_input(HostState* state, F32 deltaSeconds) {
                     state->windowHeight = event->windowShown.height;
                     state->host.windowWidth = state->windowWidth;
                     state->host.windowHeight = state->windowHeight;
+                    if (state->host.gfxDevice) {
+                        gfx_device_resize(state->host.gfxDevice, state->windowWidth, state->windowHeight);
+                    }
                 }
             }
             break;
@@ -959,6 +1026,9 @@ static void host_update_input(HostState* state, F32 deltaSeconds) {
                     state->windowHeight = event->windowResized.height;
                     state->host.windowWidth = state->windowWidth;
                     state->host.windowHeight = state->windowHeight;
+                    if (state->host.gfxDevice) {
+                        gfx_device_resize(state->host.gfxDevice, state->windowWidth, state->windowHeight);
+                    }
                 }
             }
             break;

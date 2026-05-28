@@ -123,6 +123,8 @@ struct OS_WindowDesc {
 struct OS_WindowSurfaceInfo {
     void* viewPtr;
     void* metalLayerPtr;
+    U32 drawableWidth;
+    U32 drawableHeight;
 };
 
 B32 OS_graphics_init();
