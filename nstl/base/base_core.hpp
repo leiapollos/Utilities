@@ -9,7 +9,7 @@
 // ////////////////////////
 // Assert
 
-void debug_break() {
+static inline void debug_break() {
 #if defined(COMPILER_MSVC)
     __debugbreak();
 #elif defined(COMPILER_CLANG) || defined(COMPILER_GCC)
@@ -64,7 +64,7 @@ static inline S32 safe_cast_u32_s32_impl(U32 value) {
 #define LIKELY(condition) [[likely]] (condition)
 #define UNLIKELY(condition) [[unlikely]] (condition)
 #else
-// Fallback for older MSVC or non-C++20
+// Older MSVC or non-C++20 path
 #define LIKELY(condition) (condition)
 #define UNLIKELY(condition) (condition)
 #endif
@@ -283,6 +283,35 @@ do { \
 } while (false)
 
 #define FREELIST_IS_EMPTY(head) ((head) == 0)
+
+// //////////////////////////////
+// Linked Lists
+
+#define CHECK_NIL(nil, node) ((node) == 0 || (node) == (nil))
+#define SET_NIL(nil, node) ((node) = (nil))
+
+#define SLL_QUEUE_PUSH_NZ(nil, first, last, node, nextField) \
+do { \
+    if (CHECK_NIL((nil), (first))) { \
+        (first) = (node); \
+        (last) = (node); \
+        SET_NIL((nil), (node)->nextField); \
+    } else { \
+        (last)->nextField = (node); \
+        (last) = (node); \
+        SET_NIL((nil), (node)->nextField); \
+    } \
+} while (false)
+
+#define SLL_QUEUE_POP_NZ(nil, first, last, nextField) \
+do { \
+    if ((first) == (last)) { \
+        SET_NIL((nil), (first)); \
+        SET_NIL((nil), (last)); \
+    } else { \
+        (first) = (first)->nextField; \
+    } \
+} while (false)
 
 // //////////////////////////////
 // Ranges

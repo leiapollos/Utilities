@@ -6,429 +6,213 @@
 #include "app_tests.hpp"
 #include "app_state.hpp"
 
-#include "imgui.h"
-
-#include "app/app_camera.cpp"
 #include "app_tests.cpp"
-#include "app/app_scene_sponza.cpp"
-#include "app/app_scene_radiance_2d.cpp"
-#include "nstl/artifact/artifact_include.hpp"
-#include "nstl/artifact/artifact_include.cpp"
 
-#include <dirent.h>
-#include <sys/stat.h>
+#define APP_CORE_STATE_VERSION 18u
+#define APP_TESTS_STATE_VERSION 2u
 
-#define APP_CORE_STATE_VERSION 9u
-#define APP_ARTIFACT_TYPE_SHADER 1u
-#define APP_SHADER_COMPILE_SIGNATURE "backend=vulkan|compiler=dxc|spirv=1|entry=main"
+static const APP_StateDesc* app_state_desc(APP_StateKind kind);
+static void* app_state_require(APP_Context* ctx, APP_StateKind kind);
+static B32 app_context_from_call(AppHost* host, HOT_StateStore* store, APP_Context* outCtx);
+static void app_state_init(APP_Context* ctx, APP_StateKind kind, void* memory);
+static U32 app_select_worker_count(const AppHost* host);
+static B32 app_ensure_job_system(APP_Context* ctx);
+static B32 app_should_run_tests(AppHost* host);
 
-#define APP_ARTIFACT_CACHE_INITIAL_SLOTS 256u
-#define APP_ARTIFACT_CACHE_INITIAL_HASH 512u
-#define APP_ARTIFACT_CACHE_BUDGET_BYTES MB(16)
-
-static U64 app_total_permanent_size(void);
-static AppCoreState* app_get_state(AppMemory* memory);
-static void app_assign_tests_state(AppCoreState* state);
-static AppTestsState* app_get_tests(AppCoreState* state);
-static U32 app_select_worker_count(const AppHostContext* host);
-static B32 app_initialize_artifact_cache(AppPlatform* platform, AppMemory* memory, AppHostContext* host,
-                                         AppCoreState* state, B32 forceReset);
-static B32 app_register_artifact_types(AppPlatform* platform, AppHostContext* host, AppCoreState* state);
-static StringU8 app_shader_path_from_artifact_key(StringU8 key);
-static B32 app_shader_artifact_loader(void* userData, Arena* arena, U32 typeId, StringU8 key,
-                                      ArtifactPayload* outPayload);
-static void app_shader_artifact_release(void* userData, U32 typeId, StringU8 key, ArtifactPayload payload);
-static void app_compile_shaders_from_folder(AppPlatform* platform, AppMemory* memory, AppHostContext* host);
-static void app_request_close(AppPlatform* platform, AppHostContext* host, AppCoreState* state);
-static void app_switch_scene(AppCoreState* state, AppSceneKind scene);
-static void app_apply_scene_switch(AppCoreState* state);
-static const char* app_scene_name(AppSceneKind scene);
-
-struct AppShaderArtifactContext {
-    AppPlatform* platform;
-    AppHostContext* host;
-    AppCoreState* state;
-};
-
-struct AppShaderArtifactPayload {
-    ShaderHandle handle;
-    StringU8 shaderPath;
-};
-
-static AppShaderArtifactContext g_appShaderArtifactContext = {};
-
-static B32 app_initialize(AppPlatform* platform, AppMemory* memory, AppHostContext* host) {
-    ASSERT_ALWAYS(platform != 0);
-    ASSERT_ALWAYS(memory != 0);
+static B32 app_boot(AppHost* host, HOT_StateStore* store) {
     ASSERT_ALWAYS(host != 0);
-    ASSERT_ALWAYS(memory->permanentStorage != 0);
+    ASSERT_ALWAYS(store != 0);
 
-    AppCoreState* state = app_get_state(memory);
-    B32 needsReset = (!memory->isInitialized) || (state->version != APP_CORE_STATE_VERSION);
-
-    if (needsReset) {
-        U64 totalSize = app_total_permanent_size();
-        totalSize = (totalSize > memory->permanentStorageSize) ? memory->permanentStorageSize : totalSize;
-        MEMSET(memory->permanentStorage, 0, totalSize);
-        memory->isInitialized = 1;
-    }
-
-    state = app_get_state(memory);
-    app_assign_tests_state(state);
-    AppTestsState* tests = app_get_tests(state);
-
-    thread_context_alloc();
     log_init();
+    set_log_level(LogLevel_Info);
 
-    if (needsReset) {
-        state->version = APP_CORE_STATE_VERSION;
-        state->desiredWindow.title = "Utilities Hot Reload";
-        state->desiredWindow.width = 1280u;
-        state->desiredWindow.height = 720u;
-        state->windowHandle.handle = 0;
-        state->frameCounter = 0;
-        state->reloadCount = 0;
-        state->artifactCache = 0;
-        state->activeScene = AppSceneKind_Sponza;
-        state->pendingSceneSwitch = AppSceneKind_Sponza;
-
-        set_log_level(LogLevel_Info);
-        StringU8 eventsDomain = str8((const char*) "events", 6);
-        set_log_domain_level(eventsDomain, LogLevel_Debug);
-    }
-
-    if (!state->jobSystem) {
-        state->workerCount = app_select_worker_count(host);
-        state->jobSystem = job_system_create(memory->programArena, state->workerCount);
-        if (!state->jobSystem) {
-            LOG_ERROR("jobs", "Failed to create job system (workers={})", state->workerCount);
-            ASSERT_ALWAYS(state->jobSystem != 0);
-        } else {
-            LOG_INFO("jobs", "Job system ready (workers={})", state->workerCount);
-        }
-    }
-
-    if (needsReset) {
-        app_tests_initialize(memory, state, tests);
-    }
-
-    host->reloadCount = state->reloadCount;
-
-    if (!state->windowHandle.handle) {
-        OS_WindowDesc desc = {};
-        desc.title = state->desiredWindow.title;
-        desc.width = state->desiredWindow.width;
-        desc.height = state->desiredWindow.height;
-        state->windowHandle = PLATFORM_OS_CALL(platform, OS_window_create, desc);
-    }
-
-    ASSERT_ALWAYS(state->windowHandle.handle != 0);
-    ASSERT_ALWAYS(host->renderer != 0);
-
-    if (state->desiredWindow.width > 0u && state->desiredWindow.height > 0u) {
-        PLATFORM_RENDERER_CALL(platform,
-                               renderer_imgui_set_window_size,
-                               host->renderer,
-                               state->desiredWindow.width,
-                               state->desiredWindow.height);
-    }
-
-    B32 imguiInitOk = PLATFORM_RENDERER_CALL(platform,
-                                             renderer_imgui_init,
-                                             host->renderer,
-                                             state->windowHandle);
-    ASSERT_ALWAYS(imguiInitOk != 0);
-
-    if (!app_initialize_artifact_cache(platform, memory, host, state, 0)) {
+    APP_Context ctx = {};
+    if (!app_context_from_call(host, store, &ctx)) {
         return 0;
     }
 
-    app_compile_shaders_from_folder(platform, memory, host);
-
-    app_scene_sponza_init(platform, memory, host, state);
-    app_scene_radiance_2d_init(platform, memory, host, state);
-
-    if (needsReset) {
-        state->camera.position = {{0.0f, 0.5f, 0.0f}};
-        state->camera.velocity = {{0.0f, 0.0f, 0.0f}};
-        camera_init(&state->camera);
-        state->camera.sensitivity = 0.005f;
-        state->camera.moveSpeed = 1.0f;
-        app_scene_sponza_on_enter(state);
+    ctx.core->testsEnabled = app_should_run_tests(host);
+    if (ctx.core->testsEnabled) {
+        LOG_INFO("tests", "Per-frame tests enabled by UTILITIES_RUN_TESTS");
+        if (!app_ensure_job_system(&ctx)) {
+            return 0;
+        }
     }
 
+    ASSERT_ALWAYS(host->window.handle != 0);
     return 1;
 }
 
-static void app_reload(AppPlatform* platform, AppMemory* memory, AppHostContext* host) {
-    ASSERT_ALWAYS(platform != 0);
-    ASSERT_ALWAYS(memory != 0);
+static void app_before_reload(AppHost* host, HOT_StateStore* store) {
+    (void) host;
+    (void) store;
+}
+
+static B32 app_after_reload(AppHost* host, HOT_StateStore* store) {
     ASSERT_ALWAYS(host != 0);
+    ASSERT_ALWAYS(store != 0);
 
-    AppCoreState* state = app_get_state(memory);
-    app_assign_tests_state(state);
-    AppTestsState* tests = app_get_tests(state);
+    log_init();
 
-    state->reloadCount += 1;
-    host->reloadCount = state->reloadCount;
-
-    if (!app_initialize_artifact_cache(platform, memory, host, state, 1)) {
-        LOG_ERROR("artifact", "Failed to reset artifact cache during reload");
-    } else {
-        app_compile_shaders_from_folder(platform, memory, host);
+    APP_Context ctx = {};
+    if (!app_context_from_call(host, store, &ctx)) {
+        return 0;
     }
 
-    app_tests_reload(memory, state, tests);
+    ctx.core->reloadCount += 1u;
+    ctx.core->testsEnabled = app_should_run_tests(host);
+
+    if (ctx.core->testsEnabled && !app_ensure_job_system(&ctx)) {
+        return 0;
+    }
+
+    app_tests_reload(&ctx, ctx.tests);
+    return 1;
 }
 
-static void app_request_close(AppPlatform* platform, AppHostContext* host, AppCoreState* state) {
-    ASSERT_ALWAYS(platform != 0);
+static void app_frame(AppHost* host, HOT_StateStore* store, const AppInput* input) {
     ASSERT_ALWAYS(host != 0);
-    ASSERT_ALWAYS(state != 0);
-
-    if (!state->windowHandle.handle) {
-        host->shouldQuit = 1;
-        return;
-    }
-
-    OS_WindowHandle closedHandle = state->windowHandle;
-    state->windowHandle.handle = 0;
-    host->shouldQuit = 1;
-    PLATFORM_OS_CALL(platform, OS_window_destroy, closedHandle);
-}
-
-static void app_switch_scene(AppCoreState* state, AppSceneKind scene) {
-    ASSERT_ALWAYS(state != 0);
-    if (scene >= AppSceneKind_COUNT) {
-        return;
-    }
-    state->pendingSceneSwitch = scene;
-}
-
-static void app_apply_scene_switch(AppCoreState* state) {
-    ASSERT_ALWAYS(state != 0);
-    if (state->pendingSceneSwitch == state->activeScene) {
-        return;
-    }
-
-    AppSceneKind nextScene = state->pendingSceneSwitch;
-    state->activeScene = nextScene;
-
-    if (nextScene == AppSceneKind_Sponza) {
-        app_scene_sponza_on_enter(state);
-    } else if (nextScene == AppSceneKind_Radiance2D) {
-        app_scene_radiance_2d_on_enter(state);
-    }
-}
-
-static const char* app_scene_name(AppSceneKind scene) {
-    if (scene == AppSceneKind_Sponza) {
-        return "Sponza";
-    }
-    if (scene == AppSceneKind_Radiance2D) {
-        return "Radiance2D";
-    }
-    return "Unknown";
-}
-
-static void app_update(AppPlatform* platform, AppMemory* memory, AppHostContext* host, const AppInput* input,
-                       F32 deltaSeconds) {
-    ASSERT_ALWAYS(platform != 0);
-    ASSERT_ALWAYS(memory != 0);
-    ASSERT_ALWAYS(memory->permanentStorage != 0);
-    ASSERT_ALWAYS(memory->isInitialized != 0);
-    ASSERT_ALWAYS(host != 0);
-    ASSERT_ALWAYS(host->renderer != 0);
+    ASSERT_ALWAYS(store != 0);
     ASSERT_ALWAYS(input != 0);
 
-    AppCoreState* state = app_get_state(memory);
-    AppTestsState* tests = app_get_tests(state);
+    APP_Context ctx = {};
+    if (!app_context_from_call(host, store, &ctx)) {
+        return;
+    }
 
+    AppCoreState* state = ctx.core;
+    state->windowWidth = host->windowWidth;
+    state->windowHeight = host->windowHeight;
     state->frameCounter += 1ull;
 
-    PLATFORM_RENDERER_CALL(platform,
-                           renderer_imgui_process_events,
-                           host->renderer,
-                           input->events,
-                           input->eventCount);
-
     for (U32 eventIndex = 0; eventIndex < input->eventCount; ++eventIndex) {
-        const OS_GraphicsEvent* evt = input->events + eventIndex;
-        ASSERT_ALWAYS(evt != 0);
+        const OS_GraphicsEvent* event = input->events + eventIndex;
+        ASSERT_ALWAYS(event != 0);
 
-        B32 imguiWantCaptureMouse = ImGui::GetIO().WantCaptureMouse ? 1 : 0;
-
-        switch (evt->tag) {
-            case OS_GraphicsEvent_Tag_WindowShown: {
-                if (!state->windowHandle.handle) {
-                    state->windowHandle = evt->window;
-                }
-                if (evt->windowShown.width != 0u && evt->windowShown.height != 0u) {
-                    state->desiredWindow.width = evt->windowShown.width;
-                    state->desiredWindow.height = evt->windowShown.height;
-                    PLATFORM_RENDERER_CALL(platform,
-                                           renderer_imgui_set_window_size,
-                                           host->renderer,
-                                           state->desiredWindow.width,
-                                           state->desiredWindow.height);
-                }
-            }
-            break;
-
-            case OS_GraphicsEvent_Tag_WindowClosed:
-            case OS_GraphicsEvent_Tag_WindowDestroyed: {
-                if (state->windowHandle.handle == evt->window.handle) {
-                    app_request_close(platform, host, state);
-                    return;
-                }
-            }
-            break;
-
-            case OS_GraphicsEvent_Tag_WindowResized: {
-                if (state->windowHandle.handle == evt->window.handle) {
-                    state->desiredWindow.width = evt->windowResized.width;
-                    state->desiredWindow.height = evt->windowResized.height;
-                    RendererResizeDesc resizeDesc =
-                        renderer_resize_desc(state->desiredWindow.width, state->desiredWindow.height);
-                    PLATFORM_RENDERER_CALL(platform,
-                                           renderer_resize,
-                                           host->renderer,
-                                           &resizeDesc);
-                }
-            }
-            break;
-
-            case OS_GraphicsEvent_Tag_KeyDown: {
-                if (evt->keyDown.keyCode == OS_KeyCode_F2 && !evt->keyDown.isRepeat) {
-                    AppSceneKind toggled = (state->activeScene == AppSceneKind_Sponza)
-                                               ? AppSceneKind_Radiance2D
-                                               : AppSceneKind_Sponza;
-                    app_switch_scene(state, toggled);
-                }
-            }
-            break;
-
-            default: {
-            }
-            break;
-        }
-
-        if (state->activeScene == AppSceneKind_Sponza) {
-            app_scene_sponza_handle_event(evt, state, imguiWantCaptureMouse);
-        } else if (state->activeScene == AppSceneKind_Radiance2D) {
-            app_scene_radiance_2d_handle_event(evt, state, imguiWantCaptureMouse);
+        if (event->tag == OS_GraphicsEvent_Tag_KeyDown &&
+            event->keyDown.keyCode == OS_KeyCode_Escape &&
+            !event->keyDown.isRepeat) {
+            host->shouldQuit = 1;
         }
     }
 
-    ASSERT_ALWAYS(state->windowHandle.handle != 0);
-
-    PLATFORM_RENDERER_CALL(platform,
-                           renderer_imgui_set_window_size,
-                           host->renderer,
-                           state->desiredWindow.width,
-                           state->desiredWindow.height);
-
-    app_apply_scene_switch(state);
-    app_tests_tick(memory, state, tests, deltaSeconds);
-
-    PLATFORM_RENDERER_CALL(platform,
-                           renderer_imgui_begin_frame,
-                           host->renderer,
-                           deltaSeconds);
-
-    ImGui::Text("frameTime: %f", (double) deltaSeconds);
-    ImGui::Text("FPS: %f", (double) (1.0f / MAX(deltaSeconds, 0.000001f)));
-    ImGui::Text("frameNumber: %lld", state->frameCounter);
-
-    int selectedScene = (int) state->activeScene;
-    const char* sceneNames[AppSceneKind_COUNT] = {"Sponza", "Radiance2D"};
-    if (ImGui::Combo("Scene", &selectedScene, sceneNames, AppSceneKind_COUNT)) {
-        app_switch_scene(state, (AppSceneKind) selectedScene);
-    }
-
-    ImGui::Text("Active Scene: %s", app_scene_name(state->activeScene));
-
-    if (state->activeScene == AppSceneKind_Sponza) {
-        app_scene_sponza_build_ui(state);
-    } else if (state->activeScene == AppSceneKind_Radiance2D) {
-        app_scene_radiance_2d_build_ui(state);
-    }
-
-    PLATFORM_RENDERER_CALL(platform,
-                           renderer_imgui_end_frame,
-                           host->renderer);
-
-    app_apply_scene_switch(state);
-
-    if (state->activeScene == AppSceneKind_Sponza) {
-        app_scene_sponza_render(platform, host, state, deltaSeconds);
-    } else if (state->activeScene == AppSceneKind_Radiance2D) {
-        app_scene_radiance_2d_render(platform, host, state, deltaSeconds);
+    if (state->testsEnabled) {
+        app_tests_tick(&ctx, ctx.tests, input->deltaSeconds);
     }
 }
 
-static void app_shutdown(AppPlatform* platform, AppMemory* memory, AppHostContext* host) {
-    ASSERT_ALWAYS(platform != 0);
-    ASSERT_ALWAYS(memory != 0);
-    ASSERT_ALWAYS(memory->permanentStorage != 0);
+static void app_shutdown(AppHost* host, HOT_StateStore* store) {
     ASSERT_ALWAYS(host != 0);
-    ASSERT_ALWAYS(host->renderer != 0);
+    ASSERT_ALWAYS(store != 0);
 
-    AppCoreState* state = app_get_state(memory);
-    AppTestsState* tests = app_get_tests(state);
-
-    app_scene_radiance_2d_shutdown(platform, host, state);
-    app_scene_sponza_shutdown(platform, host, state);
-
-    PLATFORM_RENDERER_CALL(platform,
-                           renderer_imgui_shutdown,
-                           host->renderer);
-
-    app_tests_shutdown(memory, state, tests);
-
-    if (state->artifactCache) {
-        artifact_cache_destroy(state->artifactCache);
-        state->artifactCache = 0;
+    APP_Context ctx = {};
+    if (!app_context_from_call(host, store, &ctx)) {
+        return;
     }
 
-    if (state->jobSystem) {
-        job_system_destroy(state->jobSystem);
-        state->jobSystem = 0;
-        state->workerCount = 0;
-    }
+    app_tests_shutdown(&ctx, ctx.tests);
 
-    if (state->windowHandle.handle) {
-        PLATFORM_OS_CALL(platform, OS_window_destroy, state->windowHandle);
-        state->windowHandle.handle = 0;
+    if (ctx.core->jobSystem) {
+        job_system_destroy(ctx.core->jobSystem);
+        ctx.core->jobSystem = 0;
+        ctx.core->workerCount = 0;
     }
 }
 
-// ////////////////////////
-// App Helpers
+static const APP_StateDesc* app_state_desc(APP_StateKind kind) {
+    static const APP_StateDesc descs[APP_State_COUNT] = {
+        {APP_STATE_ID('C', 'O', 'R', 'E'), "core", APP_CORE_STATE_VERSION,
+         sizeof(AppCoreState), alignof(AppCoreState)},
+        {APP_STATE_ID('T', 'E', 'S', 'T'), "tests", APP_TESTS_STATE_VERSION,
+         sizeof(AppTestsState), alignof(AppTestsState)},
+    };
 
-static U64 app_total_permanent_size(void) {
-    return sizeof(AppCoreState) + app_tests_permanent_size();
+    if ((U32) kind >= APP_State_COUNT) {
+        return 0;
+    }
+    return &descs[(U32) kind];
 }
 
-static AppCoreState* app_get_state(AppMemory* memory) {
-    ASSERT_DEBUG(memory != 0);
-    ASSERT_DEBUG(memory->permanentStorage != 0);
-    ASSERT_DEBUG(memory->permanentStorageSize >= app_total_permanent_size());
-    return (AppCoreState*) memory->permanentStorage;
+static void* app_state_require(APP_Context* ctx, APP_StateKind kind) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->store != 0);
+
+    const APP_StateDesc* desc = app_state_desc(kind);
+    if (desc == 0) {
+        LOG_ERROR("app", "Invalid state kind {}", (U32) kind);
+        return 0;
+    }
+
+    void* memory = hot_state_store_require(ctx->store, desc->id, desc->version, desc->size, desc->alignment);
+    if (memory == 0) {
+        LOG_ERROR("app", "State '{}' unavailable (size={} align={})", str8((const char*)desc->name),
+                  desc->size, desc->alignment);
+        return 0;
+    }
+
+    if (hot_state_store_take_needs_init(ctx->store, desc->id)) {
+        app_state_init(ctx, kind, memory);
+    }
+
+    return memory;
 }
 
-static void app_assign_tests_state(AppCoreState* state) {
-    ASSERT_ALWAYS(state != 0);
-    U8* base = (U8*) state;
-    state->tests = (AppTestsState*) (base + sizeof(AppCoreState));
+static B32 app_context_from_call(AppHost* host, HOT_StateStore* store, APP_Context* outCtx) {
+    ASSERT_ALWAYS(outCtx != 0);
+    MEMSET(outCtx, 0, sizeof(*outCtx));
+
+    if (host == 0 || store == 0 || !hot_state_store_is_valid(store)) {
+        LOG_ERROR("app", "Invalid app call context");
+        return 0;
+    }
+
+    APP_Context ctx = {};
+    ctx.host = host;
+    ctx.store = store;
+
+    ctx.core = (AppCoreState*) app_state_require(&ctx, APP_State_Core);
+    if (ctx.core == 0) {
+        return 0;
+    }
+
+    ctx.tests = (AppTestsState*) app_state_require(&ctx, APP_State_Tests);
+    if (ctx.tests == 0) {
+        return 0;
+    }
+
+    *outCtx = ctx;
+    return 1;
 }
 
-static AppTestsState* app_get_tests(AppCoreState* state) {
-    ASSERT_ALWAYS(state != 0);
-    return state->tests;
+static void app_state_init(APP_Context* ctx, APP_StateKind kind, void* memory) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(memory != 0);
+
+    switch (kind) {
+        case APP_State_Core: {
+            AppCoreState* core = (AppCoreState*) memory;
+            MEMSET(core, 0, sizeof(*core));
+            core->windowWidth = ctx->host->windowWidth;
+            core->windowHeight = ctx->host->windowHeight;
+
+            StringU8 eventsDomain = str8((const char*) "events", 6);
+            set_log_domain_level(eventsDomain, LogLevel_Debug);
+        }
+        break;
+
+        case APP_State_Tests: {
+            app_tests_initialize(ctx, (AppTestsState*) memory);
+        }
+        break;
+
+        default: {
+            ASSERT_ALWAYS(false && "Invalid app state kind");
+        }
+        break;
+    }
 }
 
-static U32 app_select_worker_count(const AppHostContext* host) {
+static U32 app_select_worker_count(const AppHost* host) {
     ASSERT_ALWAYS(host != 0);
     U32 logicalCores = host->logicalCoreCount;
     if (logicalCores == 0u) {
@@ -439,97 +223,31 @@ static U32 app_select_worker_count(const AppHostContext* host) {
     return workers;
 }
 
-static B32 app_initialize_artifact_cache(AppPlatform* platform, AppMemory* memory, AppHostContext* host,
-                                         AppCoreState* state, B32 forceReset) {
-    ASSERT_ALWAYS(platform != 0);
-    ASSERT_ALWAYS(memory != 0);
-    ASSERT_ALWAYS(host != 0);
-    ASSERT_ALWAYS(state != 0);
-    ASSERT_ALWAYS(memory->programArena != 0);
+static B32 app_ensure_job_system(APP_Context* ctx) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->host != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+    ASSERT_ALWAYS(ctx->host->stateArena != 0);
 
-    g_appShaderArtifactContext.platform = platform;
-    g_appShaderArtifactContext.host = host;
-    g_appShaderArtifactContext.state = state;
-
-    if (!state->artifactCache) {
-        state->artifactCache = ARENA_PUSH_STRUCT(memory->programArena, ArtifactCache);
-        ASSERT_ALWAYS(state->artifactCache != 0);
-        if (!state->artifactCache) {
-            return 0;
-        }
-
-        ArtifactCacheDesc cacheDesc = {};
-        cacheDesc.structSize = sizeof(cacheDesc);
-        cacheDesc.apiVersion = ARTIFACT_CACHE_API_VERSION;
-        cacheDesc.arena = memory->programArena;
-        cacheDesc.jobSystem = state->jobSystem;
-        cacheDesc.initialSlotCapacity = APP_ARTIFACT_CACHE_INITIAL_SLOTS;
-        cacheDesc.initialHashCapacity = APP_ARTIFACT_CACHE_INITIAL_HASH;
-        cacheDesc.budgetBytes = APP_ARTIFACT_CACHE_BUDGET_BYTES;
-        cacheDesc.maxTypeId = 16u;
-
-        if (!artifact_cache_create(&cacheDesc, state->artifactCache)) {
-            LOG_ERROR("artifact", "artifact_cache_create failed");
-            state->artifactCache = 0;
-            return 0;
-        }
-    } else if (forceReset) {
-        artifact_cache_reset(state->artifactCache);
+    AppCoreState* state = ctx->core;
+    if (state->jobSystem) {
+        return 1;
     }
 
-    return app_register_artifact_types(platform, host, state);
-}
-
-static B32 app_register_artifact_types(AppPlatform* platform, AppHostContext* host, AppCoreState* state) {
-    ASSERT_ALWAYS(platform != 0);
-    ASSERT_ALWAYS(host != 0);
-    ASSERT_ALWAYS(state != 0);
-    ASSERT_ALWAYS(state->artifactCache != 0);
-
-    g_appShaderArtifactContext.platform = platform;
-    g_appShaderArtifactContext.host = host;
-    g_appShaderArtifactContext.state = state;
-
-    ArtifactTypeOps shaderOps = {};
-    shaderOps.load = app_shader_artifact_loader;
-    shaderOps.release = app_shader_artifact_release;
-    shaderOps.userData = &g_appShaderArtifactContext;
-
-    if (!artifact_cache_register_type(state->artifactCache, APP_ARTIFACT_TYPE_SHADER, &shaderOps)) {
-        LOG_ERROR("artifact", "Failed to register shader artifact type");
+    state->workerCount = app_select_worker_count(ctx->host);
+    state->jobSystem = job_system_create(ctx->host->stateArena, state->workerCount);
+    if (!state->jobSystem) {
+        LOG_ERROR("jobs", "Failed to create job system (workers={})", state->workerCount);
+        ASSERT_ALWAYS(state->jobSystem != 0);
         return 0;
     }
 
+    LOG_INFO("jobs", "Job system ready (workers={})", state->workerCount);
     return 1;
 }
 
-static StringU8 app_shader_path_from_artifact_key(StringU8 key) {
-    for (U64 i = 0u; i < key.size; ++i) {
-        if (key.data[i] == (U8)'|') {
-            return str8(key.data, i);
-        }
-    }
-    return key;
-}
-
-static B32 app_shader_artifact_loader(void* userData, Arena* arena, U32 typeId, StringU8 key,
-                                      ArtifactPayload* outPayload) {
-    if (!userData || !arena || !outPayload) {
-        return 0;
-    }
-    if (typeId != APP_ARTIFACT_TYPE_SHADER) {
-        return 0;
-    }
-
-    AppShaderArtifactContext* context = (AppShaderArtifactContext*)userData;
-    if (!context->platform || !context->host || !context->state || !context->host->renderer || !context->state->jobSystem) {
-        return 0;
-    }
-
-    StringU8 shaderPath = app_shader_path_from_artifact_key(key);
-    if (str8_is_nil(shaderPath) || shaderPath.size == 0u) {
-        return 0;
-    }
+static B32 app_should_run_tests(AppHost* host) {
+    ASSERT_ALWAYS(host != 0);
 
     Temp scratch = get_scratch(0, 0);
     if (!scratch.arena) {
@@ -537,155 +255,41 @@ static B32 app_shader_artifact_loader(void* userData, Arena* arena, U32 typeId, 
     }
     DEFER_REF(temp_end(&scratch));
 
-    Renderer* renderer = context->host->renderer;
-    if (!renderer->compileShader || !renderer->mergeShaderResults) {
+    StringU8 value = APP_OS_CALL(host, OS_get_environment_variable, scratch.arena, str8("UTILITIES_RUN_TESTS"));
+    if (!value.data || value.size == 0u) {
         return 0;
     }
 
-    StringU8 shaderPathCopy = str8_cpy(scratch.arena, shaderPath);
-
-    ShaderCompileResult result = {};
-    if (!renderer->compileShader(renderer->backendData, scratch.arena, shaderPathCopy, &result) || !result.valid) {
-        LOG_ERROR("artifact", "Shader compile failed for '{}'", shaderPath);
-        return 0;
+    U8 first = value.data[0];
+    if (first == (U8)'1' || first == (U8)'t' || first == (U8)'T' ||
+        first == (U8)'y' || first == (U8)'Y') {
+        return 1;
     }
-
-    ShaderHandle handle = SHADER_HANDLE_INVALID;
-    ShaderCompileRequest request = {};
-    request.shaderPath = shaderPathCopy;
-    request.outHandle = &handle;
-    renderer->mergeShaderResults(renderer->backendData, scratch.arena, &result, 1u, &request, 1u);
-
-    if (SHADER_HANDLE_IS_INVALID(handle)) {
-        LOG_ERROR("artifact", "Shader merge failed for '{}'", shaderPath);
-        return 0;
-    }
-
-    AppShaderArtifactPayload* payloadData = ARENA_PUSH_STRUCT(arena, AppShaderArtifactPayload);
-    if (!payloadData) {
-        return 0;
-    }
-
-    payloadData->handle = handle;
-    payloadData->shaderPath = str8_cpy(arena, shaderPath);
-
-    outPayload->data = payloadData;
-    outPayload->size = sizeof(*payloadData);
-    return 1;
+    return 0;
 }
 
-static void app_shader_artifact_release(void* userData, U32 typeId, StringU8 key, ArtifactPayload payload) {
-    (void)userData;
-    (void)typeId;
-    (void)key;
-    (void)payload;
-}
+APP_EXPORT B32 app_load(AppLoadParams* params, AppCode* outCode) {
+    ASSERT_ALWAYS(params != 0);
+    ASSERT_ALWAYS(outCode != 0);
 
-static void app_compile_shaders_from_folder(AppPlatform* platform, AppMemory* memory, AppHostContext* host) {
-    ASSERT_ALWAYS(platform != 0);
-    ASSERT_ALWAYS(memory != 0);
-    ASSERT_ALWAYS(host != 0);
-    ASSERT_ALWAYS(host->renderer != 0);
-    AppCoreState* state = app_get_state(memory);
-    ASSERT_ALWAYS(state->jobSystem != 0);
-    ASSERT_ALWAYS(state->artifactCache != 0);
-
-    Temp scratch = get_scratch(0, 0);
-    ASSERT_ALWAYS(scratch.arena != 0);
-    DEFER_REF(temp_end(&scratch));
-    Arena* arena = scratch.arena;
-
-    StringU8 shadersDir = str8("shaders");
-    DIR* dir = opendir((const char*) shadersDir.data);
-    ASSERT_ALWAYS(dir != 0);
-
-    Str8List shaderFiles = {};
-    str8list_init(&shaderFiles, arena, 16u);
-
-    struct dirent* entry;
-    while ((entry = readdir(dir)) != 0) {
-        if (entry->d_name[0] == '.') {
-            continue;
-        }
-
-        StringU8 fileName = str8((const char*) entry->d_name, C_STR_LEN(entry->d_name));
-
-        if (fileName.size < 5) {
-            continue;
-        }
-
-        StringU8 suffix = str8((const char*) fileName.data + fileName.size - 5, 5);
-        if (!str8_equal(suffix, str8(".hlsl"))) {
-            continue;
-        }
-
-        StringU8 shaderPath = str8_concat(arena, shadersDir, str8("/"), fileName);
-
-        OS_FileInfo fileInfo = OS_get_file_info((const char*) shaderPath.data);
-        if (fileInfo.exists) {
-            str8list_push(&shaderFiles, shaderPath);
-        }
+    if (params == 0 || outCode == 0) {
+        return 0;
     }
-    closedir(dir);
-
-    if (shaderFiles.count == 0u) {
-        LOG_WARNING("artifact", "No .hlsl shader files found in '{}'", shadersDir);
-        return;
+    if (params->size != sizeof(AppLoadParams) || params->abiVersion != APP_ABI_VERSION) {
+        return 0;
+    }
+    if (params->host == 0 || params->store == 0) {
+        return 0;
     }
 
-    ArtifactUseScope scope = {};
-    if (!artifact_use_scope_open(state->artifactCache, arena, &scope)) {
-        LOG_ERROR("artifact", "Failed to open artifact use scope");
-        return;
-    }
-
-    ArtifactHandle* handles = ARENA_PUSH_ARRAY(arena, ArtifactHandle, shaderFiles.count);
-    ASSERT_ALWAYS(handles != 0);
-
-    for (U64 i = 0u; i < shaderFiles.count; ++i) {
-        StringU8 shaderPath = str8_cpy(arena, shaderFiles.items[i]);
-        StringU8 artifactKey = str8_concat(arena, shaderPath, str8("|"), str8(APP_SHADER_COMPILE_SIGNATURE));
-        handles[i] = artifact_acquire(&scope,
-                                      APP_ARTIFACT_TYPE_SHADER,
-                                      artifactKey,
-                                      ArtifactAcquireFlags_Async);
-    }
-
-    B32 hadErrors = 0;
-    {
-        TIME_SCOPE("Shader Compilation");
-        for (U64 i = 0u; i < shaderFiles.count; ++i) {
-            if (ARTIFACT_HANDLE_IS_INVALID(handles[i])) {
-                hadErrors = 1;
-                continue;
-            }
-
-            ArtifactStatus status = artifact_wait(state->artifactCache, handles[i], ARTIFACT_WAIT_INFINITE);
-            if (status != ArtifactStatus_Ready) {
-                hadErrors = 1;
-                LOG_ERROR("artifact", "Shader artifact wait failed (status={})", (U32)status);
-            }
-        }
-    }
-
-    artifact_use_scope_close(&scope);
-    artifact_cache_evict(state->artifactCache, 16u);
-
-    if (hadErrors) {
-        LOG_ERROR("artifact", "Shader artifact prewarm finished with errors");
-    }
-}
-
-APP_MODULE_EXPORT B32 app_get_entry_points(AppModuleExports* outExports) {
-    ASSERT_ALWAYS(outExports != 0);
-    MEMSET(outExports, 0, sizeof(AppModuleExports));
-    outExports->interfaceVersion = APP_INTERFACE_VERSION;
-    outExports->requiredPermanentMemory = app_total_permanent_size();
-    outExports->requiredTransientMemory = 0;
-    outExports->requiredProgramArenaSize = 0;
-    outExports->initialize = app_initialize;
-    outExports->reload = app_reload;
-    outExports->update = app_update;
-    outExports->shutdown = app_shutdown;
+    MEMSET(outCode, 0, sizeof(*outCode));
+    outCode->size = sizeof(*outCode);
+    outCode->abiVersion = APP_ABI_VERSION;
+    outCode->schemaVersion = APP_STATE_SCHEMA_VERSION;
+    outCode->boot = app_boot;
+    outCode->before_reload = app_before_reload;
+    outCode->after_reload = app_after_reload;
+    outCode->frame = app_frame;
+    outCode->shutdown = app_shutdown;
     return 1;
 }

@@ -7,9 +7,13 @@
 #include "nstl/base/base_include.hpp"
 #include "nstl/os/core/os_core.hpp"
 #include "nstl/os/graphics/os_graphics.hpp"
-#include "nstl/renderer/renderer.hpp"
 
-#define APP_INTERFACE_VERSION 6u
+#define APP_ABI_VERSION 11u
+#define APP_STATE_SCHEMA_VERSION 2u
+#define APP_MODULE_SOURCE_RELATIVE "hot/utilities_app.dylib"
+#define HOT_STATE_STORE_MAGIC 0x4853544F52453031ull
+#define HOT_STATE_STORE_VERSION 1u
+#define HOT_STATE_STORE_MAX_SLOTS 64u
 
 #define PLATFORM_OS_FUNCTIONS(X) \
     X(OS_graphics_init) \
@@ -55,53 +59,148 @@
     X(OS_get_system_info) \
     X(OS_abort)
 
-struct PlatformOSApi {
+struct AppOSApi {
 #define PLATFORM_DECLARE_OS_FN(name) decltype(&name) name;
     PLATFORM_OS_FUNCTIONS(PLATFORM_DECLARE_OS_FN)
 #undef PLATFORM_DECLARE_OS_FN
 };
 
-#define PLATFORM_OS_FN(platform, name) ((platform)->os.name)
-#define PLATFORM_OS_CALL(platform, name, ...) ((platform)->os.name(__VA_ARGS__))
+#define APP_OS_FN(host, name) ((host)->os.name)
+#define APP_OS_CALL(host, name, ...) ((host)->os.name(__VA_ARGS__))
 
-#define PLATFORM_RENDERER_FUNCTIONS(X) \
-    X(renderer_create) \
-    X(renderer_shutdown) \
-    X(renderer_begin_frame) \
-    X(renderer_submit) \
-    X(renderer_submit_radiance_2d) \
-    X(renderer_end_frame) \
-    X(renderer_resize) \
-    X(renderer_imgui_init) \
-    X(renderer_imgui_shutdown) \
-    X(renderer_imgui_process_events) \
-    X(renderer_imgui_begin_frame) \
-    X(renderer_imgui_end_frame) \
-    X(renderer_imgui_set_window_size) \
-    X(renderer_upload_mesh) \
-    X(renderer_destroy_mesh) \
-    X(renderer_upload_texture) \
-    X(renderer_destroy_texture) \
-    X(renderer_update_texture) \
-    X(renderer_upload_scene) \
-    X(renderer_destroy_scene)
-
-struct PlatformRendererApi {
-#define PLATFORM_DECLARE_RENDERER_FN(name) decltype(&name) name;
-    PLATFORM_RENDERER_FUNCTIONS(PLATFORM_DECLARE_RENDERER_FN)
-#undef PLATFORM_DECLARE_RENDERER_FN
+enum HOT_StateSlotFlags {
+    HOT_StateSlotFlag_None = 0,
+    HOT_StateSlotFlag_NeedsInit = (1u << 0),
 };
 
-#define PLATFORM_RENDERER_FN(platform, name) ((platform)->renderer.name)
-#define PLATFORM_RENDERER_CALL(platform, name, ...) ((platform)->renderer.name(__VA_ARGS__))
+struct HOT_StateSlot {
+    U64 id;
+    U32 version;
+    U32 flags;
+    U64 offset;
+    U64 size;
+    U64 alignment;
+};
 
-struct AppHostContext {
+struct HOT_StateStore {
+    U64 magic;
+    U32 version;
+    U32 slotCount;
+    U64 used;
+    U64 capacity;
+    U8* base;
+    HOT_StateSlot slots[HOT_STATE_STORE_MAX_SLOTS];
+};
+
+static U64 hot_align_forward_(U64 value, U64 alignment) {
+    if (alignment == 0u) {
+        alignment = sizeof(void*);
+    }
+    ASSERT_ALWAYS(is_power_of_two(alignment));
+    return align_pow2(value, alignment);
+}
+
+static void hot_state_store_init(HOT_StateStore* store, void* base, U64 capacity) {
+    ASSERT_ALWAYS(store != 0);
+    ASSERT_ALWAYS(base != 0);
+    ASSERT_ALWAYS(capacity != 0u);
+
+    MEMSET(store, 0, sizeof(*store));
+    store->magic = HOT_STATE_STORE_MAGIC;
+    store->version = HOT_STATE_STORE_VERSION;
+    store->capacity = capacity;
+    store->base = (U8*) base;
+}
+
+static B32 hot_state_store_is_valid(HOT_StateStore* store) {
+    if (store == 0) {
+        return 0;
+    }
+    if (store->magic != HOT_STATE_STORE_MAGIC) {
+        return 0;
+    }
+    if (store->version != HOT_STATE_STORE_VERSION) {
+        return 0;
+    }
+    if (store->base == 0 || store->capacity == 0u) {
+        return 0;
+    }
+    return 1;
+}
+
+static HOT_StateSlot* hot_state_store_find_slot(HOT_StateStore* store, U64 id) {
+    if (!hot_state_store_is_valid(store) || id == 0u) {
+        return 0;
+    }
+
+    for (U32 index = 0; index < store->slotCount; ++index) {
+        HOT_StateSlot* slot = &store->slots[index];
+        if (slot->id == id) {
+            return slot;
+        }
+    }
+
+    return 0;
+}
+
+static void* hot_state_store_require(HOT_StateStore* store, U64 id, U32 version, U64 size, U64 alignment) {
+    if (!hot_state_store_is_valid(store) || id == 0u || size == 0u) {
+        return 0;
+    }
+
+    HOT_StateSlot* slot = hot_state_store_find_slot(store, id);
+    if (slot != 0 && slot->version == version && slot->size >= size) {
+        if ((slot->offset + slot->size) <= store->capacity) {
+            return store->base + slot->offset;
+        }
+    }
+
+    if (slot == 0) {
+        if (store->slotCount >= HOT_STATE_STORE_MAX_SLOTS) {
+            return 0;
+        }
+        slot = &store->slots[store->slotCount++];
+        MEMSET(slot, 0, sizeof(*slot));
+        slot->id = id;
+    }
+
+    U64 offset = hot_align_forward_(store->used, alignment);
+    if ((offset + size) > store->capacity) {
+        return 0;
+    }
+
+    slot->version = version;
+    slot->flags = HOT_StateSlotFlag_NeedsInit;
+    slot->offset = offset;
+    slot->size = size;
+    slot->alignment = alignment;
+    store->used = offset + size;
+
+    void* result = store->base + offset;
+    MEMSET(result, 0, size);
+    return result;
+}
+
+static B32 hot_state_store_take_needs_init(HOT_StateStore* store, U64 id) {
+    HOT_StateSlot* slot = hot_state_store_find_slot(store, id);
+    if (slot == 0 || ((slot->flags & HOT_StateSlotFlag_NeedsInit) == 0u)) {
+        return 0;
+    }
+
+    slot->flags &= ~HOT_StateSlotFlag_NeedsInit;
+    return 1;
+}
+
+struct AppHost {
     B32 shouldQuit;
-    U32 reloadCount;
-    void* userData;
     U32 logicalCoreCount;
-    Renderer* renderer;
     Arena* frameArena;
+    Arena* stateArena;
+    OS_WindowHandle window;
+    U32 windowWidth;
+    U32 windowHeight;
+
+    AppOSApi os;
 };
 
 struct AppInput {
@@ -110,43 +209,35 @@ struct AppInput {
     U32 eventCount;
 };
 
-struct AppWindowDesc {
-    U32 width;
-    U32 height;
-    const char* title;
+struct AppLoadParams {
+    U32 size;
+    U32 abiVersion;
+    U64 moduleGeneration;
+    AppHost* host;
+    HOT_StateStore* store;
 };
 
-struct AppPlatform {
-    void* userData;
-    PlatformOSApi os;
-    PlatformRendererApi renderer;
-};
+typedef B32 AppBootProc(AppHost* host, HOT_StateStore* store);
+typedef void AppBeforeReloadProc(AppHost* host, HOT_StateStore* store);
+typedef B32 AppAfterReloadProc(AppHost* host, HOT_StateStore* store);
+typedef void AppFrameProc(AppHost* host, HOT_StateStore* store, const AppInput* input);
+typedef void AppShutdownProc(AppHost* host, HOT_StateStore* store);
 
-struct AppMemory {
-    B32 isInitialized;
-    void* permanentStorage;
-    U64 permanentStorageSize;
-    void* transientStorage;
-    U64 transientStorageSize;
-    Arena* programArena;
-};
-
-struct AppModuleExports {
-    U32 interfaceVersion;
-    U64 requiredPermanentMemory;
-    U64 requiredTransientMemory;
-    U64 requiredProgramArenaSize;
-    B32 (*initialize)(AppPlatform* platform, AppMemory* memory, AppHostContext* host);
-    void (*reload)(AppPlatform* platform, AppMemory* memory, AppHostContext* host);
-    void (*update)(AppPlatform* platform, AppMemory* memory, AppHostContext* host, const AppInput* input,
-                   F32 deltaSeconds);
-    void (*shutdown)(AppPlatform* platform, AppMemory* memory, AppHostContext* host);
+struct AppCode {
+    U32 size;
+    U32 abiVersion;
+    U32 schemaVersion;
+    AppBootProc* boot;
+    AppBeforeReloadProc* before_reload;
+    AppAfterReloadProc* after_reload;
+    AppFrameProc* frame;
+    AppShutdownProc* shutdown;
 };
 
 #if defined(COMPILER_CLANG) || defined(COMPILER_GCC)
-#define APP_MODULE_EXPORT extern "C" __attribute__((visibility("default")))
+#define APP_EXPORT extern "C" __attribute__((visibility("default")))
 #else
-#define APP_MODULE_EXPORT extern "C"
+#define APP_EXPORT extern "C"
 #endif
 
-APP_MODULE_EXPORT B32 app_get_entry_points(AppModuleExports* outExports);
+APP_EXPORT B32 app_load(AppLoadParams* params, AppCode* outCode);

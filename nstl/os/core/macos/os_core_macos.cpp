@@ -179,20 +179,19 @@ U64 OS_rdtsc_relaxed() {
 #if defined(COMPILER_CLANG) || defined(COMPILER_GCC)
     __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(value));
 #else
-    // Fallback to microseconds if inline asm unavailable
-    value = OS_get_time_nanoseconds();
+#error "ARM64 counter reads require Clang or GCC inline assembly"
 #endif
     return value;
 }
 
-U64 OS_rdtscp_serialized() { // TODO: refactor.
+U64 OS_rdtscp_serialized() {
     U64 value = 0;
 #if defined(COMPILER_CLANG) || defined(COMPILER_GCC)
     __asm__ __volatile__("isb");
     __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(value));
     __asm__ __volatile__("isb");
 #else
-    value = OS_get_time_nanoseconds();
+#error "ARM64 counter reads require Clang or GCC inline assembly"
 #endif
     return value;
 }
@@ -438,7 +437,6 @@ void OS_barrier_wait(OS_Handle barrierHandle) {
 
     OS_mutex_unlock(entity->barrier.mutexHandle);
 }
-
 
 // ////////////////////////
 // File I/O

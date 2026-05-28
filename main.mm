@@ -5,7 +5,5 @@
 #include "host_runtime.cpp"
 
 void entry_point(void) {
-    extern int host_main_loop(int argc, char** argv);
     host_main_loop(0, 0);
 }
-

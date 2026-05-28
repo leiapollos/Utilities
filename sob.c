@@ -2,7 +2,11 @@
 #include "third_party/sob/sob.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#if SOB_MACOS
+#include <unistd.h>
+#endif
 
 #define BUILD_DIR "build"
 #define BUILD_TOOLS_DIR "build/tools"
@@ -16,18 +20,18 @@
 #define METAGEN_OUTPUT_PATH BUILD_TOOLS_DIR "/" METAGEN_EXE_BASENAME
 #endif
 
-#define VULKAN_LIB_DIR "third_party/vulkan/macos/lib"
-#define VULKAN_ICD_DST BUILD_DIR "/MoltenVK_icd.json"
-
 typedef enum BuildMode {
     BuildMode_Debug,
+    BuildMode_Asan,
     BuildMode_Release,
 } BuildMode;
 
 typedef enum BuildTarget {
     BuildTarget_All,
+    BuildTarget_Dev,
     BuildTarget_Host,
     BuildTarget_Module,
+    BuildTarget_Ship,
     BuildTarget_Metagen,
     BuildTarget_Clean,
 } BuildTarget;
@@ -36,14 +40,17 @@ static void print_usage(void) {
     printf("Usage: ./sob [target] [mode]\n");
     printf("\n");
     printf("Targets:\n");
-    printf("  all      Build host + module (default)\n");
+    printf("  dev      Build host + hot module (default)\n");
+    printf("  all      Alias for dev\n");
     printf("  host     Build host executable only\n");
     printf("  module   Build hot-reload module only\n");
+    printf("  ship     Build one executable with app statically linked\n");
     printf("  metagen  Build metagen and regenerate metadata\n");
     printf("  clean    Remove build artifacts\n");
     printf("\n");
     printf("Modes:\n");
     printf("  debug    Debug build (default)\n");
+    printf("  asan     Debug build with Address Sanitizer\n");
     printf("  release  Release build\n");
 }
 
@@ -54,6 +61,10 @@ static int parse_mode(const char* value, BuildMode* outMode) {
 
     if (strcmp(value, "debug") == 0) {
         *outMode = BuildMode_Debug;
+        return 1;
+    }
+    if (strcmp(value, "asan") == 0) {
+        *outMode = BuildMode_Asan;
         return 1;
     }
     if (strcmp(value, "release") == 0) {
@@ -73,12 +84,20 @@ static int parse_target(const char* value, BuildTarget* outTarget) {
         *outTarget = BuildTarget_All;
         return 1;
     }
+    if (strcmp(value, "dev") == 0) {
+        *outTarget = BuildTarget_Dev;
+        return 1;
+    }
     if (strcmp(value, "host") == 0) {
         *outTarget = BuildTarget_Host;
         return 1;
     }
     if (strcmp(value, "module") == 0) {
         *outTarget = BuildTarget_Module;
+        return 1;
+    }
+    if (strcmp(value, "ship") == 0) {
+        *outTarget = BuildTarget_Ship;
         return 1;
     }
     if (strcmp(value, "metagen") == 0) {
@@ -94,7 +113,26 @@ static int parse_target(const char* value, BuildTarget* outTarget) {
 }
 
 static const char* build_mode_name(BuildMode mode) {
-    return (mode == BuildMode_Release) ? "release" : "debug";
+    return (mode == BuildMode_Release) ? "release" : ((mode == BuildMode_Asan) ? "asan" : "debug");
+}
+
+static const char* build_target_name(BuildTarget target) {
+    if (target == BuildTarget_All || target == BuildTarget_Dev) {
+        return "dev";
+    }
+    if (target == BuildTarget_Host) {
+        return "host";
+    }
+    if (target == BuildTarget_Module) {
+        return "module";
+    }
+    if (target == BuildTarget_Ship) {
+        return "ship";
+    }
+    if (target == BuildTarget_Metagen) {
+        return "metagen";
+    }
+    return "clean";
 }
 
 static void configure_compiler_for_mode(Sob_BuildContext* ctx, BuildMode mode) {
@@ -103,6 +141,10 @@ static void configure_compiler_for_mode(Sob_BuildContext* ctx, BuildMode mode) {
     config.warningsAsErrors = 0;
 
     if (mode == BuildMode_Debug) {
+        config.optLevel = Sob_OptLevel_ReleaseSmall;
+        config.sanitizers = Sob_Sanitizer_None;
+        config.enableLTO = 0;
+    } else if (mode == BuildMode_Asan) {
         config.optLevel = Sob_OptLevel_Debug;
         config.sanitizers = Sob_Sanitizer_Address;
         config.enableLTO = 0;
@@ -117,16 +159,7 @@ static void configure_compiler_for_mode(Sob_BuildContext* ctx, BuildMode mode) {
 
 static void apply_common_warning_flags(Sob_Target* target) {
     const char* flags[] = {
-        "-Wall",
-        "-Wextra",
         "-Wpedantic",
-        "-Wconversion",
-        "-Wsign-conversion",
-        "-Wshadow",
-        "-Wformat=2",
-        "-Wnull-dereference",
-        "-Wdouble-promotion",
-        "-Wimplicit-fallthrough",
         "-Wno-unused-parameter",
         "-Wno-unused-variable",
         "-Wno-unused-function",
@@ -134,6 +167,8 @@ static void apply_common_warning_flags(Sob_Target* target) {
         "-Wno-nested-anon-types",
         "-Wno-gnu-zero-variadic-macro-arguments",
         "-Wno-initializer-overrides",
+        "-Wno-c++20-designator",
+        "-Wno-c99-designator",
     };
 
     for (S32 i = 0; i < (S32)(sizeof(flags) / sizeof(flags[0])); ++i) {
@@ -151,6 +186,23 @@ static void apply_metagen_warning_flags(Sob_Target* target) {
         "-Wno-unused-function",
         "-Wno-gnu-anonymous-struct",
         "-Wno-nested-anon-types",
+        "-Wno-c++20-designator",
+        "-Wno-c99-designator",
+    };
+
+    for (S32 i = 0; i < (S32)(sizeof(flags) / sizeof(flags[0])); ++i) {
+        sob_target_add_cflags(target, flags[i]);
+    }
+}
+
+static void apply_cpp_runtime_flags(Sob_Target* target) {
+    sob_target_add_cflags(target, "-fno-exceptions");
+    sob_target_add_cflags(target, "-fno-rtti");
+}
+
+static void apply_third_party_warning_flags(Sob_Target* target) {
+    const char* flags[] = {
+        "-Wno-deprecated-declarations",
     };
 
     for (S32 i = 0; i < (S32)(sizeof(flags) / sizeof(flags[0])); ++i) {
@@ -161,19 +213,35 @@ static void apply_metagen_warning_flags(Sob_Target* target) {
 static void apply_mode_target_flags(Sob_Target* target, BuildMode mode) {
     if (mode == BuildMode_Debug) {
         sob_target_define(target, "DEBUG", .value = "1");
+        sob_target_add_cflags(target, "-O0");
         sob_target_add_cflags(target, "-fno-omit-frame-pointer");
+        sob_target_add_cflags(target, "-g0");
+    } else if (mode == BuildMode_Asan) {
+        sob_target_define(target, "DEBUG", .value = "1");
+        sob_target_add_cflags(target, "-fno-omit-frame-pointer");
+        sob_target_add_cflags(target, "-gline-tables-only");
+    } else {
+        sob_target_define(target, "NDEBUG", .value = "1");
     }
 }
 
-static void configure_common_includes(Sob_Target* target, int includeVulkan) {
+static void configure_common_includes(Sob_Target* target) {
     sob_target_add_include(target, ".");
-    sob_target_add_include(target, "third_party/vulkan_vma");
-    sob_target_add_include(target, "third_party/dear_imgui");
-    sob_target_add_include(target, "third_party/cgltf");
+}
 
-    if (includeVulkan) {
-        sob_target_add_include(target, "third_party/vulkan/include");
-    }
+static void configure_runtime_executable(Sob_Target* target, BuildMode mode) {
+    sob_target_add_source(target, "main.mm");
+    configure_common_includes(target);
+    sob_target_set_standard(target, Sob_Standard_Cpp17);
+    apply_cpp_runtime_flags(target);
+    apply_common_warning_flags(target);
+    apply_mode_target_flags(target, mode);
+
+#if SOB_MACOS
+    sob_target_link(target, "Cocoa", .kind = Sob_LibKind_Framework);
+    sob_target_link(target, "QuartzCore", .kind = Sob_LibKind_Framework);
+    sob_target_link(target, "Metal", .kind = Sob_LibKind_Framework);
+#endif
 }
 
 static S32 run_metagen_command(void) {
@@ -195,6 +263,33 @@ static S32 run_metagen_command(void) {
     S32 result = sob_cmd_run(cmd, .cwd = META_DIR);
     sob_arena_destroy(arena);
     return result;
+}
+
+static int metadata_outputs_are_fresh(void) {
+    static const char* inputs[] = {
+        "nstl/os/graphics/os_graphics.metadef",
+        "meta/meta_main.cpp",
+        "meta/generator.cpp",
+        "meta/generator.hpp",
+        "meta/parser.cpp",
+        "meta/parser.hpp",
+        "meta/lexer.cpp",
+        "meta/lexer.hpp",
+    };
+
+    U64 outputTime = sob_fs_mtime("nstl/os/graphics/os_graphics.generated.hpp");
+    if (outputTime == 0u) {
+        return 0;
+    }
+
+    for (S32 i = 0; i < (S32)(sizeof(inputs) / sizeof(inputs[0])); ++i) {
+        U64 inputTime = sob_fs_mtime(inputs[i]);
+        if (inputTime == 0u || inputTime > outputTime) {
+            return 0;
+        }
+    }
+
+    return 1;
 }
 
 static S32 build_and_run_metagen(BuildMode mode) {
@@ -230,6 +325,7 @@ static S32 build_and_run_metagen(BuildMode mode) {
     sob_target_add_source(metagen, "meta/meta_main.cpp");
     sob_target_add_include(metagen, "meta");
     sob_target_set_standard(metagen, Sob_Standard_Cpp17);
+    apply_cpp_runtime_flags(metagen);
     sob_target_add_cflags(metagen, "-pthread");
     sob_target_add_ldflags(metagen, "-pthread");
     apply_metagen_warning_flags(metagen);
@@ -245,46 +341,6 @@ static S32 build_and_run_metagen(BuildMode mode) {
     printf("==> Running metagen...\n");
     return run_metagen_command();
 }
-
-#if SOB_MACOS
-static S32 stage_host_runtime_files(void) {
-    static const char* copyPairs[][2] = {
-        {"third_party/vulkan/macos/lib/libvulkan.dylib", BUILD_DIR "/libvulkan.dylib"},
-        {"third_party/vulkan/macos/lib/libvulkan.1.dylib", BUILD_DIR "/libvulkan.1.dylib"},
-        {"third_party/vulkan/macos/lib/libMoltenVK.dylib", BUILD_DIR "/libMoltenVK.dylib"},
-        {"third_party/vulkan/macos/lib/libdxcompiler.dylib", BUILD_DIR "/libdxcompiler.dylib"},
-    };
-
-    static const char* hardcodedIcdJson =
-        "{\n"
-        "    \"file_format_version\": \"1.0.0\",\n"
-        "    \"ICD\": {\n"
-        "        \"library_path\": \"./libMoltenVK.dylib\",\n"
-        "        \"api_version\": \"1.4.0\",\n"
-        "        \"is_portability_driver\": true\n"
-        "    }\n"
-        "}\n";
-
-    if (sob_fs_mkdir_p(BUILD_DIR) != 0 && !sob_fs_is_dir(BUILD_DIR)) {
-        fprintf(stderr, "Error: failed to create build output directory '%s'\n", BUILD_DIR);
-        return 1;
-    }
-
-    for (S32 i = 0; i < (S32)(sizeof(copyPairs) / sizeof(copyPairs[0])); ++i) {
-        if (sob_fs_copy(copyPairs[i][0], copyPairs[i][1]) != 0) {
-            fprintf(stderr, "Error: failed to copy '%s' to '%s'\n", copyPairs[i][0], copyPairs[i][1]);
-            return 1;
-        }
-    }
-
-    if (sob_fs_write_text(VULKAN_ICD_DST, hardcodedIcdJson) != 0) {
-        fprintf(stderr, "Error: failed to write '%s'\n", VULKAN_ICD_DST);
-        return 1;
-    }
-
-    return 0;
-}
-#endif
 
 static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
     Sob_Arena* arena = sob_arena_create();
@@ -302,7 +358,8 @@ static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
 
     configure_compiler_for_mode(ctx, mode);
 
-    if (requestedTarget == BuildTarget_Module || requestedTarget == BuildTarget_All) {
+    if (requestedTarget == BuildTarget_Module || requestedTarget == BuildTarget_All ||
+        requestedTarget == BuildTarget_Dev) {
         Sob_Target* moduleTarget = sob_target_create(ctx, "utilities_app", Sob_TargetKind_DynamicLib,
                                                      .outputDir = BUILD_HOT_DIR,
                                                      .outputName = "utilities_app");
@@ -313,8 +370,10 @@ static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
         }
 
         sob_target_add_source(moduleTarget, "app.cpp");
-        configure_common_includes(moduleTarget, 1);
+        configure_common_includes(moduleTarget);
         sob_target_set_standard(moduleTarget, Sob_Standard_Cpp17);
+        apply_cpp_runtime_flags(moduleTarget);
+        sob_target_add_cflags(moduleTarget, "-fvisibility=hidden");
         apply_common_warning_flags(moduleTarget);
         apply_mode_target_flags(moduleTarget, mode);
 
@@ -324,23 +383,8 @@ static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
 #endif
     }
 
-    if (requestedTarget == BuildTarget_Host || requestedTarget == BuildTarget_All) {
-        Sob_Target* imguiTarget = sob_target_create(ctx, "dear_imgui", Sob_TargetKind_StaticLib,
-                                                    .outputDir = BUILD_DIR,
-                                                    .outputName = "libdear_imgui");
-        if (!imguiTarget) {
-            fprintf(stderr, "Error: failed to create dear_imgui target\n");
-            sob_arena_destroy(arena);
-            return 1;
-        }
-
-        sob_target_add_source(imguiTarget, "third_party/dear_imgui/imgui_unity.cpp");
-        sob_target_add_include(imguiTarget, "third_party/dear_imgui");
-        sob_target_add_include(imguiTarget, "third_party/vulkan/include");
-        sob_target_set_standard(imguiTarget, Sob_Standard_Cpp17);
-        apply_common_warning_flags(imguiTarget);
-        apply_mode_target_flags(imguiTarget, mode);
-
+    if (requestedTarget == BuildTarget_Host || requestedTarget == BuildTarget_All ||
+        requestedTarget == BuildTarget_Dev) {
         Sob_Target* hostTarget = sob_target_create(ctx, "utilities_host", Sob_TargetKind_Executable,
                                                    .outputDir = BUILD_DIR,
                                                    .outputName = "utilities_host");
@@ -350,40 +394,86 @@ static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
             return 1;
         }
 
-        sob_target_add_source(hostTarget, "main.mm");
-        configure_common_includes(hostTarget, 0);
-        sob_target_set_standard(hostTarget, Sob_Standard_Cpp17);
-        sob_target_define(hostTarget, "UTILITIES_ICD_FILENAME", .value = "\"MoltenVK_icd.json\"");
-        apply_common_warning_flags(hostTarget);
-        apply_mode_target_flags(hostTarget, mode);
-        sob_target_link_target(hostTarget, imguiTarget);
+        configure_runtime_executable(hostTarget, mode);
 
 #if SOB_MACOS
-        sob_target_link(hostTarget, "Cocoa", .kind = Sob_LibKind_Framework);
-        sob_target_link(hostTarget, "QuartzCore", .kind = Sob_LibKind_Framework);
-        sob_target_link(hostTarget, "Metal", .kind = Sob_LibKind_Framework);
-        sob_target_link(hostTarget, "vulkan", .searchPath = VULKAN_LIB_DIR);
-        sob_target_link(hostTarget, "dxcompiler", .searchPath = VULKAN_LIB_DIR);
         sob_target_add_ldflags(hostTarget, "-Wl,-export_dynamic");
-        sob_target_add_ldflags(hostTarget, "-Wl,-rpath,@loader_path");
 #endif
     }
 
-    printf("==> Building %s (%s)...\n",
-           (requestedTarget == BuildTarget_All) ? "all" :
-           (requestedTarget == BuildTarget_Host) ? "host" : "module",
-           build_mode_name(mode));
+    if (requestedTarget == BuildTarget_Ship) {
+        Sob_Target* shipTarget = sob_target_create(ctx, "utilities_ship", Sob_TargetKind_Executable,
+                                                   .outputDir = BUILD_DIR,
+                                                   .outputName = "utilities_ship");
+        if (!shipTarget) {
+            fprintf(stderr, "Error: failed to create ship target\n");
+            sob_arena_destroy(arena);
+            return 1;
+        }
+
+        configure_runtime_executable(shipTarget, mode);
+        sob_target_add_source(shipTarget, "app.cpp");
+        sob_target_define(shipTarget, "UTILITIES_STATIC_APP", .value = "1");
+    }
+
+    printf("==> Building %s (%s)...\n", build_target_name(requestedTarget), build_mode_name(mode));
 
     S32 result = sob_build_run(ctx);
     sob_arena_destroy(arena);
 
-#if SOB_MACOS
-    if (result == 0 && (requestedTarget == BuildTarget_Host || requestedTarget == BuildTarget_All)) {
-        result = stage_host_runtime_files();
-    }
-#endif
-
     return result;
+}
+
+static S32 build_dev_targets_parallel(BuildMode mode, const char* selfPath) {
+    if (!selfPath || selfPath[0] == 0) {
+        selfPath = "./sob";
+    }
+
+    Sob_Arena* arena = sob_arena_create();
+    if (!arena) {
+        fprintf(stderr, "Error: failed to create sob arena for parallel build\n");
+        return 1;
+    }
+
+    Sob_Cmd* moduleCmd = sob_cmd_create(arena);
+    Sob_Cmd* hostCmd = sob_cmd_create(arena);
+    if (!moduleCmd || !hostCmd) {
+        fprintf(stderr, "Error: failed to create parallel build commands\n");
+        sob_arena_destroy(arena);
+        return 1;
+    }
+
+    const char* modeName = build_mode_name(mode);
+    sob_cmd_append(moduleCmd, selfPath);
+    sob_cmd_append(moduleCmd, "module");
+    sob_cmd_append(moduleCmd, modeName);
+
+    sob_cmd_append(hostCmd, selfPath);
+    sob_cmd_append(hostCmd, "host");
+    sob_cmd_append(hostCmd, modeName);
+
+    printf("==> Building dev (%s) in parallel...\n", modeName);
+    fflush(stdout);
+
+    Sob_Proc* moduleProc = sob_cmd_spawn(moduleCmd);
+    Sob_Proc* hostProc = sob_cmd_spawn(hostCmd);
+    if (!moduleProc || !hostProc) {
+        fprintf(stderr, "Error: failed to spawn parallel build commands\n");
+        if (moduleProc) {
+            sob_proc_kill(moduleProc);
+        }
+        if (hostProc) {
+            sob_proc_kill(hostProc);
+        }
+        sob_arena_destroy(arena);
+        return 1;
+    }
+
+    S32 moduleResult = sob_proc_wait(moduleProc);
+    S32 hostResult = sob_proc_wait(hostProc);
+    sob_arena_destroy(arena);
+
+    return (moduleResult == 0 && hostResult == 0) ? 0 : 1;
 }
 
 static S32 handle_clean(void) {
@@ -405,11 +495,11 @@ static S32 handle_clean(void) {
 int main(int argc, char** argv) {
     SOB_GO_REBUILD_URSELF(argc, argv);
 
-    BuildTarget target = BuildTarget_All;
+    BuildTarget target = BuildTarget_Dev;
     BuildMode mode = BuildMode_Debug;
 
     if (argc >= 2) {
-        BuildTarget parsedTarget = BuildTarget_All;
+        BuildTarget parsedTarget = BuildTarget_Dev;
         BuildMode parsedMode = BuildMode_Debug;
 
         if (parse_target(argv[1], &parsedTarget)) {
@@ -428,7 +518,7 @@ int main(int argc, char** argv) {
                 return 1;
             }
         } else if (parse_mode(argv[1], &parsedMode)) {
-            target = BuildTarget_All;
+            target = BuildTarget_Dev;
             mode = parsedMode;
             if (argc > 2) {
                 fprintf(stderr, "Error: too many arguments\n");
@@ -447,22 +537,31 @@ int main(int argc, char** argv) {
     }
 
 #if !SOB_MACOS
-    if (target == BuildTarget_Host || target == BuildTarget_Module || target == BuildTarget_All) {
+    if (target == BuildTarget_Host || target == BuildTarget_Module || target == BuildTarget_All ||
+        target == BuildTarget_Dev || target == BuildTarget_Ship) {
         fprintf(stderr, "Error: '%s' build is currently supported only on macOS.\n",
-                (target == BuildTarget_Host) ? "host" :
-                (target == BuildTarget_Module) ? "module" : "all");
+                build_target_name(target));
         fprintf(stderr, "Use './sob metagen' for metadata generation on this platform.\n");
         return 1;
     }
 #endif
 
-    S32 metadataResult = build_and_run_metagen(mode);
-    if (metadataResult != 0) {
-        return metadataResult;
+    if (target == BuildTarget_Metagen || !metadata_outputs_are_fresh()) {
+        S32 metadataResult = build_and_run_metagen(mode);
+        if (metadataResult != 0) {
+            return metadataResult;
+        }
+    } else {
+        printf("==> Metadata is up to date.\n");
+        fflush(stdout);
     }
 
     if (target == BuildTarget_Metagen) {
         return 0;
+    }
+
+    if (target == BuildTarget_All || target == BuildTarget_Dev) {
+        return build_dev_targets_parallel(mode, argv[0]);
     }
 
     return build_project_targets(target, mode);

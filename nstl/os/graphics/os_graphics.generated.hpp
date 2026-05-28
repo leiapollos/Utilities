@@ -314,45 +314,5 @@ struct OS_GraphicsEvent {
         ASSERT_DEBUG(tag == OS_GraphicsEvent_Tag_MouseScroll);
         return (tag == OS_GraphicsEvent_Tag_MouseScroll) ? &mouseScroll : nullptr;
     }
-
-    template<typename... Visitors>
-    auto match(Visitors&&... visitors) {
-        struct Overloaded : Visitors... { using Visitors::operator()...; };
-        Overloaded overloaded{static_cast<Visitors&&>(visitors)...};
-
-        switch (tag) {
-            case OS_GraphicsEvent_Tag_None:
-                return overloaded(static_cast<OS_GraphicsEvent_None*>(nullptr));
-            case OS_GraphicsEvent_Tag_WindowShown:
-                return overloaded(&windowShown);
-            case OS_GraphicsEvent_Tag_WindowClosed:
-                return overloaded(static_cast<OS_GraphicsEvent_WindowClosed*>(nullptr));
-            case OS_GraphicsEvent_Tag_WindowResized:
-                return overloaded(&windowResized);
-            case OS_GraphicsEvent_Tag_WindowFocused:
-                return overloaded(static_cast<OS_GraphicsEvent_WindowFocused*>(nullptr));
-            case OS_GraphicsEvent_Tag_WindowUnfocused:
-                return overloaded(static_cast<OS_GraphicsEvent_WindowUnfocused*>(nullptr));
-            case OS_GraphicsEvent_Tag_WindowDestroyed:
-                return overloaded(static_cast<OS_GraphicsEvent_WindowDestroyed*>(nullptr));
-            case OS_GraphicsEvent_Tag_KeyDown:
-                return overloaded(&keyDown);
-            case OS_GraphicsEvent_Tag_KeyUp:
-                return overloaded(&keyUp);
-            case OS_GraphicsEvent_Tag_TextInput:
-                return overloaded(&textInput);
-            case OS_GraphicsEvent_Tag_MouseButtonDown:
-                return overloaded(&mouseButtonDown);
-            case OS_GraphicsEvent_Tag_MouseButtonUp:
-                return overloaded(&mouseButtonUp);
-            case OS_GraphicsEvent_Tag_MouseMove:
-                return overloaded(&mouseMove);
-            case OS_GraphicsEvent_Tag_MouseScroll:
-                return overloaded(&mouseScroll);
-            default:
-                ASSERT_DEBUG(false && "Invalid tag");
-                return overloaded(static_cast<void*>(nullptr));
-        }
-    }
 };
 

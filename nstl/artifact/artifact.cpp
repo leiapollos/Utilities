@@ -557,6 +557,23 @@ B32 artifact_cache_create(const ArtifactCacheDesc* desc, ArtifactCache* outCache
     return 1;
 }
 
+ArtifactCache* artifact_cache_alloc(const ArtifactCacheDesc* desc) {
+    if (!desc || !desc->arena) {
+        return 0;
+    }
+
+    ArtifactCache* cache = ARENA_PUSH_STRUCT(desc->arena, ArtifactCache);
+    if (!cache) {
+        return 0;
+    }
+
+    if (!artifact_cache_create(desc, cache)) {
+        return 0;
+    }
+
+    return cache;
+}
+
 void artifact_cache_destroy(ArtifactCache* cache) {
     if (!cache) {
         return;
@@ -636,6 +653,21 @@ B32 artifact_cache_register_type(ArtifactCache* cache, U32 typeId, const Artifac
     OS_mutex_lock(cache->mutex);
     cache->typeOps[typeId] = *ops;
     cache->typeRegistered[typeId] = 1u;
+
+    for (U32 slot = 0; slot < cache->slots.capacity; ++slot) {
+        if (!slot_map_is_occupied(&cache->slots, slot)) {
+            continue;
+        }
+
+        ArtifactNode* node = (ArtifactNode*)slot_map_item_at(&cache->slots, slot);
+        if (!node || node->typeId != typeId) {
+            continue;
+        }
+
+        node->releaseProc = ops->release;
+        node->releaseUserData = ops->userData;
+    }
+
     OS_mutex_unlock(cache->mutex);
 
     return 1;

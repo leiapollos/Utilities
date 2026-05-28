@@ -15,6 +15,9 @@ struct JobSystem {
     OS_Handle* workers;
     U32 workerCount;
     U64 shutdown;
+    U64 pendingJobs;
+    OS_Handle wakeMutex;
+    OS_Handle wakeCondition;
 #ifndef NDEBUG
     JobSystemStats* workerStats; // length = workerCount + 1 (main + workers)
     JobSystemStats totals;
@@ -72,6 +75,7 @@ struct WorkerParameters {
 };
 
 static void job_system_worker_entry(void* params);
+static void job_system_on_job_popped_(JobSystem* jobSystem);
 
 // ////////////////////////
 // Lifecycle
@@ -82,6 +86,7 @@ JobSystem* job_system_create(Arena* arena, U32 workerCount) {
     JobSystem* jobSystem = (JobSystem*) arena_push(arena, sizeof(JobSystem), alignof(JobSystem));
     MEMSET(jobSystem, 0, sizeof(JobSystem));
     jobSystem->workerCount = workerCount;
+    jobSystem->pendingJobs = 0u;
 
     U32 totalQueues = workerCount + 1u;
     jobSystem->queues = (WSDeque**) arena_push(arena, sizeof(WSDeque*) * totalQueues, alignof(WSDeque*));
@@ -90,6 +95,8 @@ JobSystem* job_system_create(Arena* arena, U32 workerCount) {
     }
 
     jobSystem->workers = (OS_Handle*) arena_push(arena, sizeof(OS_Handle) * workerCount, alignof(OS_Handle));
+    jobSystem->wakeMutex = OS_mutex_create();
+    jobSystem->wakeCondition = OS_condition_variable_create();
 #ifndef NDEBUG
     jobSystem->workerStats = (JobSystemStats*) arena_push(arena, sizeof(JobSystemStats) * totalQueues,
                                                           alignof(JobSystemStats));
@@ -124,9 +131,26 @@ void job_system_destroy(JobSystem* jobSystem) {
         return;
     }
 
-    ATOMIC_STORE(&jobSystem->shutdown, 1, MEMORY_ORDER_RELEASE);
+    if (jobSystem->wakeMutex.handle && jobSystem->wakeCondition.handle) {
+        OS_mutex_lock(jobSystem->wakeMutex);
+        ATOMIC_STORE(&jobSystem->shutdown, 1, MEMORY_ORDER_RELEASE);
+        OS_condition_variable_broadcast(jobSystem->wakeCondition);
+        OS_mutex_unlock(jobSystem->wakeMutex);
+    } else {
+        ATOMIC_STORE(&jobSystem->shutdown, 1, MEMORY_ORDER_RELEASE);
+    }
+
     for (U32 i = 0; i < jobSystem->workerCount; ++i) {
         OS_thread_join(jobSystem->workers[i]);
+    }
+
+    if (jobSystem->wakeCondition.handle) {
+        OS_condition_variable_destroy(jobSystem->wakeCondition);
+        jobSystem->wakeCondition.handle = 0;
+    }
+    if (jobSystem->wakeMutex.handle) {
+        OS_mutex_destroy(jobSystem->wakeMutex);
+        jobSystem->wakeMutex.handle = 0;
     }
 
 #ifndef NDEBUG
@@ -151,12 +175,47 @@ void job_system_destroy(JobSystem* jobSystem) {
 
 B32 job_system_submit_(const Job& job) {
     ASSERT_DEBUG(g_tlsJobState.queue);
+    JobSystem* jobSystem = g_tlsJobState.jobSystem;
+
+    if (jobSystem && jobSystem->wakeMutex.handle && jobSystem->wakeCondition.handle) {
+        OS_mutex_lock(jobSystem->wakeMutex);
+    }
+
     if (job.parent) {
         ATOMIC_FETCH_ADD(&job.parent->remainingJobs, 1, MEMORY_ORDER_RELEASE);
     }
+    if (jobSystem) {
+        ATOMIC_FETCH_ADD(&jobSystem->pendingJobs, 1u, MEMORY_ORDER_RELEASE);
+    }
+
     B32 pushOk = wsdq_push(g_tlsJobState.queue, &job);
+    if (pushOk) {
+        if (jobSystem && jobSystem->wakeCondition.handle) {
+            OS_condition_variable_signal(jobSystem->wakeCondition);
+        }
+    } else {
+        if (job.parent) {
+            ATOMIC_FETCH_SUB(&job.parent->remainingJobs, 1, MEMORY_ORDER_ACQ_REL);
+        }
+        if (jobSystem) {
+            ATOMIC_FETCH_SUB(&jobSystem->pendingJobs, 1u, MEMORY_ORDER_ACQ_REL);
+        }
+    }
+
+    if (jobSystem && jobSystem->wakeMutex.handle && jobSystem->wakeCondition.handle) {
+        OS_mutex_unlock(jobSystem->wakeMutex);
+    }
+
     ASSERT_ALWAYS(pushOk && "WSDeque overflow. Increase JOB_SYSTEM_QUEUE_SIZE.");
     return pushOk;
+}
+
+static void job_system_on_job_popped_(JobSystem* jobSystem) {
+    ASSERT_DEBUG(jobSystem != 0);
+    U64 previous = ATOMIC_FETCH_SUB(&jobSystem->pendingJobs, 1u, MEMORY_ORDER_ACQ_REL);
+    if (UNLIKELY(previous == 0u)) {
+        ATOMIC_STORE(&jobSystem->pendingJobs, 0u, MEMORY_ORDER_RELEASE);
+    }
 }
 
 static
@@ -187,6 +246,7 @@ void job_system_worker_entry(void* params) {
         Job job = {};
 
         if (LIKELY(wsdq_pop(g_tlsJobState.queue, &job))) {
+            job_system_on_job_popped_(jobSystem);
 #ifndef NDEBUG
             ++g_tlsJobState.stats.pops;
 #endif
@@ -199,6 +259,7 @@ void job_system_worker_entry(void* params) {
         for (U32 attempt = 0; attempt < JOB_SYSTEM_STEAL_TRIES; ++attempt) {
             U32 victimIndex = job_system_pick_victim(workerIndex, totalQueues, &g_tlsJobState.randomGenerator, attempt);
             if (LIKELY(wsdq_steal(queues[victimIndex], &job))) {
+                job_system_on_job_popped_(jobSystem);
 #ifndef NDEBUG
                 ++g_tlsJobState.stats.steals;
 #endif
@@ -210,20 +271,38 @@ void job_system_worker_entry(void* params) {
         }
 
         if (UNLIKELY(!stolen)) {
-            U32 spins = backoff;
-            if (spins > JOB_SYSTEM_BACKOFF_MAX) {
-                spins = JOB_SYSTEM_BACKOFF_MAX;
-            }
-            for (U32 spin = 0; spin < spins; ++spin) {
-                OS_cpu_pause();
-            }
+            B32 usedConditionWait = 0;
+            if (jobSystem->wakeMutex.handle && jobSystem->wakeCondition.handle) {
+                OS_mutex_lock(jobSystem->wakeMutex);
+                while (ATOMIC_LOAD(&jobSystem->pendingJobs, MEMORY_ORDER_ACQUIRE) == 0u &&
+                       ATOMIC_LOAD(&jobSystem->shutdown, MEMORY_ORDER_ACQUIRE) == 0u) {
+                    OS_condition_variable_wait(jobSystem->wakeCondition, jobSystem->wakeMutex);
 #ifndef NDEBUG
-            ++g_tlsJobState.stats.yields;
+                    ++g_tlsJobState.stats.yields;
 #endif
-            OS_thread_yield();
-            if (backoff < JOB_SYSTEM_BACKOFF_MAX) {
-                U32 next = backoff << 1;
-                backoff = (next > JOB_SYSTEM_BACKOFF_MAX) ? JOB_SYSTEM_BACKOFF_MAX : next;
+                }
+                OS_mutex_unlock(jobSystem->wakeMutex);
+                usedConditionWait = 1;
+            }
+
+            if (UNLIKELY(!usedConditionWait)) {
+                U32 spins = backoff;
+                if (spins > JOB_SYSTEM_BACKOFF_MAX) {
+                    spins = JOB_SYSTEM_BACKOFF_MAX;
+                }
+                for (U32 spin = 0; spin < spins; ++spin) {
+                    OS_cpu_pause();
+                }
+#ifndef NDEBUG
+                ++g_tlsJobState.stats.yields;
+#endif
+                OS_thread_yield();
+                if (backoff < JOB_SYSTEM_BACKOFF_MAX) {
+                    U32 next = backoff << 1;
+                    backoff = (next > JOB_SYSTEM_BACKOFF_MAX) ? JOB_SYSTEM_BACKOFF_MAX : next;
+                }
+            } else {
+                backoff = 1u;
             }
         }
     }
@@ -263,6 +342,7 @@ void job_system_wait(JobSystem* jobSystem, Job* root) {
         Job job = {};
 
         if (LIKELY(wsdq_pop(localQueue, &job))) {
+            job_system_on_job_popped_(jobSystem);
 #ifndef NDEBUG
             ++g_tlsJobState.stats.pops;
 #endif
@@ -275,6 +355,7 @@ void job_system_wait(JobSystem* jobSystem, Job* root) {
         for (U32 attempt = 0; attempt < JOB_SYSTEM_STEAL_TRIES; ++attempt) {
             U32 victimIndex = job_system_pick_victim(workerIndex, totalQueues, &g_tlsJobState.randomGenerator, attempt);
             if (LIKELY(wsdq_steal(queues[victimIndex], &job))) {
+                job_system_on_job_popped_(jobSystem);
 #ifndef NDEBUG
                 ++g_tlsJobState.stats.steals;
 #endif
@@ -310,4 +391,3 @@ JobSystemStats job_system_get_totals(JobSystem* jobSystem) {
     return jobSystem->totals;
 }
 #endif
-

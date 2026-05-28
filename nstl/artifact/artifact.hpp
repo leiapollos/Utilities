@@ -75,6 +75,7 @@ struct ArtifactUseScope {
 };
 
 B32 artifact_cache_create(const ArtifactCacheDesc* desc, ArtifactCache* outCache);
+ArtifactCache* artifact_cache_alloc(const ArtifactCacheDesc* desc);
 void artifact_cache_destroy(ArtifactCache* cache);
 void artifact_cache_reset(ArtifactCache* cache);
 

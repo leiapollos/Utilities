@@ -36,24 +36,18 @@ struct EntityJobParams {
     U32 startIndex;
     U32 count;
     F32 deltaSeconds;
-    Arena* programArena;
     F32* sumOut;
 };
 
-static void app_tests_step_entities_single_thread(AppMemory* memory, AppCoreState* core, AppTestsState* tests,
+static void app_tests_step_entities_single_thread(APP_Context* ctx, AppTestsState* tests,
                                                   F32 deltaSeconds);
-static void app_tests_step_entities_jobs(AppMemory* memory, AppCoreState* core, AppTestsState* tests, F32 deltaSeconds);
+static void app_tests_step_entities_jobs(APP_Context* ctx, AppTestsState* tests, F32 deltaSeconds);
 static void app_tests_job_update(void* userData);
 
-U64 app_tests_permanent_size(void) {
-    return sizeof(AppTestsState);
-}
-
-void app_tests_initialize(AppMemory* memory, AppCoreState* core, AppTestsState* tests) {
-    (void) memory;
-    if (!core || !tests) {
-        return;
-    }
+void app_tests_initialize(APP_Context* ctx, AppTestsState* tests) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+    ASSERT_ALWAYS(tests != 0);
 
     MEMSET(tests, 0, sizeof(AppTestsState));
     tests->entityCount = APP_TEST_ENTITY_COUNT;
@@ -68,28 +62,28 @@ void app_tests_initialize(AppMemory* memory, AppCoreState* core, AppTestsState* 
     }
 
     LOG_INFO("tests", "Initialized test entities (count={})", tests->entityCount);
-    (void) core;
+    (void) ctx;
 }
 
-void app_tests_reload(AppMemory* memory, AppCoreState* core, AppTestsState* tests) {
-    (void) memory;
-    if (!core || !tests) {
-        return;
-    }
+void app_tests_reload(APP_Context* ctx, AppTestsState* tests) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+    ASSERT_ALWAYS(tests != 0);
 
     LOG_INFO("tests", "Reloaded module (dispatches={} totalPos={:.2f})",
              tests->jobDispatchCount, tests->lastPositionSum);
 }
 
-void app_tests_tick(AppMemory* memory, AppCoreState* core, AppTestsState* tests, F32 deltaSeconds) {
-    if (!core || !tests) {
-        return;
-    }
+void app_tests_tick(APP_Context* ctx, AppTestsState* tests, F32 deltaSeconds) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+    ASSERT_ALWAYS(tests != 0);
 
+    AppCoreState* core = ctx->core;
     if (core->jobSystem) {
-        app_tests_step_entities_jobs(memory, core, tests, deltaSeconds);
+        app_tests_step_entities_jobs(ctx, tests, deltaSeconds);
     } else {
-        app_tests_step_entities_single_thread(memory, core, tests, deltaSeconds);
+        app_tests_step_entities_single_thread(ctx, tests, deltaSeconds);
     }
 
     if (tests->lastVelocityError > 0.05f) {
@@ -106,32 +100,26 @@ void app_tests_tick(AppMemory* memory, AppCoreState* core, AppTestsState* tests,
     }
 }
 
-void app_tests_shutdown(AppMemory* memory, AppCoreState* core, AppTestsState* tests) {
-    (void) memory;
-    if (!core || !tests) {
-        return;
-    }
+void app_tests_shutdown(APP_Context* ctx, AppTestsState* tests) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+    ASSERT_ALWAYS(tests != 0);
 
     LOG_INFO("tests", "Shutdown (frames={} dispatches={} lastPos={:.2f})",
-             core->frameCounter, tests->jobDispatchCount, tests->lastPositionSum);
+             ctx->core->frameCounter, tests->jobDispatchCount, tests->lastPositionSum);
 }
 
-static void app_tests_step_entities_single_thread(AppMemory* memory, AppCoreState* core, AppTestsState* tests,
+static void app_tests_step_entities_single_thread(APP_Context* ctx, AppTestsState* tests,
                                                   F32 deltaSeconds) {
-    (void) core;
-    if (!tests || tests->entityCount == 0u) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(tests != 0);
+
+    if (tests->entityCount == 0u) {
         tests->lastVelocitySum = 0.0f;
         tests->lastVelocityError = tests->expectedSpeedSum;
         tests->lastPositionSum = 0.0f;
         return;
     }
-
-    Arena* excludes[1] = {memory ? memory->programArena : 0};
-    Temp scratch = get_scratch(excludes, ARRAY_COUNT(excludes));
-
-    F32* snapshot = (tests->entityCount > 0u)
-                        ? ARENA_PUSH_ARRAY(scratch.arena, F32, tests->entityCount)
-                        : NULL;
 
     F64 positionSum = 0.0;
     F32 speedSum = 0.0f;
@@ -141,17 +129,12 @@ static void app_tests_step_entities_single_thread(AppMemory* memory, AppCoreStat
         entity->x += entity->speed * deltaSeconds;
         entity->y += 0.5f * deltaSeconds;
         speedSum += entity->speed;
-        if (snapshot) {
-            snapshot[i] = entity->x;
-        }
         positionSum += (F64) entity->x;
     }
 
     tests->lastVelocitySum = speedSum;
     tests->lastVelocityError = ABS_F32(tests->expectedSpeedSum - speedSum);
     tests->lastPositionSum = (F32) positionSum;
-
-    temp_end(&scratch);
 }
 
 static void app_tests_job_update(void* userData) {
@@ -165,10 +148,6 @@ static void app_tests_job_update(void* userData) {
         *params->sumOut = 0.0f;
     }
 
-    Arena* excludes[1] = {params->programArena};
-    Temp scratch = get_scratch(excludes, ARRAY_COUNT(excludes));
-
-    F32* displacements = ARENA_PUSH_ARRAY(scratch.arena, F32, params->count);
     F32 localSpeedSum = 0.0f;
 
     for (U32 i = 0; i < params->count; ++i) {
@@ -178,7 +157,6 @@ static void app_tests_job_update(void* userData) {
         }
         TestEntity* entity = &tests->entities[entityIndex];
         F32 distance = entity->speed * params->deltaSeconds;
-        displacements[i] = distance;
         entity->x += distance;
         entity->y += 0.5f * params->deltaSeconds;
         localSpeedSum += entity->speed;
@@ -187,14 +165,16 @@ static void app_tests_job_update(void* userData) {
     if (params->sumOut) {
         *params->sumOut = localSpeedSum;
     }
-
-    temp_end(&scratch);
 }
 
-static void app_tests_step_entities_jobs(AppMemory* memory, AppCoreState* core, AppTestsState* tests,
-                                         F32 deltaSeconds) {
-    if (!memory || !core || !tests || !core->jobSystem || tests->entityCount == 0u) {
-        app_tests_step_entities_single_thread(memory, core, tests, deltaSeconds);
+static void app_tests_step_entities_jobs(APP_Context* ctx, AppTestsState* tests, F32 deltaSeconds) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+    ASSERT_ALWAYS(tests != 0);
+
+    AppCoreState* core = ctx->core;
+    if (!core->jobSystem || tests->entityCount == 0u) {
+        app_tests_step_entities_single_thread(ctx, tests, deltaSeconds);
         return;
     }
 
@@ -232,7 +212,6 @@ static void app_tests_step_entities_jobs(AppMemory* memory, AppCoreState* core, 
             .startIndex = start,
             .count = count,
             .deltaSeconds = deltaSeconds,
-            .programArena = memory ? memory->programArena : 0,
             .sumOut = &tests->chunkSums[jobIndex],
         };
 
@@ -253,20 +232,10 @@ static void app_tests_step_entities_jobs(AppMemory* memory, AppCoreState* core, 
     tests->lastVelocitySum = totalSpeed;
     tests->lastVelocityError = ABS_F32(tests->expectedSpeedSum - totalSpeed);
 
-    Arena* excludes[1] = {memory ? memory->programArena : 0};
-    Temp scratch = get_scratch(excludes, ARRAY_COUNT(excludes));
-    F32* snapshot = (tests->entityCount > 0u)
-                        ? ARENA_PUSH_ARRAY(scratch.arena, F32, tests->entityCount)
-                        : NULL;
-
     F64 positionSum = 0.0;
     for (U32 i = 0; i < tests->entityCount; ++i) {
-        if (snapshot) {
-            snapshot[i] = tests->entities[i].x;
-        }
         positionSum += (F64) tests->entities[i].x;
     }
 
     tests->lastPositionSum = (F32) positionSum;
-    temp_end(&scratch);
 }

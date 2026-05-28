@@ -25,6 +25,14 @@ static OS_WindowHandle os_make_window_handle_from_entity(OS_MACOS_GraphicsEntity
     return handle;
 }
 
+static void os_graphics_event_queue_init(OS_GraphicsEventQueue* queue) {
+    ASSERT_ALWAYS(queue != 0);
+    MEMSET(queue, 0, sizeof(*queue));
+    queue->head = &queue->nilNode;
+    queue->tail = &queue->nilNode;
+    queue->nilNode.next = &queue->nilNode;
+}
+
 static void os_register_active_graphics_entity(OS_MACOS_GraphicsEntity* entity) {
     if (!entity) {
         return;
@@ -112,14 +120,7 @@ static void os_push_graphics_event(OS_GraphicsEvent event) {
     }
 
     node->event = event;
-
-    if (!queue->head) {
-        queue->head = node;
-        queue->tail = node;
-    } else {
-        queue->tail->next = node;
-        queue->tail = node;
-    }
+    SLL_QUEUE_PUSH_NZ(&queue->nilNode, queue->head, queue->tail, node, next);
 
     if (queue->count < 0xFFFFFFFFu) {
         queue->count += 1u;
@@ -571,9 +572,6 @@ static B32 os_process_nsevent(NSEvent* event) {
     }
 }
 
-static OS_WindowResizeCallback g_os_window_resize_callback = 0;
-static void* g_os_window_resize_callback_user_data = 0;
-
 @interface OS_MacOS_WindowDelegate : NSObject <NSWindowDelegate>
 {
 @public
@@ -632,11 +630,6 @@ static void* g_os_window_resize_callback_user_data = 0;
     NSWindow* window = localEntity->window.window;
     if (window) {
         os_push_window_event(localEntity, OS_GraphicsEvent_Tag_WindowResized, window);
-        if (g_os_window_resize_callback) {
-            CGSize size = [window contentView].frame.size;
-            OS_WindowHandle handle = os_make_window_handle_from_entity(localEntity);
-            g_os_window_resize_callback(handle, (U32)size.width, (U32)size.height, g_os_window_resize_callback_user_data);
-        }
     }
 }
 
@@ -656,11 +649,6 @@ static void* g_os_window_resize_callback_user_data = 0;
     os_push_window_event(localEntity, OS_GraphicsEvent_Tag_WindowUnfocused, localEntity->window.window);
 }
 @end
-
-void OS_set_window_resize_callback(OS_WindowResizeCallback callback, void* userData) {
-    g_os_window_resize_callback = callback;
-    g_os_window_resize_callback_user_data = userData;
-}
 
 static OS_MACOS_GraphicsEntity* alloc_OS_graphics_entity() {
     OS_MACOS_GraphicsEntity* entity = g_OS_MacOSGraphicsState.freeEntities;
@@ -693,6 +681,13 @@ static void free_OS_graphics_entity(OS_MACOS_GraphicsEntity* entity) {
 // ////////////////////////
 // Graphics System
 
+B32 OS_graphics_has_metal_device() {
+    @autoreleasepool {
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        return device ? 1 : 0;
+    }
+}
+
 B32 OS_graphics_init() {
     if (g_OS_MacOSGraphicsState.initialized) {
         return 1;
@@ -716,7 +711,7 @@ B32 OS_graphics_init() {
         g_OS_MacOSGraphicsState.eventArena = eventArena;
         g_OS_MacOSGraphicsState.freeEntities = 0;
         g_OS_MacOSGraphicsState.activeEntities = 0;
-        MEMSET(&g_OS_MacOSGraphicsState.eventQueue, 0, sizeof(OS_GraphicsEventQueue));
+        os_graphics_event_queue_init(&g_OS_MacOSGraphicsState.eventQueue);
     }
 
     return 1;
@@ -749,7 +744,7 @@ void OS_graphics_shutdown() {
         g_OS_MacOSGraphicsState.initialized = 0;
         g_OS_MacOSGraphicsState.freeEntities = 0;
         g_OS_MacOSGraphicsState.activeEntities = 0;
-        MEMSET(&g_OS_MacOSGraphicsState.eventQueue, 0, sizeof(OS_GraphicsEventQueue));
+        os_graphics_event_queue_init(&g_OS_MacOSGraphicsState.eventQueue);
     }
 }
 
@@ -922,14 +917,11 @@ U32 OS_graphics_poll_events(OS_GraphicsEvent* outEvents, U32 maxEvents) {
 
     while (count < maxEvents) {
         OS_GraphicsEventNode* node = queue->head;
-        if (!node) {
+        if (CHECK_NIL(&queue->nilNode, node)) {
             break;
         }
 
-        queue->head = node->next;
-        if (!queue->head) {
-            queue->tail = 0;
-        }
+        SLL_QUEUE_POP_NZ(&queue->nilNode, queue->head, queue->tail, next);
 
         if (queue->count > 0) {
             queue->count -= 1u;
@@ -976,4 +968,3 @@ B32 OS_graphics_pump_events() {
 
     return processedEvent;
 }
-

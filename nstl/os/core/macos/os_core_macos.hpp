@@ -9,7 +9,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <limits.h>
-#include <cstdlib>
+#include <stdlib.h>
 #include <time.h>
 #include <pthread.h>
 #include <sched.h>

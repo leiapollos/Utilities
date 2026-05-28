@@ -95,7 +95,6 @@ OS_Handle OS_barrier_create(U32 threadCount);
 void OS_barrier_destroy(OS_Handle barrier);
 void OS_barrier_wait(OS_Handle barrier);
 
-
 // ////////////////////////
 // File I/O
 

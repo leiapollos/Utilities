@@ -4,6 +4,8 @@
 //
 
 @sum_type OS_GraphicsEvent {
+    @no_match
+
     @common {
         window: OS_WindowHandle,
     }
@@ -30,4 +32,3 @@
     MouseMove { x: F32, y: F32, deltaX: F32, deltaY: F32, globalX: F32, globalY: F32, modifiers: U32, isInWindow: B32 },
     MouseScroll { x: F32, y: F32, deltaX: F32, deltaY: F32, modifiers: U32 },
 }
-

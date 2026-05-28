@@ -78,7 +78,6 @@ JobSystemStats job_system_get_totals(JobSystem* jobSystem);
             _jobTmp = _jobInitValues; \
         } \
         __VA_OPT__( static_assert(sizeof(__VA_ARGS__) <= JOB_PARAMETER_SPACE, "Parameter too large for inline storage"); ) \
-        __VA_OPT__( memcpy(_jobTmp.parameters, &(__VA_ARGS__), (U32)sizeof(__VA_ARGS__)); ) \
+        __VA_OPT__( MEMCPY(_jobTmp.parameters, &(__VA_ARGS__), (U32)sizeof(__VA_ARGS__)); ) \
         job_system_submit_(_jobTmp); \
     } while (0)
-
