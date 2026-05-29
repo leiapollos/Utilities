@@ -13,6 +13,13 @@
 #define BUILD_HOT_DIR "build/hot"
 #define META_DIR "meta"
 
+#define HOST_EXE_BASENAME "utilities_host"
+#if SOB_WINDOWS
+#define HOST_OUTPUT_PATH BUILD_DIR "/" HOST_EXE_BASENAME ".exe"
+#else
+#define HOST_OUTPUT_PATH BUILD_DIR "/" HOST_EXE_BASENAME
+#endif
+
 #define METAGEN_EXE_BASENAME "metagen"
 #if SOB_WINDOWS
 #define METAGEN_OUTPUT_PATH BUILD_TOOLS_DIR "/" METAGEN_EXE_BASENAME ".exe"
@@ -27,6 +34,7 @@ typedef enum BuildMode {
 } BuildMode;
 
 typedef enum BuildTarget {
+    BuildTarget_Run,
     BuildTarget_All,
     BuildTarget_Dev,
     BuildTarget_Host,
@@ -40,7 +48,8 @@ static void print_usage(void) {
     printf("Usage: ./sob [target] [mode]\n");
     printf("\n");
     printf("Targets:\n");
-    printf("  dev      Build host + hot module (default)\n");
+    printf("  run      Build host + hot module and start the app (default)\n");
+    printf("  dev      Build host + hot module\n");
     printf("  all      Alias for dev\n");
     printf("  host     Build host executable only\n");
     printf("  module   Build hot-reload module only\n");
@@ -80,6 +89,10 @@ static int parse_target(const char* value, BuildTarget* outTarget) {
         return 0;
     }
 
+    if (strcmp(value, "run") == 0) {
+        *outTarget = BuildTarget_Run;
+        return 1;
+    }
     if (strcmp(value, "all") == 0) {
         *outTarget = BuildTarget_All;
         return 1;
@@ -117,6 +130,9 @@ static const char* build_mode_name(BuildMode mode) {
 }
 
 static const char* build_target_name(BuildTarget target) {
+    if (target == BuildTarget_Run) {
+        return "run";
+    }
     if (target == BuildTarget_All || target == BuildTarget_Dev) {
         return "dev";
     }
@@ -387,7 +403,7 @@ static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
         requestedTarget == BuildTarget_Dev) {
         Sob_Target* hostTarget = sob_target_create(ctx, "utilities_host", Sob_TargetKind_Executable,
                                                    .outputDir = BUILD_DIR,
-                                                   .outputName = "utilities_host");
+                                                   .outputName = HOST_EXE_BASENAME);
         if (!hostTarget) {
             fprintf(stderr, "Error: failed to create host target\n");
             sob_arena_destroy(arena);
@@ -476,6 +492,30 @@ static S32 build_dev_targets_parallel(BuildMode mode, const char* selfPath) {
     return (moduleResult == 0 && hostResult == 0) ? 0 : 1;
 }
 
+static S32 run_app_command(void) {
+    Sob_Arena* arena = sob_arena_create();
+    if (!arena) {
+        fprintf(stderr, "Error: failed to create sob arena for run command\n");
+        return 1;
+    }
+
+    Sob_Cmd* cmd = sob_cmd_create(arena);
+    if (!cmd) {
+        fprintf(stderr, "Error: failed to create app run command\n");
+        sob_arena_destroy(arena);
+        return 1;
+    }
+
+    sob_cmd_append(cmd, HOST_OUTPUT_PATH);
+
+    printf("==> Running %s...\n", HOST_OUTPUT_PATH);
+    fflush(stdout);
+
+    S32 result = sob_cmd_run(cmd);
+    sob_arena_destroy(arena);
+    return result;
+}
+
 static S32 handle_clean(void) {
     if (!sob_fs_exists(BUILD_DIR)) {
         printf("==> Build directory '%s' is already clean.\n", BUILD_DIR);
@@ -495,11 +535,11 @@ static S32 handle_clean(void) {
 int main(int argc, char** argv) {
     SOB_GO_REBUILD_URSELF(argc, argv);
 
-    BuildTarget target = BuildTarget_Dev;
+    BuildTarget target = BuildTarget_Run;
     BuildMode mode = BuildMode_Debug;
 
     if (argc >= 2) {
-        BuildTarget parsedTarget = BuildTarget_Dev;
+        BuildTarget parsedTarget = BuildTarget_Run;
         BuildMode parsedMode = BuildMode_Debug;
 
         if (parse_target(argv[1], &parsedTarget)) {
@@ -518,7 +558,7 @@ int main(int argc, char** argv) {
                 return 1;
             }
         } else if (parse_mode(argv[1], &parsedMode)) {
-            target = BuildTarget_Dev;
+            target = BuildTarget_Run;
             mode = parsedMode;
             if (argc > 2) {
                 fprintf(stderr, "Error: too many arguments\n");
@@ -537,8 +577,8 @@ int main(int argc, char** argv) {
     }
 
 #if !SOB_MACOS
-    if (target == BuildTarget_Host || target == BuildTarget_Module || target == BuildTarget_All ||
-        target == BuildTarget_Dev || target == BuildTarget_Ship) {
+    if (target == BuildTarget_Run || target == BuildTarget_Host || target == BuildTarget_Module ||
+        target == BuildTarget_All || target == BuildTarget_Dev || target == BuildTarget_Ship) {
         fprintf(stderr, "Error: '%s' build is currently supported only on macOS.\n",
                 build_target_name(target));
         fprintf(stderr, "Use './sob metagen' for metadata generation on this platform.\n");
@@ -558,6 +598,15 @@ int main(int argc, char** argv) {
 
     if (target == BuildTarget_Metagen) {
         return 0;
+    }
+
+    if (target == BuildTarget_Run) {
+        S32 buildResult = build_dev_targets_parallel(mode, argv[0]);
+        if (buildResult != 0) {
+            return buildResult;
+        }
+
+        return run_app_command();
     }
 
     if (target == BuildTarget_All || target == BuildTarget_Dev) {

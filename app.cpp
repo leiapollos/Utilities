@@ -202,78 +202,61 @@ static B32 app_gfx_demo_init(APP_Context* ctx) {
         0u, 1u, 2u,
     };
 
-    B32 ok = 0;
-    do {
-        GfxBufferDesc vertexDesc = {};
-        vertexDesc.name = "triangle vertices";
-        vertexDesc.size = sizeof(vertices);
-        vertexDesc.usageFlags = GfxBufferUsageFlags_Vertex;
-        vertexDesc.memoryKind = GfxMemoryKind_Device;
-        vertexDesc.initialData = vertices;
-        state->gfxTriangleVertexBuffer = gfx_create_buffer(ctx->host->gfxDevice, &vertexDesc);
-        if (state->gfxTriangleVertexBuffer.generation == 0u) {
-            break;
-        }
+    GfxBufferDesc vertexDesc = {};
+    vertexDesc.name = "triangle vertices";
+    vertexDesc.size = sizeof(vertices);
+    vertexDesc.usageFlags = GfxBufferUsageFlags_Vertex;
+    vertexDesc.memoryKind = GfxMemoryKind_Device;
+    vertexDesc.initialData = vertices;
+    state->gfxTriangleVertexBuffer = gfx_create_buffer(ctx->host->gfxDevice, &vertexDesc);
 
-        GfxBufferDesc indexDesc = {};
-        indexDesc.name = "triangle indices";
-        indexDesc.size = sizeof(indices);
-        indexDesc.usageFlags = GfxBufferUsageFlags_Index;
-        indexDesc.memoryKind = GfxMemoryKind_Device;
-        indexDesc.initialData = indices;
-        state->gfxTriangleIndexBuffer = gfx_create_buffer(ctx->host->gfxDevice, &indexDesc);
-        if (state->gfxTriangleIndexBuffer.generation == 0u) {
-            break;
-        }
+    GfxBufferDesc indexDesc = {};
+    indexDesc.name = "triangle indices";
+    indexDesc.size = sizeof(indices);
+    indexDesc.usageFlags = GfxBufferUsageFlags_Index;
+    indexDesc.memoryKind = GfxMemoryKind_Device;
+    indexDesc.initialData = indices;
+    state->gfxTriangleIndexBuffer = gfx_create_buffer(ctx->host->gfxDevice, &indexDesc);
 
-        GfxVertexAttribute attributes[2] = {};
-        attributes[0].location = 0u;
-        attributes[0].offset = 0u;
-        attributes[0].format = GfxVertexFormat_F32x2;
-        attributes[1].location = 1u;
-        attributes[1].offset = sizeof(F32) * 2u;
-        attributes[1].format = GfxVertexFormat_F32x4;
+    GfxVertexAttribute attributes[2] = {};
+    attributes[0].location = 0u;
+    attributes[0].offset = 0u;
+    attributes[0].format = GfxVertexFormat_F32x2;
+    attributes[1].location = 1u;
+    attributes[1].offset = sizeof(F32) * 2u;
+    attributes[1].format = GfxVertexFormat_F32x4;
 
-        GfxFormat colorFormats[1] = {
-            GfxFormat_BGRA8_UNorm,
-        };
+    GfxFormat colorFormats[1] = {
+        GfxFormat_BGRA8_UNorm,
+    };
 
-        GfxGraphicsPipelineDesc pipelineDesc = {};
-        pipelineDesc.name = "triangle pipeline";
-        pipelineDesc.vertexShader.format = GfxShaderFormat_MSL_Source;
-        pipelineDesc.vertexShader.data = APP_GFX_TRIANGLE_SHADER;
-        pipelineDesc.vertexShader.size = C_STR_LEN(APP_GFX_TRIANGLE_SHADER);
-        pipelineDesc.vertexShader.entry = "vertex_main";
-        pipelineDesc.fragmentShader = pipelineDesc.vertexShader;
-        pipelineDesc.fragmentShader.entry = "fragment_main";
-        pipelineDesc.attributes = attributes;
-        pipelineDesc.attributeCount = ARRAY_COUNT(attributes);
-        pipelineDesc.vertexBuffer.stride = sizeof(AppGfxVertex);
-        pipelineDesc.topology = GfxPrimitiveTopology_TriangleList;
-        pipelineDesc.raster.cullMode = GfxCullMode_None;
-        pipelineDesc.raster.frontFace = GfxFrontFace_CCW;
-        pipelineDesc.depth.compareOp = GfxCompareOp_Always;
-        pipelineDesc.colorFormats = colorFormats;
-        pipelineDesc.colorFormatCount = ARRAY_COUNT(colorFormats);
-        pipelineDesc.depthFormat = GfxFormat_Invalid;
+    GfxGraphicsPipelineDesc pipelineDesc = {};
+    pipelineDesc.name = "triangle pipeline";
+    pipelineDesc.vertexShader.format = GfxShaderFormat_MSL_Source;
+    pipelineDesc.vertexShader.data = APP_GFX_TRIANGLE_SHADER;
+    pipelineDesc.vertexShader.size = C_STR_LEN(APP_GFX_TRIANGLE_SHADER);
+    pipelineDesc.vertexShader.entry = "vertex_main";
+    pipelineDesc.fragmentShader = pipelineDesc.vertexShader;
+    pipelineDesc.fragmentShader.entry = "fragment_main";
+    pipelineDesc.attributes = attributes;
+    pipelineDesc.attributeCount = ARRAY_COUNT(attributes);
+    pipelineDesc.vertexBuffer.stride = sizeof(AppGfxVertex);
+    pipelineDesc.topology = GfxPrimitiveTopology_TriangleList;
+    pipelineDesc.raster.cullMode = GfxCullMode_None;
+    pipelineDesc.raster.frontFace = GfxFrontFace_CCW;
+    pipelineDesc.depth.compareOp = GfxCompareOp_Always;
+    pipelineDesc.colorFormats = colorFormats;
+    pipelineDesc.colorFormatCount = ARRAY_COUNT(colorFormats);
+    pipelineDesc.depthFormat = GfxFormat_Invalid;
 
-        state->gfxTrianglePipeline = gfx_create_graphics_pipeline(ctx->host->gfxDevice, &pipelineDesc);
-        if (state->gfxTrianglePipeline.generation == 0u) {
-            break;
-        }
+    state->gfxTrianglePipeline = gfx_create_graphics_pipeline(ctx->host->gfxDevice, &pipelineDesc);
 
-        if (state->testsEnabled) {
-            app_gfx_run_resource_tests(ctx);
-        }
-
-        state->gfxDemoInitialized = 1;
-        ok = 1;
-    } while (0);
-
-    if (!ok) {
-        app_gfx_demo_shutdown(ctx);
+    if (state->testsEnabled) {
+        app_gfx_run_resource_tests(ctx);
     }
-    return ok;
+
+    state->gfxDemoInitialized = 1;
+    return 1;
 }
 
 static void app_gfx_demo_shutdown(APP_Context* ctx) {
@@ -282,10 +265,7 @@ static void app_gfx_demo_shutdown(APP_Context* ctx) {
 
     AppCoreState* state = ctx->core;
     GfxDevice* device = ctx->host ? ctx->host->gfxDevice : 0;
-    B32 hasResources = (state->gfxTrianglePipeline.generation != 0u ||
-                        state->gfxTriangleIndexBuffer.generation != 0u ||
-                        state->gfxTriangleVertexBuffer.generation != 0u);
-    if (!device || (!state->gfxDemoInitialized && !hasResources)) {
+    if (!device) {
         return;
     }
 
@@ -365,16 +345,13 @@ static void app_gfx_demo_frame(APP_Context* ctx) {
     GfxTexture backbuffer = gfx_get_backbuffer(frame);
 
     GfxTemp drawTemp = gfx_allocate_temp(frame, sizeof(AppGfxDrawData), 16u);
-    if (!drawTemp.cpu) {
-        gfx_end_frame(frame);
-        return;
+    if (drawTemp.cpu) {
+        AppGfxDrawData* drawData = (AppGfxDrawData*)drawTemp.cpu;
+        drawData->offsetScale[0] = 0.0f;
+        drawData->offsetScale[1] = 0.0f;
+        drawData->offsetScale[2] = 0.95f;
+        drawData->offsetScale[3] = 1.0f;
     }
-
-    AppGfxDrawData* drawData = (AppGfxDrawData*)drawTemp.cpu;
-    drawData->offsetScale[0] = 0.0f;
-    drawData->offsetScale[1] = 0.0f;
-    drawData->offsetScale[2] = 0.95f;
-    drawData->offsetScale[3] = 1.0f;
 
     GfxColorTarget colorTarget = {};
     colorTarget.texture = backbuffer;
