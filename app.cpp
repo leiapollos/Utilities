@@ -3,14 +3,11 @@
 //
 
 #include "app_interface.hpp"
-#include "app_tests.hpp"
 #include "app_state.hpp"
 
 #include "nstl/artifact/artifact_include.cpp"
-#include "app_tests.cpp"
 
-#define APP_CORE_STATE_VERSION 21u
-#define APP_TESTS_STATE_VERSION 2u
+#define APP_CORE_STATE_VERSION 22u
 #define APP_GFX_TRIANGLE_SHADER_PATH "app/shaders/triangle.metal"
 
 struct AppGfxVertex {
@@ -33,14 +30,11 @@ static B32 app_context_from_call(AppHost* host, HOT_StateStore* store, APP_Conte
 static void app_state_init(APP_Context* ctx, APP_StateKind kind, void* memory);
 static U32 app_select_worker_count(const AppHost* host);
 static B32 app_ensure_job_system(APP_Context* ctx);
-static B32 app_should_run_tests(AppHost* host);
 static B32 app_resource_cache_init(APP_Context* ctx);
 static void app_resource_cache_shutdown(APP_Context* ctx);
 static B32 app_gfx_demo_init(APP_Context* ctx);
 static void app_gfx_try_create_triangle_pipeline(APP_Context* ctx);
 static void app_gfx_demo_shutdown(APP_Context* ctx);
-static void app_gfx_run_resource_tests(APP_Context* ctx);
-static void app_gfx_run_frame_tests(APP_Context* ctx, GfxFrame* frame);
 static void app_gfx_demo_frame(APP_Context* ctx);
 
 static B32 app_boot(AppHost* host, HOT_StateStore* store) {
@@ -53,14 +47,6 @@ static B32 app_boot(AppHost* host, HOT_StateStore* store) {
     APP_Context ctx = {};
     if (!app_context_from_call(host, store, &ctx)) {
         return 0;
-    }
-
-    ctx.core->testsEnabled = app_should_run_tests(host);
-    if (ctx.core->testsEnabled) {
-        LOG_INFO("tests", "Per-frame tests enabled by UTILITIES_RUN_TESTS");
-        if (!app_ensure_job_system(&ctx)) {
-            return 0;
-        }
     }
 
     if (!app_gfx_demo_init(&ctx)) {
@@ -90,17 +76,10 @@ static B32 app_after_reload(AppHost* host, HOT_StateStore* store) {
     }
 
     ctx.core->reloadCount += 1u;
-    ctx.core->testsEnabled = app_should_run_tests(host);
-
-    if (ctx.core->testsEnabled && !app_ensure_job_system(&ctx)) {
-        return 0;
-    }
-
     if (!ctx.core->gfxDemoInitialized && !app_gfx_demo_init(&ctx)) {
         return 0;
     }
 
-    app_tests_reload(&ctx, ctx.tests);
     return 1;
 }
 
@@ -130,10 +109,6 @@ static void app_frame(AppHost* host, HOT_StateStore* store, const AppInput* inpu
         }
     }
 
-    if (state->testsEnabled) {
-        app_tests_tick(&ctx, ctx.tests, input->deltaSeconds);
-    }
-
     app_gfx_demo_frame(&ctx);
 }
 
@@ -146,7 +121,6 @@ static void app_shutdown(AppHost* host, HOT_StateStore* store) {
         return;
     }
 
-    app_tests_shutdown(&ctx, ctx.tests);
     app_gfx_demo_shutdown(&ctx);
 
     if (ctx.core->jobSystem) {
@@ -283,10 +257,6 @@ static B32 app_gfx_demo_init(APP_Context* ctx) {
 
     app_gfx_try_create_triangle_pipeline(ctx);
 
-    if (state->testsEnabled) {
-        app_gfx_run_resource_tests(ctx);
-    }
-
     state->gfxDemoInitialized = 1;
     return 1;
 }
@@ -376,48 +346,6 @@ static void app_gfx_demo_shutdown(APP_Context* ctx) {
     state->gfxDemoInitialized = 0;
 }
 
-static void app_gfx_run_resource_tests(APP_Context* ctx) {
-    ASSERT_ALWAYS(ctx != 0);
-    ASSERT_ALWAYS(ctx->host != 0);
-    ASSERT_ALWAYS(ctx->host->gfxDevice != 0);
-
-    U32 value = 0x12345678u;
-    GfxBufferDesc desc = {};
-    desc.name = "gfx test buffer";
-    desc.size = sizeof(value);
-    desc.usageFlags = GfxBufferUsageFlags_Uniform;
-    desc.memoryKind = GfxMemoryKind_Upload;
-    desc.initialData = &value;
-
-    GfxBuffer buffer = gfx_create_buffer(ctx->host->gfxDevice, &desc);
-    ASSERT_ALWAYS(buffer.generation != 0u);
-
-    GfxResourceId first = gfx_register_buffer(ctx->host->gfxDevice, buffer);
-    GfxResourceId second = gfx_register_buffer(ctx->host->gfxDevice, buffer);
-    ASSERT_ALWAYS(first.index != 0u);
-    ASSERT_ALWAYS(first.index == second.index);
-
-    gfx_destroy_buffer(ctx->host->gfxDevice, buffer);
-}
-
-static void app_gfx_run_frame_tests(APP_Context* ctx, GfxFrame* frame) {
-    ASSERT_ALWAYS(ctx != 0);
-    ASSERT_ALWAYS(ctx->core != 0);
-
-    if (!ctx->core->testsEnabled || ctx->core->gfxTestsRan) {
-        return;
-    }
-
-    GfxTemp aligned = gfx_allocate_temp(frame, 16u, 16u);
-    ASSERT_ALWAYS(aligned.cpu != 0);
-    ASSERT_ALWAYS((aligned.gpu.offset & 15u) == 0u);
-
-    GfxTemp overflow = gfx_allocate_temp(frame, GB(1), 16u);
-    ASSERT_ALWAYS(overflow.cpu == 0);
-
-    ctx->core->gfxTestsRan = 1;
-}
-
 static void app_gfx_demo_frame(APP_Context* ctx) {
     ASSERT_ALWAYS(ctx != 0);
     ASSERT_ALWAYS(ctx->host != 0);
@@ -436,8 +364,6 @@ static void app_gfx_demo_frame(APP_Context* ctx) {
     if (!frame) {
         return;
     }
-
-    app_gfx_run_frame_tests(ctx, frame);
 
     GfxCommandBuffer* commands = gfx_get_command_buffer(frame);
     GfxTexture backbuffer = gfx_get_backbuffer(frame);
@@ -499,8 +425,6 @@ static const APP_StateDesc* app_state_desc(APP_StateKind kind) {
     static const APP_StateDesc descs[APP_State_COUNT] = {
         {APP_STATE_ID('C', 'O', 'R', 'E'), "core", APP_CORE_STATE_VERSION,
          sizeof(AppCoreState), alignof(AppCoreState)},
-        {APP_STATE_ID('T', 'E', 'S', 'T'), "tests", APP_TESTS_STATE_VERSION,
-         sizeof(AppTestsState), alignof(AppTestsState)},
     };
 
     if ((U32) kind >= APP_State_COUNT) {
@@ -551,11 +475,6 @@ static B32 app_context_from_call(AppHost* host, HOT_StateStore* store, APP_Conte
         return 0;
     }
 
-    ctx.tests = (AppTestsState*) app_state_require(&ctx, APP_State_Tests);
-    if (ctx.tests == 0) {
-        return 0;
-    }
-
     *outCtx = ctx;
     return 1;
 }
@@ -573,11 +492,6 @@ static void app_state_init(APP_Context* ctx, APP_StateKind kind, void* memory) {
 
             StringU8 eventsDomain = str8((const char*) "events", 6);
             set_log_domain_level(eventsDomain, LogLevel_Debug);
-        }
-        break;
-
-        case APP_State_Tests: {
-            app_tests_initialize(ctx, (AppTestsState*) memory);
         }
         break;
 
@@ -620,28 +534,6 @@ static B32 app_ensure_job_system(APP_Context* ctx) {
 
     LOG_INFO("jobs", "Job system ready (workers={})", state->workerCount);
     return 1;
-}
-
-static B32 app_should_run_tests(AppHost* host) {
-    ASSERT_ALWAYS(host != 0);
-
-    Temp scratch = get_scratch(0, 0);
-    if (!scratch.arena) {
-        return 0;
-    }
-    DEFER_REF(temp_end(&scratch));
-
-    StringU8 value = APP_OS_CALL(host, OS_get_environment_variable, scratch.arena, str8("UTILITIES_RUN_TESTS"));
-    if (!value.data || value.size == 0u) {
-        return 0;
-    }
-
-    U8 first = value.data[0];
-    if (first == (U8)'1' || first == (U8)'t' || first == (U8)'T' ||
-        first == (U8)'y' || first == (U8)'Y') {
-        return 1;
-    }
-    return 0;
 }
 
 APP_EXPORT B32 app_load(AppLoadParams* params, AppCode* outCode) {

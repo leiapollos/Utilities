@@ -7,13 +7,10 @@
 #include "app_interface.hpp"
 #include "nstl/artifact/artifact_include.hpp"
 
-struct AppTestsState;
-
 #define APP_STATE_ID(a, b, c, d) ((((U64)(a)) << 56u) | (((U64)(b)) << 48u) | (((U64)(c)) << 40u) | (((U64)(d)) << 32u) | 0x53544154u)
 
 enum APP_StateKind {
     APP_State_Core = 0,
-    APP_State_Tests,
     APP_State_COUNT,
 };
 
@@ -33,10 +30,8 @@ struct AppCoreState {
 
     JobSystem* jobSystem;
     U32 workerCount;
-    B32 testsEnabled;
 
     B32 gfxDemoInitialized;
-    B32 gfxTestsRan;
     Arena* resourceArena;
     ArtifactCache* resourceCache;
     ArtifactHandle gfxTriangleShader;
@@ -49,5 +44,4 @@ struct APP_Context {
     AppHost* host;
     HOT_StateStore* store;
     AppCoreState* core;
-    AppTestsState* tests;
 };
