@@ -6,10 +6,12 @@
 #include "app_tests.hpp"
 #include "app_state.hpp"
 
+#include "nstl/artifact/artifact_include.cpp"
 #include "app_tests.cpp"
 
-#define APP_CORE_STATE_VERSION 19u
+#define APP_CORE_STATE_VERSION 21u
 #define APP_TESTS_STATE_VERSION 2u
+#define APP_GFX_TRIANGLE_SHADER_PATH "app/shaders/triangle.metal"
 
 struct AppGfxVertex {
     F32 position[2];
@@ -20,37 +22,10 @@ struct AppGfxDrawData {
     F32 offsetScale[4];
 };
 
-static const char APP_GFX_TRIANGLE_SHADER[] =
-R"msl(
-#include <metal_stdlib>
-using namespace metal;
-
-struct VertexIn {
-    float2 position [[attribute(0)]];
-    float4 color [[attribute(1)]];
+enum AppResourceType {
+    AppResourceType_Invalid = 0,
+    AppResourceType_RawFile = 1,
 };
-
-struct DrawData {
-    float4 offsetScale;
-};
-
-struct VertexOut {
-    float4 position [[position]];
-    float4 color;
-};
-
-vertex VertexOut vertex_main(VertexIn in [[stage_in]], constant DrawData& drawData [[buffer(8)]]) {
-    VertexOut out;
-    float2 position = in.position * drawData.offsetScale.z + drawData.offsetScale.xy;
-    out.position = float4(position, 0.0, 1.0);
-    out.color = in.color;
-    return out;
-}
-
-fragment float4 fragment_main(VertexOut in [[stage_in]]) {
-    return in.color;
-}
-)msl";
 
 static const APP_StateDesc* app_state_desc(APP_StateKind kind);
 static void* app_state_require(APP_Context* ctx, APP_StateKind kind);
@@ -59,7 +34,10 @@ static void app_state_init(APP_Context* ctx, APP_StateKind kind, void* memory);
 static U32 app_select_worker_count(const AppHost* host);
 static B32 app_ensure_job_system(APP_Context* ctx);
 static B32 app_should_run_tests(AppHost* host);
+static B32 app_resource_cache_init(APP_Context* ctx);
+static void app_resource_cache_shutdown(APP_Context* ctx);
 static B32 app_gfx_demo_init(APP_Context* ctx);
+static void app_gfx_try_create_triangle_pipeline(APP_Context* ctx);
 static void app_gfx_demo_shutdown(APP_Context* ctx);
 static void app_gfx_run_resource_tests(APP_Context* ctx);
 static void app_gfx_run_frame_tests(APP_Context* ctx, GfxFrame* frame);
@@ -178,6 +156,73 @@ static void app_shutdown(AppHost* host, HOT_StateStore* store) {
     }
 }
 
+static B32 app_resource_cache_init(APP_Context* ctx) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->host != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    AppCoreState* state = ctx->core;
+    if (state->resourceCache != 0) {
+        return 1;
+    }
+
+    if (!app_ensure_job_system(ctx)) {
+        return 0;
+    }
+
+    state->resourceArena = arena_alloc(.arenaSize = MB(4),
+                                       .committedSize = KB(64),
+                                       .flags = ArenaFlags_DoChain);
+    if (state->resourceArena == 0) {
+        LOG_ERROR("resource", "Failed to create resource arena");
+        return 0;
+    }
+
+    ArtifactCacheDesc desc = {};
+    desc.structSize = sizeof(desc);
+    desc.apiVersion = ARTIFACT_CACHE_API_VERSION;
+    desc.arena = state->resourceArena;
+    desc.jobSystem = state->jobSystem;
+    desc.initialSlotCapacity = 64u;
+    desc.initialHashCapacity = 128u;
+    desc.budgetBytes = MB(16);
+    desc.maxTypeId = AppResourceType_RawFile;
+
+    state->resourceCache = artifact_cache_alloc(&desc);
+    if (state->resourceCache == 0) {
+        LOG_ERROR("resource", "Failed to create artifact cache");
+        app_resource_cache_shutdown(ctx);
+        return 0;
+    }
+
+    ArtifactTypeOps rawFileOps = {};
+    rawFileOps.kind = ArtifactTypeKind_RawFile;
+    if (!artifact_cache_register_type(state->resourceCache, AppResourceType_RawFile, &rawFileOps)) {
+        LOG_ERROR("resource", "Failed to register raw file artifact type");
+        app_resource_cache_shutdown(ctx);
+        return 0;
+    }
+
+    return 1;
+}
+
+static void app_resource_cache_shutdown(APP_Context* ctx) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    AppCoreState* state = ctx->core;
+    if (state->resourceCache != 0) {
+        artifact_cache_destroy(state->resourceCache);
+        state->resourceCache = 0;
+    }
+    if (state->resourceArena != 0) {
+        arena_release(state->resourceArena);
+        state->resourceArena = 0;
+    }
+
+    state->gfxTriangleShader = ARTIFACT_HANDLE_INVALID;
+}
+
 static B32 app_gfx_demo_init(APP_Context* ctx) {
     ASSERT_ALWAYS(ctx != 0);
     ASSERT_ALWAYS(ctx->host != 0);
@@ -190,6 +235,24 @@ static B32 app_gfx_demo_init(APP_Context* ctx) {
     if (!ctx->host->gfxDevice) {
         LOG_ERROR("gfx", "App has no gfx device");
         return 0;
+    }
+    if (!app_resource_cache_init(ctx)) {
+        return 0;
+    }
+
+    Temp scratch = get_scratch(0, 0);
+    if (scratch.arena != 0) {
+        ArtifactUseScope scope = {};
+        if (artifact_use_scope_open(state->resourceCache, scratch.arena, &scope)) {
+            StringU8 exeDir = OS_get_executable_directory(scratch.arena);
+            StringU8 shaderPath = str8_concat(scratch.arena, exeDir, str8("/../" APP_GFX_TRIANGLE_SHADER_PATH));
+            state->gfxTriangleShader = artifact_acquire(&scope,
+                                                        AppResourceType_RawFile,
+                                                        shaderPath,
+                                                        ArtifactAcquireFlags_Async);
+            artifact_use_scope_close(&scope);
+        }
+        temp_end(&scratch);
     }
 
     static const AppGfxVertex vertices[] = {
@@ -218,38 +281,7 @@ static B32 app_gfx_demo_init(APP_Context* ctx) {
     indexDesc.initialData = indices;
     state->gfxTriangleIndexBuffer = gfx_create_buffer(ctx->host->gfxDevice, &indexDesc);
 
-    GfxVertexAttribute attributes[2] = {};
-    attributes[0].location = 0u;
-    attributes[0].offset = 0u;
-    attributes[0].format = GfxVertexFormat_F32x2;
-    attributes[1].location = 1u;
-    attributes[1].offset = sizeof(F32) * 2u;
-    attributes[1].format = GfxVertexFormat_F32x4;
-
-    GfxFormat colorFormats[1] = {
-        GfxFormat_BGRA8_UNorm,
-    };
-
-    GfxGraphicsPipelineDesc pipelineDesc = {};
-    pipelineDesc.name = "triangle pipeline";
-    pipelineDesc.vertexShader.format = GfxShaderFormat_MSL_Source;
-    pipelineDesc.vertexShader.data = APP_GFX_TRIANGLE_SHADER;
-    pipelineDesc.vertexShader.size = C_STR_LEN(APP_GFX_TRIANGLE_SHADER);
-    pipelineDesc.vertexShader.entry = "vertex_main";
-    pipelineDesc.fragmentShader = pipelineDesc.vertexShader;
-    pipelineDesc.fragmentShader.entry = "fragment_main";
-    pipelineDesc.attributes = attributes;
-    pipelineDesc.attributeCount = ARRAY_COUNT(attributes);
-    pipelineDesc.vertexBuffer.stride = sizeof(AppGfxVertex);
-    pipelineDesc.topology = GfxPrimitiveTopology_TriangleList;
-    pipelineDesc.raster.cullMode = GfxCullMode_None;
-    pipelineDesc.raster.frontFace = GfxFrontFace_CCW;
-    pipelineDesc.depth.compareOp = GfxCompareOp_Always;
-    pipelineDesc.colorFormats = colorFormats;
-    pipelineDesc.colorFormatCount = ARRAY_COUNT(colorFormats);
-    pipelineDesc.depthFormat = GfxFormat_Invalid;
-
-    state->gfxTrianglePipeline = gfx_create_graphics_pipeline(ctx->host->gfxDevice, &pipelineDesc);
+    app_gfx_try_create_triangle_pipeline(ctx);
 
     if (state->testsEnabled) {
         app_gfx_run_resource_tests(ctx);
@@ -259,20 +291,84 @@ static B32 app_gfx_demo_init(APP_Context* ctx) {
     return 1;
 }
 
+static void app_gfx_try_create_triangle_pipeline(APP_Context* ctx) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->host != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    AppCoreState* state = ctx->core;
+    if (state->resourceCache == 0 || ctx->host->gfxDevice == 0) {
+        return;
+    }
+    if (state->gfxTrianglePipeline.index != 0u || state->gfxTrianglePipeline.generation != 0u) {
+        return;
+    }
+
+    Temp scratch = get_scratch(0, 0);
+    if (scratch.arena == 0) {
+        return;
+    }
+
+    ArtifactUseScope scope = {};
+    if (!artifact_use_scope_open(state->resourceCache, scratch.arena, &scope)) {
+        temp_end(&scratch);
+        return;
+    }
+
+    ArtifactView shaderView = artifact_resolve_view(&scope, state->gfxTriangleShader);
+    if (shaderView.data != 0 && shaderView.size != 0u) {
+        GfxVertexAttribute attributes[2] = {};
+        attributes[0].location = 0u;
+        attributes[0].offset = 0u;
+        attributes[0].format = GfxVertexFormat_F32x2;
+        attributes[1].location = 1u;
+        attributes[1].offset = sizeof(F32) * 2u;
+        attributes[1].format = GfxVertexFormat_F32x4;
+
+        GfxFormat colorFormats[1] = {
+            GfxFormat_BGRA8_UNorm,
+        };
+
+        GfxGraphicsPipelineDesc pipelineDesc = {};
+        pipelineDesc.name = "triangle pipeline";
+        pipelineDesc.vertexShader.format = GfxShaderFormat_MSL_Source;
+        pipelineDesc.vertexShader.data = shaderView.data;
+        pipelineDesc.vertexShader.size = shaderView.size;
+        pipelineDesc.vertexShader.entry = "vertex_main";
+        pipelineDesc.fragmentShader = pipelineDesc.vertexShader;
+        pipelineDesc.fragmentShader.entry = "fragment_main";
+        pipelineDesc.attributes = attributes;
+        pipelineDesc.attributeCount = ARRAY_COUNT(attributes);
+        pipelineDesc.vertexBuffer.stride = sizeof(AppGfxVertex);
+        pipelineDesc.topology = GfxPrimitiveTopology_TriangleList;
+        pipelineDesc.raster.cullMode = GfxCullMode_None;
+        pipelineDesc.raster.frontFace = GfxFrontFace_CCW;
+        pipelineDesc.depth.compareOp = GfxCompareOp_Always;
+        pipelineDesc.colorFormats = colorFormats;
+        pipelineDesc.colorFormatCount = ARRAY_COUNT(colorFormats);
+        pipelineDesc.depthFormat = GfxFormat_Invalid;
+
+        state->gfxTrianglePipeline = gfx_create_graphics_pipeline(ctx->host->gfxDevice, &pipelineDesc);
+    }
+
+    artifact_use_scope_close(&scope);
+    temp_end(&scratch);
+}
+
 static void app_gfx_demo_shutdown(APP_Context* ctx) {
     ASSERT_ALWAYS(ctx != 0);
     ASSERT_ALWAYS(ctx->core != 0);
 
     AppCoreState* state = ctx->core;
     GfxDevice* device = ctx->host ? ctx->host->gfxDevice : 0;
-    if (!device) {
-        return;
+    if (device != 0) {
+        gfx_wait_idle(device);
+        gfx_destroy_pipeline(device, state->gfxTrianglePipeline);
+        gfx_destroy_buffer(device, state->gfxTriangleIndexBuffer);
+        gfx_destroy_buffer(device, state->gfxTriangleVertexBuffer);
     }
 
-    gfx_wait_idle(device);
-    gfx_destroy_pipeline(device, state->gfxTrianglePipeline);
-    gfx_destroy_buffer(device, state->gfxTriangleIndexBuffer);
-    gfx_destroy_buffer(device, state->gfxTriangleVertexBuffer);
+    app_resource_cache_shutdown(ctx);
 
     state->gfxTrianglePipeline = {};
     state->gfxTriangleIndexBuffer = {};
@@ -333,6 +429,8 @@ static void app_gfx_demo_frame(APP_Context* ctx) {
     if (ctx->host->windowWidth == 0u || ctx->host->windowHeight == 0u) {
         return;
     }
+
+    app_gfx_try_create_triangle_pipeline(ctx);
 
     GfxFrame* frame = gfx_begin_frame(ctx->host->gfxDevice);
     if (!frame) {

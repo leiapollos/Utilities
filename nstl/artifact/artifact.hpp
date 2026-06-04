@@ -32,6 +32,11 @@ enum ArtifactAcquireFlags {
     ArtifactAcquireFlags_Sync = (1u << 1),
 };
 
+enum ArtifactTypeKind {
+    ArtifactTypeKind_Callback = 0,
+    ArtifactTypeKind_RawFile,
+};
+
 struct ArtifactPayload {
     void* data;
     U64 size;
@@ -46,6 +51,7 @@ typedef B32 ArtifactLoadProc(void* userData, Arena* arena, U32 typeId, StringU8 
 typedef void ArtifactReleaseProc(void* userData, U32 typeId, StringU8 key, ArtifactPayload payload);
 
 struct ArtifactTypeOps {
+    ArtifactTypeKind kind;
     ArtifactLoadProc* load;
     ArtifactReleaseProc* release;
     void* userData;
@@ -87,6 +93,7 @@ void artifact_use_scope_close(ArtifactUseScope* scope);
 ArtifactHandle artifact_acquire(ArtifactUseScope* scope, U32 typeId, StringU8 key, U32 acquireFlags);
 ArtifactStatus artifact_status(ArtifactCache* cache, ArtifactHandle handle);
 ArtifactStatus artifact_view(ArtifactUseScope* scope, ArtifactHandle handle, ArtifactView* outView);
+ArtifactView artifact_resolve_view(ArtifactUseScope* scope, ArtifactHandle handle);
 
 ArtifactStatus artifact_wait(ArtifactCache* cache, ArtifactHandle handle, U32 timeoutMs);
 B32 artifact_invalidate(ArtifactCache* cache, U32 typeId, StringU8 key);

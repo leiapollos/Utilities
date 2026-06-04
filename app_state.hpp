@@ -5,6 +5,7 @@
 #pragma once
 
 #include "app_interface.hpp"
+#include "nstl/artifact/artifact_include.hpp"
 
 struct AppTestsState;
 
@@ -36,6 +37,9 @@ struct AppCoreState {
 
     B32 gfxDemoInitialized;
     B32 gfxTestsRan;
+    Arena* resourceArena;
+    ArtifactCache* resourceCache;
+    ArtifactHandle gfxTriangleShader;
     GfxBuffer gfxTriangleVertexBuffer;
     GfxBuffer gfxTriangleIndexBuffer;
     GfxPipeline gfxTrianglePipeline;

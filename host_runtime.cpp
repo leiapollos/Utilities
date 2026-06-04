@@ -35,6 +35,11 @@ static const char* HOST_MODULE_BUILD_INPUTS[] = {
     "app_state.hpp",
     "app_tests.hpp",
     "app_tests.cpp",
+    "app/shaders/triangle.metal",
+    "nstl/artifact/artifact.hpp",
+    "nstl/artifact/artifact.cpp",
+    "nstl/artifact/artifact_include.hpp",
+    "nstl/artifact/artifact_include.cpp",
     "nstl/gfx/gfx.hpp",
     "nstl/gfx/gfx_include.hpp",
 };

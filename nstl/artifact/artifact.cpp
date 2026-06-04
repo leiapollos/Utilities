@@ -49,6 +49,7 @@ struct ArtifactCache {
     U32 pendingAsyncJobs;
 
     OS_Handle mutex;
+    OS_Handle loadArenaMutex;
     OS_Handle condition;
 };
 
@@ -78,6 +79,7 @@ static B32 artifact_hash_insert_locked_(ArtifactCache* cache,
                                         ArtifactHandle handle);
 static void artifact_hash_remove_locked_(ArtifactCache* cache, U32 typeId, StringU8 key, U64 keyHash);
 static void artifact_release_node_payload_locked_(ArtifactNode* node);
+static B32 artifact_load_raw_file_(Arena* arena, StringU8 key, ArtifactPayload* outPayload);
 static ArtifactStatus artifact_run_load_for_handle_(ArtifactCache* cache, ArtifactHandle handle);
 static void artifact_async_load_job_(void* parameters);
 static void artifact_scope_touch_(ArtifactUseScope* scope, ArtifactHandle handle);
@@ -350,6 +352,43 @@ static void artifact_release_node_payload_locked_(ArtifactNode* node) {
     node->payload.size = 0u;
 }
 
+static B32 artifact_load_raw_file_(Arena* arena, StringU8 key, ArtifactPayload* outPayload) {
+    if (arena == 0 || outPayload == 0 || key.data == 0 || key.size == 0u) {
+        return 0;
+    }
+
+    OS_Handle file = OS_file_open((const char*) key.data, OS_FileOpenMode_Read);
+    if (!file.handle) {
+        LOG_ERROR("artifact", "Failed to open raw file '{}'", key);
+        return 0;
+    }
+
+    U64 fileSize = OS_file_size(file);
+    U8* data = ARENA_PUSH_ARRAY(arena, U8, fileSize + 1u);
+    if (data == 0) {
+        OS_file_close(file);
+        return 0;
+    }
+
+    U64 readSize = 0u;
+    if (fileSize != 0u) {
+        RangeU64 range = {0u, fileSize};
+        readSize = OS_file_read(file, range, data);
+    }
+
+    OS_file_close(file);
+
+    if (readSize != fileSize) {
+        LOG_ERROR("artifact", "Failed to read raw file '{}'", key);
+        return 0;
+    }
+
+    data[fileSize] = 0;
+    outPayload->data = data;
+    outPayload->size = fileSize;
+    return 1;
+}
+
 static ArtifactStatus artifact_run_load_for_handle_(ArtifactCache* cache, ArtifactHandle handle) {
     if (!cache || ARTIFACT_HANDLE_IS_INVALID(handle)) {
         return ArtifactStatus_InvalidHandle;
@@ -384,8 +423,22 @@ static ArtifactStatus artifact_run_load_for_handle_(ArtifactCache* cache, Artifa
 
     ArtifactPayload loadedPayload = {};
     B32 loadOk = 0;
-    if (ops.load) {
+    if (ops.kind == ArtifactTypeKind_RawFile) {
+        if (cache->loadArenaMutex.handle) {
+            OS_mutex_lock(cache->loadArenaMutex);
+        }
+        loadOk = artifact_load_raw_file_(cache->arena, key, &loadedPayload);
+        if (cache->loadArenaMutex.handle) {
+            OS_mutex_unlock(cache->loadArenaMutex);
+        }
+    } else if (ops.load) {
+        if (cache->loadArenaMutex.handle) {
+            OS_mutex_lock(cache->loadArenaMutex);
+        }
         loadOk = ops.load(ops.userData, cache->arena, typeId, key, &loadedPayload);
+        if (cache->loadArenaMutex.handle) {
+            OS_mutex_unlock(cache->loadArenaMutex);
+        }
     }
 
     ArtifactStatus finalStatus = loadOk ? ArtifactStatus_Ready : ArtifactStatus_Error;
@@ -541,11 +594,15 @@ B32 artifact_cache_create(const ArtifactCacheDesc* desc, ArtifactCache* outCache
     }
 
     outCache->mutex = OS_mutex_create();
+    outCache->loadArenaMutex = OS_mutex_create();
     outCache->condition = OS_condition_variable_create();
 
-    if (!outCache->mutex.handle || !outCache->condition.handle) {
+    if (!outCache->mutex.handle || !outCache->loadArenaMutex.handle || !outCache->condition.handle) {
         if (outCache->condition.handle) {
             OS_condition_variable_destroy(outCache->condition);
+        }
+        if (outCache->loadArenaMutex.handle) {
+            OS_mutex_destroy(outCache->loadArenaMutex);
         }
         if (outCache->mutex.handle) {
             OS_mutex_destroy(outCache->mutex);
@@ -584,6 +641,10 @@ void artifact_cache_destroy(ArtifactCache* cache) {
     if (cache->condition.handle) {
         OS_condition_variable_destroy(cache->condition);
         cache->condition.handle = 0;
+    }
+    if (cache->loadArenaMutex.handle) {
+        OS_mutex_destroy(cache->loadArenaMutex);
+        cache->loadArenaMutex.handle = 0;
     }
     if (cache->mutex.handle) {
         OS_mutex_destroy(cache->mutex);
@@ -646,7 +707,8 @@ void artifact_cache_reset(ArtifactCache* cache) {
 }
 
 B32 artifact_cache_register_type(ArtifactCache* cache, U32 typeId, const ArtifactTypeOps* ops) {
-    if (!cache || !ops || typeId > cache->maxTypeId || !ops->load) {
+    if (!cache || !ops || typeId > cache->maxTypeId ||
+        (ops->kind == ArtifactTypeKind_Callback && !ops->load)) {
         return 0;
     }
 
@@ -881,6 +943,15 @@ ArtifactStatus artifact_view(ArtifactUseScope* scope, ArtifactHandle handle, Art
     }
 
     return status;
+}
+
+ArtifactView artifact_resolve_view(ArtifactUseScope* scope, ArtifactHandle handle) {
+    ArtifactView result = {};
+    ArtifactStatus status = artifact_view(scope, handle, &result);
+    if (status != ArtifactStatus_Ready) {
+        result = {};
+    }
+    return result;
 }
 
 ArtifactStatus artifact_wait(ArtifactCache* cache, ArtifactHandle handle, U32 timeoutMs) {
