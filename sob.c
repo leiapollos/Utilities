@@ -8,23 +8,49 @@
 #include <unistd.h>
 #endif
 
+#include "app/shaders/shader_manifest.h"
+
 #define BUILD_DIR "build"
 #define BUILD_TOOLS_DIR "build/tools"
 #define BUILD_HOT_DIR "build/hot"
 #define META_DIR "meta"
 
 #define HOST_EXE_BASENAME "utilities_host"
+#define HOST_IMPORT_LIB_PATH BUILD_DIR "/" HOST_EXE_BASENAME ".lib"
 #if SOB_WINDOWS
 #define HOST_OUTPUT_PATH BUILD_DIR "/" HOST_EXE_BASENAME ".exe"
+#define HOST_RUN_PATH BUILD_DIR "\\" HOST_EXE_BASENAME ".exe"
 #else
 #define HOST_OUTPUT_PATH BUILD_DIR "/" HOST_EXE_BASENAME
+#define HOST_RUN_PATH HOST_OUTPUT_PATH
 #endif
 
 #define METAGEN_EXE_BASENAME "metagen"
 #if SOB_WINDOWS
 #define METAGEN_OUTPUT_PATH BUILD_TOOLS_DIR "/" METAGEN_EXE_BASENAME ".exe"
+#define METAGEN_RUN_PATH BUILD_DIR "\\tools\\" METAGEN_EXE_BASENAME ".exe"
+#define METAGEN_INPUT_PATH "."
 #else
 #define METAGEN_OUTPUT_PATH BUILD_TOOLS_DIR "/" METAGEN_EXE_BASENAME
+#define METAGEN_RUN_PATH "../" METAGEN_OUTPUT_PATH
+#define METAGEN_INPUT_PATH ".."
+#endif
+
+#if SOB_WINDOWS
+#define SOB_REBUILT_EXE_PATH "build\\tools\\sob_rebuilt.exe"
+#define SOB_REBUILT_OBJ_PATH "build\\tools\\sob_rebuilt.obj"
+#define SOB_VSDEV_BATCH_PATH "build\\tools\\sob_vsdev_launch.bat"
+#define SOB_REPLACE_BATCH_PATH "build\\tools\\sob_replace.bat"
+#define VULKAN_VENDOR_ROOT "third_party/vulkan"
+#define VULKAN_VENDOR_INCLUDE_DIR VULKAN_VENDOR_ROOT "/include"
+#define VULKAN_VENDOR_LOADER_DIR VULKAN_VENDOR_ROOT "/loader"
+#define VULKAN_VENDOR_LOADER_GENERATED_DIR VULKAN_VENDOR_LOADER_DIR "/generated"
+#define VULKAN_VENDOR_LIB_DIR VULKAN_VENDOR_ROOT "/lib/win64"
+#define VULKAN_VENDOR_STATIC_LOADER_LIB VULKAN_VENDOR_LIB_DIR "/VKstatic.1.lib"
+#define VULKAN_VENDOR_GLSLC_PATH VULKAN_VENDOR_ROOT "/bin/win64/glslc.exe"
+#define VULKAN_VENDOR_SHADERC_DLL VULKAN_VENDOR_ROOT "/bin/win64/shaderc_shared.dll"
+#define VULKAN_VENDOR_SPIRV_TOOLS_DLL VULKAN_VENDOR_ROOT "/bin/win64/SPIRV-Tools-shared.dll"
+#define VULKAN_LOADER_OBJ_DIR BUILD_TOOLS_DIR "/vulkan_loader"
 #endif
 
 typedef enum BuildMode {
@@ -41,6 +67,7 @@ typedef enum BuildTarget {
     BuildTarget_Module,
     BuildTarget_Ship,
     BuildTarget_Metagen,
+    BuildTarget_Shaders,
     BuildTarget_Clean,
 } BuildTarget;
 
@@ -55,6 +82,7 @@ static void print_usage(void) {
     printf("  module   Build hot-reload module only\n");
     printf("  ship     Build one executable with app statically linked\n");
     printf("  metagen  Build metagen and regenerate metadata\n");
+    printf("  shaders  Build reloadable shader artifacts\n");
     printf("  clean    Remove build artifacts\n");
     printf("\n");
     printf("Modes:\n");
@@ -117,6 +145,10 @@ static int parse_target(const char* value, BuildTarget* outTarget) {
         *outTarget = BuildTarget_Metagen;
         return 1;
     }
+    if (strcmp(value, "shaders") == 0) {
+        *outTarget = BuildTarget_Shaders;
+        return 1;
+    }
     if (strcmp(value, "clean") == 0) {
         *outTarget = BuildTarget_Clean;
         return 1;
@@ -148,8 +180,401 @@ static const char* build_target_name(BuildTarget target) {
     if (target == BuildTarget_Metagen) {
         return "metagen";
     }
+    if (target == BuildTarget_Shaders) {
+        return "shaders";
+    }
     return "clean";
 }
+
+#if SOB_WINDOWS
+static int windows_command_exists(const char* name) {
+    char path[MAX_PATH];
+    DWORD length = SearchPathA(0, name, 0, (DWORD)sizeof(path), path, 0);
+    return (length > 0 && length < (DWORD)sizeof(path));
+}
+
+static int windows_msvc_environment_ready(void) {
+    const char* vscmd = getenv("VSCMD_VER");
+    return (vscmd && vscmd[0] != 0 && windows_command_exists("cl.exe"));
+}
+
+static void windows_trim_line(char* str) {
+    if (!str) {
+        return;
+    }
+
+    size_t length = strlen(str);
+    while (length > 0) {
+        char c = str[length - 1];
+        if (c != '\r' && c != '\n' && c != ' ' && c != '\t') {
+            break;
+        }
+        str[--length] = 0;
+    }
+}
+
+static int windows_get_full_path(const char* path, char* out, size_t outSize) {
+    if (!path || !out || outSize == 0) {
+        return 0;
+    }
+
+    DWORD length = GetFullPathNameA(path, (DWORD)outSize, out, 0);
+    return (length > 0 && length < (DWORD)outSize);
+}
+
+static int windows_try_vsdev_from_install(const char* installPath, char* outPath, size_t outPathSize) {
+    if (!installPath || !installPath[0] || !outPath || outPathSize == 0) {
+        return 0;
+    }
+
+    int length = snprintf(outPath, outPathSize, "%s\\Common7\\Tools\\VsDevCmd.bat", installPath);
+    return (length > 0 && length < (int)outPathSize && sob_fs_exists(outPath));
+}
+
+static int windows_find_vsdev_with_vswhere(char* outPath, size_t outPathSize) {
+    const char* programFilesX86 = getenv("ProgramFiles(x86)");
+    if (!programFilesX86 || !programFilesX86[0]) {
+        return 0;
+    }
+
+    char vswherePath[2048];
+    int vswhereLength = snprintf(vswherePath,
+                                 sizeof(vswherePath),
+                                 "%s\\Microsoft Visual Studio\\Installer\\vswhere.exe",
+                                 programFilesX86);
+    if (vswhereLength <= 0 || vswhereLength >= (int)sizeof(vswherePath) || !sob_fs_exists(vswherePath)) {
+        return 0;
+    }
+
+    char command[4096];
+    int commandLength = snprintf(command,
+                                 sizeof(command),
+                                 "\"%s\" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath",
+                                 vswherePath);
+    if (commandLength <= 0 || commandLength >= (int)sizeof(command)) {
+        return 0;
+    }
+
+    FILE* pipe = _popen(command, "r");
+    if (!pipe) {
+        return 0;
+    }
+
+    char installPath[2048] = {0};
+    int found = 0;
+    if (fgets(installPath, sizeof(installPath), pipe)) {
+        windows_trim_line(installPath);
+        found = windows_try_vsdev_from_install(installPath, outPath, outPathSize);
+    }
+
+    _pclose(pipe);
+    return found;
+}
+
+static int windows_find_vsdev_fallback(char* outPath, size_t outPathSize) {
+    const char* programFiles = getenv("ProgramFiles");
+    const char* programFilesX86 = getenv("ProgramFiles(x86)");
+    const char* editions[] = {"Community", "Professional", "Enterprise", "BuildTools"};
+    const char* roots[2] = {programFiles, programFilesX86};
+
+    for (int rootIndex = 0; rootIndex < (int)(sizeof(roots) / sizeof(roots[0])); ++rootIndex) {
+        const char* root = roots[rootIndex];
+        if (!root || !root[0]) {
+            continue;
+        }
+
+        for (int editionIndex = 0; editionIndex < (int)(sizeof(editions) / sizeof(editions[0])); ++editionIndex) {
+            int length = snprintf(outPath,
+                                  outPathSize,
+                                  "%s\\Microsoft Visual Studio\\2022\\%s\\Common7\\Tools\\VsDevCmd.bat",
+                                  root,
+                                  editions[editionIndex]);
+            if (length > 0 && length < (int)outPathSize && sob_fs_exists(outPath)) {
+                return 1;
+            }
+        }
+    }
+
+    if (programFilesX86 && programFilesX86[0]) {
+        int length = snprintf(outPath,
+                              outPathSize,
+                              "%s\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\Tools\\VsDevCmd.bat",
+                              programFilesX86);
+        if (length > 0 && length < (int)outPathSize && sob_fs_exists(outPath)) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int windows_find_vsdev_bat(char* outPath, size_t outPathSize) {
+    if (windows_find_vsdev_with_vswhere(outPath, outPathSize)) {
+        return 1;
+    }
+    return windows_find_vsdev_fallback(outPath, outPathSize);
+}
+
+static void windows_batch_write_quoted_arg(FILE* file, const char* arg) {
+    fputc('"', file);
+    if (arg) {
+        for (const char* p = arg; *p; ++p) {
+            if (*p == '%') {
+                fputs("%%", file);
+            } else if (*p == '"') {
+                fputs("\\\"", file);
+            } else {
+                fputc(*p, file);
+            }
+        }
+    }
+    fputc('"', file);
+}
+
+static int windows_write_vsdev_batch(const char* vsdevPath, int argc, char** argv) {
+    char exePath[2048];
+    const char* launchPath = argv[0];
+    if (windows_get_full_path(argv[0], exePath, sizeof(exePath))) {
+        launchPath = exePath;
+    }
+
+    FILE* file = fopen(SOB_VSDEV_BATCH_PATH, "wb");
+    if (!file) {
+        return 0;
+    }
+
+    fputs("@echo off\r\n", file);
+    fputs("setlocal\r\n", file);
+    fputs("set \"SOB_VSDEV_BOOTSTRAPPED=1\"\r\n", file);
+    fputs("call ", file);
+    windows_batch_write_quoted_arg(file, vsdevPath);
+    fputs(" -arch=x64 -host_arch=x64\r\n", file);
+    fputs("if errorlevel 1 exit /b %errorlevel%\r\n", file);
+    windows_batch_write_quoted_arg(file, launchPath);
+    for (int i = 1; i < argc; ++i) {
+        fputc(' ', file);
+        windows_batch_write_quoted_arg(file, argv[i]);
+    }
+    fputs("\r\nexit /b %errorlevel%\r\n", file);
+
+    fclose(file);
+    return 1;
+}
+
+static S32 windows_run_batch_wait(const char* batchPath) {
+    Sob_Arena* arena = sob_arena_create();
+    if (!arena) {
+        return 1;
+    }
+
+    Sob_Cmd* cmd = sob_cmd_create(arena);
+    if (!cmd) {
+        sob_arena_destroy(arena);
+        return 1;
+    }
+
+    sob_cmd_append(cmd, "cmd.exe");
+    sob_cmd_append(cmd, "/s");
+    sob_cmd_append(cmd, "/c");
+    sob_cmd_append(cmd, batchPath);
+
+    S32 result = sob_cmd_run(cmd);
+    sob_arena_destroy(arena);
+    return result;
+}
+
+static int windows_bootstrap_msvc_environment_if_needed(int argc, char** argv, S32* outExitCode) {
+    if (windows_msvc_environment_ready()) {
+        return 0;
+    }
+
+    if (getenv("SOB_VSDEV_BOOTSTRAPPED")) {
+        fprintf(stderr,
+                "Error: Visual Studio C++ environment was entered, but cl.exe is still not usable.\n");
+        fprintf(stderr,
+                "Could not find Visual Studio C++ tools. Install Build Tools or run from a VS Developer shell.\n");
+        *outExitCode = 1;
+        return 1;
+    }
+
+    char vsdevPath[2048];
+    if (!windows_find_vsdev_bat(vsdevPath, sizeof(vsdevPath))) {
+        fprintf(stderr, "Error: Could not find Visual Studio C++ tools. Install Build Tools or run from a VS Developer shell.\n");
+        *outExitCode = 1;
+        return 1;
+    }
+
+    if (sob_fs_mkdir_p(BUILD_TOOLS_DIR) != 0 && !sob_fs_is_dir(BUILD_TOOLS_DIR)) {
+        fprintf(stderr, "Error: failed to create '%s'\n", BUILD_TOOLS_DIR);
+        *outExitCode = 1;
+        return 1;
+    }
+
+    if (!windows_write_vsdev_batch(vsdevPath, argc, argv)) {
+        fprintf(stderr, "Error: failed to write '%s'\n", SOB_VSDEV_BATCH_PATH);
+        *outExitCode = 1;
+        return 1;
+    }
+
+    printf("==> Entering Visual Studio C++ environment...\n");
+    fflush(stdout);
+    *outExitCode = windows_run_batch_wait(SOB_VSDEV_BATCH_PATH);
+    return 1;
+}
+
+static U64 newest_sob_input_mtime(void) {
+    U64 result = sob_fs_mtime("sob.c");
+    U64 sobHeaderTime = sob_fs_mtime("third_party/sob/sob.h");
+    if (sobHeaderTime > result) {
+        result = sobHeaderTime;
+    }
+    U64 shaderManifestTime = sob_fs_mtime("app/shaders/shader_manifest.h");
+    if (shaderManifestTime > result) {
+        result = shaderManifestTime;
+    }
+    return result;
+}
+
+static int windows_write_replace_batch(const char* exePath) {
+    char fullExePath[2048];
+    const char* targetPath = exePath;
+    if (windows_get_full_path(exePath, fullExePath, sizeof(fullExePath))) {
+        targetPath = fullExePath;
+    }
+
+    FILE* file = fopen(SOB_REPLACE_BATCH_PATH, "wb");
+    if (!file) {
+        return 0;
+    }
+
+    fputs("@echo off\r\n", file);
+    fputs("setlocal\r\n", file);
+    fputs("set tries=0\r\n", file);
+    fputs(":retry\r\n", file);
+    fputs("copy /Y ", file);
+    windows_batch_write_quoted_arg(file, SOB_REBUILT_EXE_PATH);
+    fputc(' ', file);
+    windows_batch_write_quoted_arg(file, targetPath);
+    fputs(" >nul\r\n", file);
+    fputs("if not errorlevel 1 goto done\r\n", file);
+    fputs("set /a tries+=1 >nul\r\n", file);
+    fputs("if %tries% geq 30 exit /b 1\r\n", file);
+    fputs("timeout /t 1 /nobreak >nul\r\n", file);
+    fputs("goto retry\r\n", file);
+    fputs(":done\r\n", file);
+    fputs("del ", file);
+    windows_batch_write_quoted_arg(file, SOB_REBUILT_EXE_PATH);
+    fputs(" >nul 2>nul\r\n", file);
+    fputs("exit /b 0\r\n", file);
+
+    fclose(file);
+    return 1;
+}
+
+static void windows_schedule_sob_replacement(const char* exePath) {
+    if (!windows_write_replace_batch(exePath)) {
+        fprintf(stderr, "Warning: failed to write '%s'; '%s' was not replaced.\n",
+                SOB_REPLACE_BATCH_PATH,
+                exePath);
+        return;
+    }
+
+    char commandLine[2048];
+    int length = snprintf(commandLine, sizeof(commandLine), "cmd.exe /s /c \"%s\"", SOB_REPLACE_BATCH_PATH);
+    if (length <= 0 || length >= (int)sizeof(commandLine)) {
+        fprintf(stderr, "Warning: replacement command was too long; '%s' was not replaced.\n", exePath);
+        return;
+    }
+
+    STARTUPINFOA startupInfo;
+    PROCESS_INFORMATION processInfo;
+    memset(&startupInfo, 0, sizeof(startupInfo));
+    memset(&processInfo, 0, sizeof(processInfo));
+    startupInfo.cb = sizeof(startupInfo);
+
+    if (!CreateProcessA(0, commandLine, 0, 0, FALSE, 0, 0, 0, &startupInfo, &processInfo)) {
+        fprintf(stderr, "Warning: failed to schedule replacement of '%s'.\n", exePath);
+        return;
+    }
+
+    CloseHandle(processInfo.hThread);
+    CloseHandle(processInfo.hProcess);
+}
+
+static int windows_self_rebuild_if_needed(int argc, char** argv, S32* outExitCode) {
+    if (getenv("SOB_SKIP_SELF_REBUILD")) {
+        return 0;
+    }
+
+    const char* exePath = argv[0];
+    U64 exeTime = sob_fs_mtime(exePath);
+    U64 inputTime = newest_sob_input_mtime();
+    if (inputTime == 0 || exeTime == 0 || inputTime <= exeTime) {
+        return 0;
+    }
+
+    if (sob_fs_mkdir_p(BUILD_TOOLS_DIR) != 0 && !sob_fs_is_dir(BUILD_TOOLS_DIR)) {
+        fprintf(stderr, "Error: failed to create '%s'\n", BUILD_TOOLS_DIR);
+        *outExitCode = 1;
+        return 1;
+    }
+
+    printf("[SOB] Rebuilding %s...\n", exePath);
+    Sob_Arena* arena = sob_arena_create();
+    if (!arena) {
+        *outExitCode = 1;
+        return 1;
+    }
+
+    Sob_Cmd* buildCmd = sob_cmd_create(arena);
+    if (!buildCmd) {
+        sob_arena_destroy(arena);
+        *outExitCode = 1;
+        return 1;
+    }
+
+    sob_fs_remove(SOB_REBUILT_EXE_PATH);
+    sob_cmd_append(buildCmd, "cl");
+    sob_cmd_append(buildCmd, "/nologo");
+    sob_cmd_append(buildCmd, "/W4");
+    sob_cmd_append(buildCmd, "/wd4100");
+    sob_cmd_append(buildCmd, "/wd4189");
+    sob_cmd_append(buildCmd, "/wd4505");
+    sob_cmd_append(buildCmd, "/wd4996");
+    sob_cmd_append(buildCmd, "/Fe:" SOB_REBUILT_EXE_PATH);
+    sob_cmd_append(buildCmd, "/Fo:" SOB_REBUILT_OBJ_PATH);
+    sob_cmd_append(buildCmd, "sob.c");
+
+    S32 buildResult = sob_cmd_run(buildCmd);
+    if (buildResult != 0) {
+        sob_arena_destroy(arena);
+        fprintf(stderr, "[SOB] Rebuild failed.\n");
+        *outExitCode = buildResult;
+        return 1;
+    }
+
+    Sob_Cmd* runCmd = sob_cmd_create(arena);
+    if (!runCmd) {
+        sob_arena_destroy(arena);
+        *outExitCode = 1;
+        return 1;
+    }
+
+    _putenv("SOB_SKIP_SELF_REBUILD=1");
+    sob_cmd_append(runCmd, SOB_REBUILT_EXE_PATH);
+    for (int i = 1; i < argc; ++i) {
+        sob_cmd_append(runCmd, argv[i]);
+    }
+
+    printf("[SOB] Running rebuilt build driver...\n");
+    S32 runResult = sob_cmd_run(runCmd);
+    sob_arena_destroy(arena);
+
+    windows_schedule_sob_replacement(exePath);
+    *outExitCode = runResult;
+    return 1;
+}
+#endif
 
 static void configure_compiler_for_mode(Sob_BuildContext* ctx, BuildMode mode) {
     Sob_CompilerConfig config = {0};
@@ -157,7 +582,7 @@ static void configure_compiler_for_mode(Sob_BuildContext* ctx, BuildMode mode) {
     config.warningsAsErrors = 0;
 
     if (mode == BuildMode_Debug) {
-        config.optLevel = Sob_OptLevel_ReleaseSmall;
+        config.optLevel = Sob_OptLevel_Debug;
         config.sanitizers = Sob_Sanitizer_None;
         config.enableLTO = 0;
     } else if (mode == BuildMode_Asan) {
@@ -174,6 +599,16 @@ static void configure_compiler_for_mode(Sob_BuildContext* ctx, BuildMode mode) {
 }
 
 static void apply_common_warning_flags(Sob_Target* target) {
+#if SOB_WINDOWS
+    const char* flags[] = {
+        "/Zc:preprocessor",
+        "/wd4100", /* unreferenced formal parameter */
+        "/wd4189", /* local variable initialized but not referenced */
+        "/wd4201", /* nameless struct/union */
+        "/wd4324", /* structure was padded due to alignment specifier */
+        "/wd4505", /* unreferenced local function removed */
+    };
+#else
     const char* flags[] = {
         "-Wpedantic",
         "-Wno-unused-parameter",
@@ -186,6 +621,7 @@ static void apply_common_warning_flags(Sob_Target* target) {
         "-Wno-c++20-designator",
         "-Wno-c99-designator",
     };
+#endif
 
     for (S32 i = 0; i < (S32)(sizeof(flags) / sizeof(flags[0])); ++i) {
         sob_target_add_cflags(target, flags[i]);
@@ -193,6 +629,14 @@ static void apply_common_warning_flags(Sob_Target* target) {
 }
 
 static void apply_metagen_warning_flags(Sob_Target* target) {
+#if SOB_WINDOWS
+    const char* flags[] = {
+        "/wd4100", /* unreferenced formal parameter */
+        "/wd4189", /* local variable initialized but not referenced */
+        "/wd4201", /* nameless struct/union */
+        "/wd4505", /* unreferenced local function removed */
+    };
+#else
     const char* flags[] = {
         "-Wall",
         "-Wextra",
@@ -205,6 +649,7 @@ static void apply_metagen_warning_flags(Sob_Target* target) {
         "-Wno-c++20-designator",
         "-Wno-c99-designator",
     };
+#endif
 
     for (S32 i = 0; i < (S32)(sizeof(flags) / sizeof(flags[0])); ++i) {
         sob_target_add_cflags(target, flags[i]);
@@ -212,14 +657,24 @@ static void apply_metagen_warning_flags(Sob_Target* target) {
 }
 
 static void apply_cpp_runtime_flags(Sob_Target* target) {
+#if SOB_WINDOWS
+    sob_target_add_cflags(target, "/GR-");
+#else
     sob_target_add_cflags(target, "-fno-exceptions");
     sob_target_add_cflags(target, "-fno-rtti");
+#endif
 }
 
 static void apply_third_party_warning_flags(Sob_Target* target) {
+#if SOB_WINDOWS
+    const char* flags[] = {
+        "/wd4996",
+    };
+#else
     const char* flags[] = {
         "-Wno-deprecated-declarations",
     };
+#endif
 
     for (S32 i = 0; i < (S32)(sizeof(flags) / sizeof(flags[0])); ++i) {
         sob_target_add_cflags(target, flags[i]);
@@ -229,13 +684,21 @@ static void apply_third_party_warning_flags(Sob_Target* target) {
 static void apply_mode_target_flags(Sob_Target* target, BuildMode mode) {
     if (mode == BuildMode_Debug) {
         sob_target_define(target, "DEBUG", .value = "1");
+#if SOB_WINDOWS
+        sob_target_add_cflags(target, "/Od");
+#else
         sob_target_add_cflags(target, "-O0");
         sob_target_add_cflags(target, "-fno-omit-frame-pointer");
         sob_target_add_cflags(target, "-g0");
+#endif
     } else if (mode == BuildMode_Asan) {
         sob_target_define(target, "DEBUG", .value = "1");
+#if SOB_WINDOWS
+        sob_target_add_cflags(target, "/Od");
+#else
         sob_target_add_cflags(target, "-fno-omit-frame-pointer");
         sob_target_add_cflags(target, "-gline-tables-only");
+#endif
     } else {
         sob_target_define(target, "NDEBUG", .value = "1");
     }
@@ -245,10 +708,293 @@ static void configure_common_includes(Sob_Target* target) {
     sob_target_add_include(target, ".");
 }
 
-static void configure_runtime_executable(Sob_Target* target, BuildMode mode) {
+#if SOB_WINDOWS
+typedef struct WindowsVulkanLoaderBuildItem {
+    const char* src;
+    const char* obj;
+} WindowsVulkanLoaderBuildItem;
+
+static const WindowsVulkanLoaderBuildItem windowsVulkanLoaderBuildItems[] = {
+    {VULKAN_VENDOR_LOADER_DIR "/allocation.c", VULKAN_LOADER_OBJ_DIR "/allocation.obj"},
+    {VULKAN_VENDOR_LOADER_DIR "/cJSON.c", VULKAN_LOADER_OBJ_DIR "/cJSON.obj"},
+    {VULKAN_VENDOR_LOADER_DIR "/debug_utils.c", VULKAN_LOADER_OBJ_DIR "/debug_utils.obj"},
+    {VULKAN_VENDOR_LOADER_DIR "/extension_manual.c", VULKAN_LOADER_OBJ_DIR "/extension_manual.obj"},
+    {VULKAN_VENDOR_LOADER_DIR "/loader_environment.c", VULKAN_LOADER_OBJ_DIR "/loader_environment.obj"},
+    {VULKAN_VENDOR_LOADER_DIR "/gpa_helper.c", VULKAN_LOADER_OBJ_DIR "/gpa_helper.obj"},
+    {VULKAN_VENDOR_LOADER_DIR "/loader.c", VULKAN_LOADER_OBJ_DIR "/loader.obj"},
+    {VULKAN_VENDOR_LOADER_DIR "/log.c", VULKAN_LOADER_OBJ_DIR "/log.obj"},
+    {VULKAN_VENDOR_LOADER_DIR "/settings.c", VULKAN_LOADER_OBJ_DIR "/settings.obj"},
+    {VULKAN_VENDOR_LOADER_DIR "/terminator.c", VULKAN_LOADER_OBJ_DIR "/terminator.obj"},
+    {VULKAN_VENDOR_LOADER_DIR "/trampoline.c", VULKAN_LOADER_OBJ_DIR "/trampoline.obj"},
+    {VULKAN_VENDOR_LOADER_DIR "/unknown_function_handling.c", VULKAN_LOADER_OBJ_DIR "/unknown_function_handling.obj"},
+    {VULKAN_VENDOR_LOADER_DIR "/wsi.c", VULKAN_LOADER_OBJ_DIR "/wsi.obj"},
+    {VULKAN_VENDOR_LOADER_DIR "/loader_windows.c", VULKAN_LOADER_OBJ_DIR "/loader_windows.obj"},
+    {VULKAN_VENDOR_LOADER_DIR "/dirent_on_windows.c", VULKAN_LOADER_OBJ_DIR "/dirent_on_windows.obj"},
+    {VULKAN_VENDOR_LOADER_DIR "/dev_ext_trampoline.c", VULKAN_LOADER_OBJ_DIR "/dev_ext_trampoline.obj"},
+    {VULKAN_VENDOR_LOADER_DIR "/phys_dev_ext.c", VULKAN_LOADER_OBJ_DIR "/phys_dev_ext.obj"},
+    {VULKAN_VENDOR_LOADER_DIR "/unknown_ext_chain.c", VULKAN_LOADER_OBJ_DIR "/unknown_ext_chain.obj"},
+};
+
+static const char* windowsVulkanLoaderHeaderInputs[] = {
+    VULKAN_VENDOR_INCLUDE_DIR "/vulkan/vulkan.h",
+    VULKAN_VENDOR_INCLUDE_DIR "/vulkan/vk_icd.h",
+    VULKAN_VENDOR_INCLUDE_DIR "/vulkan/vk_layer.h",
+    VULKAN_VENDOR_INCLUDE_DIR "/vulkan/vulkan_core.h",
+    VULKAN_VENDOR_INCLUDE_DIR "/vulkan/vulkan_win32.h",
+    VULKAN_VENDOR_INCLUDE_DIR "/vk_video/vulkan_video_codecs_common.h",
+    VULKAN_VENDOR_LOADER_DIR "/adapters.h",
+    VULKAN_VENDOR_LOADER_DIR "/allocation.h",
+    VULKAN_VENDOR_LOADER_DIR "/cJSON.h",
+    VULKAN_VENDOR_LOADER_DIR "/debug_utils.h",
+    VULKAN_VENDOR_LOADER_DIR "/dirent_on_windows.h",
+    VULKAN_VENDOR_LOADER_DIR "/extension_manual.h",
+    VULKAN_VENDOR_LOADER_DIR "/gpa_helper.h",
+    VULKAN_VENDOR_LOADER_DIR "/loader.h",
+    VULKAN_VENDOR_LOADER_DIR "/loader_common.h",
+    VULKAN_VENDOR_LOADER_DIR "/loader_environment.h",
+    VULKAN_VENDOR_LOADER_DIR "/loader_windows.h",
+    VULKAN_VENDOR_LOADER_DIR "/log.h",
+    VULKAN_VENDOR_LOADER_DIR "/settings.h",
+    VULKAN_VENDOR_LOADER_DIR "/stack_allocation.h",
+    VULKAN_VENDOR_LOADER_DIR "/unknown_function_handling.h",
+    VULKAN_VENDOR_LOADER_DIR "/vk_loader_layer.h",
+    VULKAN_VENDOR_LOADER_DIR "/vk_loader_platform.h",
+    VULKAN_VENDOR_LOADER_DIR "/wsi.h",
+    VULKAN_VENDOR_LOADER_GENERATED_DIR "/vk_layer_dispatch_table.h",
+    VULKAN_VENDOR_LOADER_GENERATED_DIR "/vk_loader_extensions.c",
+    VULKAN_VENDOR_LOADER_GENERATED_DIR "/vk_loader_extensions.h",
+    VULKAN_VENDOR_LOADER_GENERATED_DIR "/vk_object_types.h",
+};
+
+static int windows_require_vulkan_vendor_file(const char* path, const char* label) {
+    if (sob_fs_exists(path)) {
+        return 1;
+    }
+
+    fprintf(stderr, "Error: missing vendored Vulkan %s: '%s'\n", label, path);
+    return 0;
+}
+
+static U64 newest_windows_vulkan_loader_input_mtime(void) {
+    U64 newest = 0;
+    for (S32 i = 0; i < (S32)(sizeof(windowsVulkanLoaderBuildItems) /
+                              sizeof(windowsVulkanLoaderBuildItems[0])); ++i) {
+        U64 time = sob_fs_mtime(windowsVulkanLoaderBuildItems[i].src);
+        if (time == 0) {
+            return 0;
+        }
+        if (time > newest) {
+            newest = time;
+        }
+    }
+
+    for (S32 i = 0; i < (S32)(sizeof(windowsVulkanLoaderHeaderInputs) /
+                              sizeof(windowsVulkanLoaderHeaderInputs[0])); ++i) {
+        U64 time = sob_fs_mtime(windowsVulkanLoaderHeaderInputs[i]);
+        if (time == 0) {
+            return 0;
+        }
+        if (time > newest) {
+            newest = time;
+        }
+    }
+
+    return newest;
+}
+
+static int build_windows_vulkan_static_loader(Sob_Arena* arena) {
+    if (!arena) {
+        return 0;
+    }
+
+    if (!windows_command_exists("cl.exe") || !windows_command_exists("lib.exe")) {
+        fprintf(stderr, "Error: cl.exe/lib.exe are not usable. Run through ./sob.exe from a VS-enabled environment.\n");
+        return 0;
+    }
+
+    if (!windows_require_vulkan_vendor_file(VULKAN_VENDOR_INCLUDE_DIR "/vulkan/vulkan.h", "header") ||
+        !windows_require_vulkan_vendor_file(VULKAN_VENDOR_INCLUDE_DIR "/vk_video/vulkan_video_codecs_common.h", "video header") ||
+        !windows_require_vulkan_vendor_file(VULKAN_VENDOR_LOADER_GENERATED_DIR "/vk_loader_extensions.h", "generated loader header")) {
+        return 0;
+    }
+
+    U64 inputTime = newest_windows_vulkan_loader_input_mtime();
+    if (inputTime == 0) {
+        fprintf(stderr, "Error: vendored Vulkan loader source set is incomplete under '%s'.\n",
+                VULKAN_VENDOR_LOADER_DIR);
+        return 0;
+    }
+
+    U64 libTime = sob_fs_mtime(VULKAN_VENDOR_STATIC_LOADER_LIB);
+    if (libTime != 0 && libTime >= inputTime) {
+        return 1;
+    }
+
+    if (sob_fs_mkdir_p(VULKAN_VENDOR_LIB_DIR) != 0 && !sob_fs_is_dir(VULKAN_VENDOR_LIB_DIR)) {
+        fprintf(stderr, "Error: failed to create '%s'\n", VULKAN_VENDOR_LIB_DIR);
+        return 0;
+    }
+    if (sob_fs_mkdir_p(VULKAN_LOADER_OBJ_DIR) != 0 && !sob_fs_is_dir(VULKAN_LOADER_OBJ_DIR)) {
+        fprintf(stderr, "Error: failed to create '%s'\n", VULKAN_LOADER_OBJ_DIR);
+        return 0;
+    }
+
+    printf("==> Building vendored Vulkan static loader...\n");
+    for (S32 i = 0; i < (S32)(sizeof(windowsVulkanLoaderBuildItems) /
+                              sizeof(windowsVulkanLoaderBuildItems[0])); ++i) {
+        const WindowsVulkanLoaderBuildItem* item = &windowsVulkanLoaderBuildItems[i];
+        U64 objTime = sob_fs_mtime(item->obj);
+        U64 srcTime = sob_fs_mtime(item->src);
+        if (objTime != 0 && objTime >= inputTime && objTime >= srcTime) {
+            continue;
+        }
+
+        Sob_Cmd* cmd = sob_cmd_create(arena);
+        if (!cmd) {
+            return 0;
+        }
+
+        char objFlag[2048];
+        int objFlagLength = snprintf(objFlag, sizeof(objFlag), "/Fo:%s", item->obj);
+        if (objFlagLength <= 0 || objFlagLength >= (int)sizeof(objFlag)) {
+            fprintf(stderr, "Error: Vulkan loader object path is too long.\n");
+            return 0;
+        }
+
+        sob_cmd_append(cmd, "cl");
+        sob_cmd_append(cmd, "/nologo");
+        sob_cmd_append(cmd, "/c");
+        sob_cmd_append(cmd, "/O2");
+        sob_cmd_append(cmd, "/Ob2");
+        sob_cmd_append(cmd, "/W4");
+        sob_cmd_append(cmd, "/wd4100");
+        sob_cmd_append(cmd, "/wd4127");
+        sob_cmd_append(cmd, "/wd4152");
+        sob_cmd_append(cmd, "/wd4201");
+        sob_cmd_append(cmd, "/wd4204");
+        sob_cmd_append(cmd, "/wd4244");
+        sob_cmd_append(cmd, "/wd4267");
+        sob_cmd_append(cmd, "/wd4701");
+        sob_cmd_append(cmd, "/wd4702");
+        sob_cmd_append(cmd, "/wd4996");
+        sob_cmd_append(cmd, "/I" VULKAN_VENDOR_INCLUDE_DIR);
+        sob_cmd_append(cmd, "/I" VULKAN_VENDOR_LOADER_DIR);
+        sob_cmd_append(cmd, "/I" VULKAN_VENDOR_LOADER_GENERATED_DIR);
+        sob_cmd_append(cmd, "/DWIN32_LEAN_AND_MEAN");
+        sob_cmd_append(cmd, "/DNOMINMAX");
+        sob_cmd_append(cmd, "/DVK_USE_PLATFORM_WIN32_KHR");
+        sob_cmd_append(cmd, "/DVK_ENABLE_BETA_EXTENSIONS");
+        sob_cmd_append(cmd, "/DVULKAN_LOADER_STATIC_LINKED");
+        sob_cmd_append(cmd, "/D_CRT_SECURE_NO_WARNINGS");
+        sob_cmd_append(cmd, "/D_CRT_NONSTDC_NO_WARNINGS");
+        sob_cmd_append(cmd, objFlag);
+        sob_cmd_append(cmd, item->src);
+
+        S32 result = sob_cmd_run(cmd);
+        if (result != 0) {
+            return 0;
+        }
+    }
+
+    Sob_Cmd* libCmd = sob_cmd_create(arena);
+    if (!libCmd) {
+        return 0;
+    }
+
+    sob_cmd_append(libCmd, "lib");
+    sob_cmd_append(libCmd, "/NOLOGO");
+    sob_cmd_append(libCmd, "/OUT:" VULKAN_VENDOR_STATIC_LOADER_LIB);
+    for (S32 i = 0; i < (S32)(sizeof(windowsVulkanLoaderBuildItems) /
+                              sizeof(windowsVulkanLoaderBuildItems[0])); ++i) {
+        sob_cmd_append(libCmd, windowsVulkanLoaderBuildItems[i].obj);
+    }
+
+    S32 libResult = sob_cmd_run(libCmd);
+    return libResult == 0;
+}
+
+static int configure_windows_vulkan_vendor(Sob_Arena* arena, Sob_Target* target) {
+    if (!build_windows_vulkan_static_loader(arena)) {
+        return 0;
+    }
+
+    sob_target_add_include(target, VULKAN_VENDOR_INCLUDE_DIR);
+    sob_target_add_ldflags(target, "/link");
+    sob_target_link(target, VULKAN_VENDOR_STATIC_LOADER_LIB, .kind = Sob_LibKind_Static);
+    return 1;
+}
+
+static int build_windows_vulkan_shaders(Sob_Arena* arena) {
+    if (!arena) {
+        return 1;
+    }
+
+    if (!windows_require_vulkan_vendor_file(VULKAN_VENDOR_GLSLC_PATH, "shader compiler") ||
+        !windows_require_vulkan_vendor_file(VULKAN_VENDOR_SHADERC_DLL, "shader compiler DLL") ||
+        !windows_require_vulkan_vendor_file(VULKAN_VENDOR_SPIRV_TOOLS_DLL, "shader compiler DLL")) {
+        return 1;
+    }
+
+    if (sob_fs_mkdir_p(APP_SHADER_VULKAN_OUTPUT_DIR) != 0 &&
+        !sob_fs_is_dir(APP_SHADER_VULKAN_OUTPUT_DIR)) {
+        fprintf(stderr, "Error: failed to create '%s'\n", APP_SHADER_VULKAN_OUTPUT_DIR);
+        return 1;
+    }
+
+    struct ShaderBuildItem {
+        const char* src;
+        const char* dst;
+    };
+#define SHADER_BUILD_ITEM(name, source, output) {source, output},
+    static const struct ShaderBuildItem shaders[] = {
+        APP_SHADER_VULKAN_LIST(SHADER_BUILD_ITEM)
+    };
+#undef SHADER_BUILD_ITEM
+
+    for (S32 i = 0; i < (S32)(sizeof(shaders) / sizeof(shaders[0])); ++i) {
+        U64 srcTime = sob_fs_mtime(shaders[i].src);
+        U64 dstTime = sob_fs_mtime(shaders[i].dst);
+        if (srcTime == 0u) {
+            fprintf(stderr, "Error: Vulkan shader source missing: '%s'\n", shaders[i].src);
+            return 1;
+        }
+        if (dstTime != 0u && dstTime >= srcTime) {
+            continue;
+        }
+
+        Sob_Cmd* cmd = sob_cmd_create(arena);
+        if (!cmd) {
+            return 1;
+        }
+
+        sob_cmd_append(cmd, VULKAN_VENDOR_GLSLC_PATH);
+        sob_cmd_append(cmd, shaders[i].src);
+        sob_cmd_append(cmd, "-o");
+        sob_cmd_append(cmd, shaders[i].dst);
+
+        printf("==> Compiling Vulkan shader %s -> %s\n", shaders[i].src, shaders[i].dst);
+        S32 result = sob_cmd_run(cmd);
+        if (result != 0) {
+            return result;
+        }
+    }
+
+    return 0;
+}
+#endif
+
+static int configure_runtime_executable(Sob_Arena* arena, Sob_Target* target, BuildMode mode) {
+#if !SOB_WINDOWS
+    (void)arena;
+#endif
+
+#if SOB_WINDOWS
+    sob_target_add_source(target, "main.cpp");
+#else
     sob_target_add_source(target, "main.mm");
+#endif
     configure_common_includes(target);
-    sob_target_set_standard(target, Sob_Standard_Cpp17);
+    sob_target_set_standard(target, Sob_Standard_Cpp20);
     apply_cpp_runtime_flags(target);
     apply_common_warning_flags(target);
     apply_mode_target_flags(target, mode);
@@ -257,7 +1003,19 @@ static void configure_runtime_executable(Sob_Target* target, BuildMode mode) {
     sob_target_link(target, "Cocoa", .kind = Sob_LibKind_Framework);
     sob_target_link(target, "QuartzCore", .kind = Sob_LibKind_Framework);
     sob_target_link(target, "Metal", .kind = Sob_LibKind_Framework);
+#elif SOB_WINDOWS
+    sob_target_link(target, "user32");
+    sob_target_link(target, "gdi32");
+    sob_target_link(target, "shell32");
+    sob_target_link(target, "advapi32");
+    sob_target_link(target, "cfgmgr32");
+    sob_target_link(target, "shlwapi");
+    if (!configure_windows_vulkan_vendor(arena, target)) {
+        return 0;
+    }
 #endif
+
+    return 1;
 }
 
 static S32 run_metagen_command(void) {
@@ -272,11 +1030,15 @@ static S32 run_metagen_command(void) {
         return -1;
     }
 
-    sob_cmd_append(cmd, "../" METAGEN_OUTPUT_PATH);
+    sob_cmd_append(cmd, METAGEN_RUN_PATH);
     sob_cmd_append(cmd, "-v");
-    sob_cmd_append(cmd, "..");
+    sob_cmd_append(cmd, METAGEN_INPUT_PATH);
 
+#if SOB_WINDOWS
+    S32 result = sob_cmd_run(cmd);
+#else
     S32 result = sob_cmd_run(cmd, .cwd = META_DIR);
+#endif
     sob_arena_destroy(arena);
     return result;
 }
@@ -340,10 +1102,12 @@ static S32 build_and_run_metagen(BuildMode mode) {
 
     sob_target_add_source(metagen, "meta/meta_main.cpp");
     sob_target_add_include(metagen, "meta");
-    sob_target_set_standard(metagen, Sob_Standard_Cpp17);
+    sob_target_set_standard(metagen, Sob_Standard_Cpp20);
     apply_cpp_runtime_flags(metagen);
+#if !SOB_WINDOWS
     sob_target_add_cflags(metagen, "-pthread");
     sob_target_add_ldflags(metagen, "-pthread");
+#endif
     apply_metagen_warning_flags(metagen);
     apply_mode_target_flags(metagen, mode);
 
@@ -365,6 +1129,20 @@ static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
         return 1;
     }
 
+#if SOB_WINDOWS
+    if (requestedTarget == BuildTarget_Shaders) {
+        S32 shaderResult = build_windows_vulkan_shaders(arena);
+        sob_arena_destroy(arena);
+        return shaderResult;
+    }
+#else
+    if (requestedTarget == BuildTarget_Shaders) {
+        printf("==> No shader build step required on this platform.\n");
+        sob_arena_destroy(arena);
+        return 0;
+    }
+#endif
+
     Sob_BuildContext* ctx = sob_build_create(arena);
     if (!ctx) {
         fprintf(stderr, "Error: failed to create sob build context for project build\n");
@@ -374,8 +1152,27 @@ static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
 
     configure_compiler_for_mode(ctx, mode);
 
+#if SOB_WINDOWS
+    if (requestedTarget == BuildTarget_Ship) {
+        S32 shaderResult = build_windows_vulkan_shaders(arena);
+        if (shaderResult != 0) {
+            sob_arena_destroy(arena);
+            return shaderResult;
+        }
+    }
+#endif
+
     if (requestedTarget == BuildTarget_Module || requestedTarget == BuildTarget_All ||
         requestedTarget == BuildTarget_Dev) {
+#if SOB_WINDOWS
+        if (requestedTarget == BuildTarget_Module && !sob_fs_exists(HOST_IMPORT_LIB_PATH)) {
+            fprintf(stderr, "Error: '%s' is missing. Build './sob host' before './sob module' on Windows.\n",
+                    HOST_IMPORT_LIB_PATH);
+            sob_arena_destroy(arena);
+            return 1;
+        }
+#endif
+
         Sob_Target* moduleTarget = sob_target_create(ctx, "utilities_app", Sob_TargetKind_DynamicLib,
                                                      .outputDir = BUILD_HOT_DIR,
                                                      .outputName = "utilities_app");
@@ -387,9 +1184,15 @@ static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
 
         sob_target_add_source(moduleTarget, "app.cpp");
         configure_common_includes(moduleTarget);
-        sob_target_set_standard(moduleTarget, Sob_Standard_Cpp17);
+        sob_target_set_standard(moduleTarget, Sob_Standard_Cpp20);
         apply_cpp_runtime_flags(moduleTarget);
+#if SOB_WINDOWS
+        sob_target_define(moduleTarget, "UTILITIES_SHARED_IMPORT", .value = "1");
+        sob_target_link(moduleTarget, HOST_IMPORT_LIB_PATH, .kind = Sob_LibKind_Static);
+#endif
+#if !SOB_WINDOWS
         sob_target_add_cflags(moduleTarget, "-fvisibility=hidden");
+#endif
         apply_common_warning_flags(moduleTarget);
         apply_mode_target_flags(moduleTarget, mode);
 
@@ -410,10 +1213,16 @@ static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
             return 1;
         }
 
-        configure_runtime_executable(hostTarget, mode);
+        if (!configure_runtime_executable(arena, hostTarget, mode)) {
+            sob_arena_destroy(arena);
+            return 1;
+        }
 
 #if SOB_MACOS
         sob_target_add_ldflags(hostTarget, "-Wl,-export_dynamic");
+#elif SOB_WINDOWS
+        sob_target_define(hostTarget, "UTILITIES_SHARED_EXPORT", .value = "1");
+        sob_target_add_ldflags(hostTarget, "/IMPLIB:" HOST_IMPORT_LIB_PATH);
 #endif
     }
 
@@ -427,7 +1236,10 @@ static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
             return 1;
         }
 
-        configure_runtime_executable(shipTarget, mode);
+        if (!configure_runtime_executable(arena, shipTarget, mode)) {
+            sob_arena_destroy(arena);
+            return 1;
+        }
         sob_target_add_source(shipTarget, "app.cpp");
         sob_target_define(shipTarget, "UTILITIES_STATIC_APP", .value = "1");
     }
@@ -492,6 +1304,28 @@ static S32 build_dev_targets_parallel(BuildMode mode, const char* selfPath) {
     return (moduleResult == 0 && hostResult == 0) ? 0 : 1;
 }
 
+static S32 build_dev_targets(BuildMode mode, const char* selfPath) {
+#if SOB_WINDOWS
+    (void)selfPath;
+    printf("==> Building dev (%s): host then module...\n", build_mode_name(mode));
+    fflush(stdout);
+
+    S32 shaderResult = build_project_targets(BuildTarget_Shaders, mode);
+    if (shaderResult != 0) {
+        return shaderResult;
+    }
+
+    S32 hostResult = build_project_targets(BuildTarget_Host, mode);
+    if (hostResult != 0) {
+        return hostResult;
+    }
+
+    return build_project_targets(BuildTarget_Module, mode);
+#else
+    return build_dev_targets_parallel(mode, selfPath);
+#endif
+}
+
 static S32 run_app_command(void) {
     Sob_Arena* arena = sob_arena_create();
     if (!arena) {
@@ -506,9 +1340,9 @@ static S32 run_app_command(void) {
         return 1;
     }
 
-    sob_cmd_append(cmd, HOST_OUTPUT_PATH);
+    sob_cmd_append(cmd, HOST_RUN_PATH);
 
-    printf("==> Running %s...\n", HOST_OUTPUT_PATH);
+    printf("==> Running %s...\n", HOST_RUN_PATH);
     fflush(stdout);
 
     S32 result = sob_cmd_run(cmd);
@@ -533,7 +1367,17 @@ static S32 handle_clean(void) {
 }
 
 int main(int argc, char** argv) {
+#if SOB_WINDOWS
+    S32 bootstrapExitCode = 0;
+    if (windows_bootstrap_msvc_environment_if_needed(argc, argv, &bootstrapExitCode)) {
+        return bootstrapExitCode;
+    }
+    if (windows_self_rebuild_if_needed(argc, argv, &bootstrapExitCode)) {
+        return bootstrapExitCode;
+    }
+#else
     SOB_GO_REBUILD_URSELF(argc, argv);
+#endif
 
     BuildTarget target = BuildTarget_Run;
     BuildMode mode = BuildMode_Debug;
@@ -576,16 +1420,6 @@ int main(int argc, char** argv) {
         return handle_clean();
     }
 
-#if !SOB_MACOS
-    if (target == BuildTarget_Run || target == BuildTarget_Host || target == BuildTarget_Module ||
-        target == BuildTarget_All || target == BuildTarget_Dev || target == BuildTarget_Ship) {
-        fprintf(stderr, "Error: '%s' build is currently supported only on macOS.\n",
-                build_target_name(target));
-        fprintf(stderr, "Use './sob metagen' for metadata generation on this platform.\n");
-        return 1;
-    }
-#endif
-
     if (target == BuildTarget_Metagen || !metadata_outputs_are_fresh()) {
         S32 metadataResult = build_and_run_metagen(mode);
         if (metadataResult != 0) {
@@ -601,7 +1435,7 @@ int main(int argc, char** argv) {
     }
 
     if (target == BuildTarget_Run) {
-        S32 buildResult = build_dev_targets_parallel(mode, argv[0]);
+        S32 buildResult = build_dev_targets(mode, argv[0]);
         if (buildResult != 0) {
             return buildResult;
         }
@@ -610,7 +1444,7 @@ int main(int argc, char** argv) {
     }
 
     if (target == BuildTarget_All || target == BuildTarget_Dev) {
-        return build_dev_targets_parallel(mode, argv[0]);
+        return build_dev_targets(mode, argv[0]);
     }
 
     return build_project_targets(target, mode);

@@ -199,16 +199,22 @@ static void log_raw_impl(Arena* arena, const char* str) {
     log_raw_impl(arena, str8(str));
 }
 
-#define log_raw(arena, str) log_raw_impl(arena, str)
+template <typename... Args>
+static void log_fmt_impl(Arena* arena, const char* fmt, Args... args) {
+    const Str8FmtArg fmtArgs[] = {Str8FmtArg(args)...};
+    StringU8 s = str8_fmt_(arena, str8(fmt), fmtArgs, (U64)sizeof...(Args));
+    OS_file_write(OS_get_log_handle(), s.size, s.data);
+}
 
-#define log_fmt(arena, fmt, ...) do { \
-    StringU8 s = str8_fmt(arena, fmt, __VA_ARGS__); \
-    OS_file_write(OS_get_log_handle(), s.size, s.data); \
-} while(0)
+static void log_info(Arena* arena, const char* str) { log_raw_impl(arena, str); }
+static void log_info(Arena* arena, StringU8 str) { log_raw_impl(arena, str); }
+template <typename... Args>
+static void log_info(Arena* arena, const char* fmt, Args... args) { log_fmt_impl(arena, fmt, args...); }
 
-#define LOG_GET_MACRO(_1, _2, _3, _4, _5, _6, _7, _8, NAME, ...) NAME
-#define log_info(...) LOG_GET_MACRO(__VA_ARGS__, log_fmt, log_fmt, log_fmt, log_fmt, log_fmt, log_fmt, log_raw, DUMMY)(__VA_ARGS__)
-#define log_error(...) LOG_GET_MACRO(__VA_ARGS__, log_fmt, log_fmt, log_fmt, log_fmt, log_fmt, log_fmt, log_raw, DUMMY)(__VA_ARGS__)
+static void log_error(Arena* arena, const char* str) { log_raw_impl(arena, str); }
+static void log_error(Arena* arena, StringU8 str) { log_raw_impl(arena, str); }
+template <typename... Args>
+static void log_error(Arena* arena, const char* fmt, Args... args) { log_fmt_impl(arena, fmt, args...); }
 
 static void print_usage(Arena* arena) {
     log_info(arena, "metagen v{} - Meta Pre-compiler for C++\n\n", str8(METAGEN_VERSION));

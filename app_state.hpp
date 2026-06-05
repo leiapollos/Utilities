@@ -32,9 +32,16 @@ struct AppCoreState {
     U32 workerCount;
 
     B32 gfxDemoInitialized;
+    B32 gfxDemoGeometryCreated;
+    B32 gfxDemoGeometryUploaded;
+    B32 gfxDemoReady;
+    U32 gfxDemoLoadLogMask;
     Arena* resourceArena;
     ArtifactCache* resourceCache;
-    ArtifactHandle gfxTriangleShader;
+    U64 gfxShaderSourceTimestamp;
+    B32 gfxShaderBuildInitialized;
+    ArtifactHandle gfxTriangleVertexShader;
+    ArtifactHandle gfxTriangleFragmentShader;
     ArtifactHandle gfxDemoComputeShader;
     ArtifactHandle gfxDemoTextureSource;
     GfxBuffer gfxTriangleVertexBuffer;
@@ -48,7 +55,16 @@ struct AppCoreState {
     GfxResourceId gfxDemoSamplerId;
     U32 gfxDemoMaterialCount;
     B32 gfxDemoTextureUploaded;
-    B32 gfxDemoMaterialsUploaded;
+    B32 gfxDemoMaterialsReady;
+    B32 gfxDemoMaterialDirty;
+    U64 gfxTriangleVertexShaderGeneration;
+    U64 gfxTriangleFragmentShaderGeneration;
+    U64 gfxTriangleFailedVertexShaderGeneration;
+    U64 gfxTriangleFailedFragmentShaderGeneration;
+    U64 gfxDemoComputeShaderGeneration;
+    U64 gfxDemoComputeFailedShaderGeneration;
+    U64 gfxDemoTextureGeneration;
+    U64 gfxDemoTextureFailedGeneration;
 };
 
 struct APP_Context {

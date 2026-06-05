@@ -12,17 +12,17 @@ struct StringU8 {
     U64 size;
 };
 
-extern StringU8 STR8_NIL;
-extern StringU8 STR8_EMPTY;
+extern UTILITIES_SHARED_API StringU8 STR8_NIL;
+extern UTILITIES_SHARED_API StringU8 STR8_EMPTY;
 
-StringU8 str8(U8* source, U64 size);
-StringU8 str8(const char* source, U64 size);
-StringU8 str8(const char* source);
-StringU8 str8_cpy(Arena* arena, const char* source, U64 size);
-StringU8 str8_cpy(Arena* arena, const char* source);
-StringU8 str8_cpy(Arena* arena, StringU8 src);
+UTILITIES_SHARED_API StringU8 str8(U8* source, U64 size);
+UTILITIES_SHARED_API StringU8 str8(const char* source, U64 size);
+UTILITIES_SHARED_API StringU8 str8(const char* source);
+UTILITIES_SHARED_API StringU8 str8_cpy(Arena* arena, const char* source, U64 size);
+UTILITIES_SHARED_API StringU8 str8_cpy(Arena* arena, const char* source);
+UTILITIES_SHARED_API StringU8 str8_cpy(Arena* arena, StringU8 src);
 
-StringU8 str8_concat_n(Arena* arena, const StringU8* pieces, U64 count);
+UTILITIES_SHARED_API StringU8 str8_concat_n(Arena* arena, const StringU8* pieces, U64 count);
 #ifdef CPP_LANG
 
 /* C++ (requires C++11) */
@@ -44,16 +44,16 @@ StringU8 str8_concat_n(Arena* arena, const StringU8* pieces, U64 count);
 
 #endif
 
-B8 str8_is_nil(StringU8 s);
-B8 str8_is_empty(StringU8 s);
-B8 str8_equal(StringU8 a, StringU8 b);
+UTILITIES_SHARED_API B8 str8_is_nil(StringU8 s);
+UTILITIES_SHARED_API B8 str8_is_empty(StringU8 s);
+UTILITIES_SHARED_API B8 str8_equal(StringU8 a, StringU8 b);
 
-StringU8 str8_from_U64(Arena* arena, U64 value, U64 base);
-StringU8 str8_from_S64(Arena* arena, S64 value);
-StringU8 str8_from_F64(Arena* arena, F64 value, int precision);
-StringU8 str8_from_ptr(Arena* arena, const void* ptr);
-StringU8 str8_from_char(Arena* arena, U8 c);
-StringU8 str8_to_uppercase(Arena* arena, StringU8 s);
+UTILITIES_SHARED_API StringU8 str8_from_U64(Arena* arena, U64 value, U64 base);
+UTILITIES_SHARED_API StringU8 str8_from_S64(Arena* arena, S64 value);
+UTILITIES_SHARED_API StringU8 str8_from_F64(Arena* arena, F64 value, int precision);
+UTILITIES_SHARED_API StringU8 str8_from_ptr(Arena* arena, const void* ptr);
+UTILITIES_SHARED_API StringU8 str8_from_char(Arena* arena, U8 c);
+UTILITIES_SHARED_API StringU8 str8_to_uppercase(Arena* arena, StringU8 s);
 
 struct Str8List {
     StringU8* items;
@@ -116,9 +116,9 @@ struct Str8FmtArg {
     Str8FmtArg(U64 v) { kind = Str8FmtKind_U64; u64Val = v; }
 };
 
-Str8FmtSpec str8_fmt_parse_spec(StringU8 specStr);
-StringU8 str8_fmt_arg_to_string(Arena* arena, const Str8FmtArg& arg, Str8FmtSpec spec);
-StringU8 str8_fmt_(Arena* arena, StringU8 fmt, const Str8FmtArg* args, U64 argCount);
+UTILITIES_SHARED_API Str8FmtSpec str8_fmt_parse_spec(StringU8 specStr);
+UTILITIES_SHARED_API StringU8 str8_fmt_arg_to_string(Arena* arena, const Str8FmtArg& arg, Str8FmtSpec spec);
+UTILITIES_SHARED_API StringU8 str8_fmt_(Arena* arena, StringU8 fmt, const Str8FmtArg* args, U64 argCount);
 
 #define str8_fmt(arena, fmt, ...)                                                          \
     ([&](){                                                                                \

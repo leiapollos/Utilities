@@ -7,7 +7,7 @@
 #include "core/os_core.hpp"
 
 #if defined(PLATFORM_OS_WINDOWS)
-#error "not supported"
+#include "core/windows/os_core_windows.hpp"
 #elif defined(PLATFORM_OS_MACOS)
 #include "core/macos/os_core_macos.hpp"
 #elif defined(PLATFORM_OS_LINUX)

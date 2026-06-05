@@ -4,12 +4,11 @@
 
 #include "app_interface.hpp"
 #include "app_state.hpp"
+#include "app/shaders/shader_manifest.h"
 
 #include "nstl/artifact/artifact_include.cpp"
 
-#define APP_CORE_STATE_VERSION 26u
-#define APP_GFX_TRIANGLE_SHADER_PATH "app/shaders/triangle.metal"
-#define APP_GFX_DEMO_COMPUTE_SHADER_PATH "app/shaders/demo_compute.metal"
+#define APP_CORE_STATE_VERSION 30u
 #define APP_GFX_DEMO_TEXTURE_PATH "app/textures/demo.ppm"
 #define APP_GFX_DEMO_DRAW_COLUMNS 12u
 #define APP_GFX_DEMO_DRAW_ROWS 8u
@@ -22,6 +21,24 @@ struct AppGfxVertex {
     F32 position[2];
     F32 color[4];
 };
+
+static const AppGfxVertex APP_GFX_DEMO_VERTICES[] = {
+    {{ 0.0f,  0.55f}, {1.0f, 1.0f, 1.0f, 1.0f}},
+    {{-0.55f, -0.45f}, {1.0f, 1.0f, 1.0f, 1.0f}},
+    {{ 0.55f, -0.45f}, {1.0f, 1.0f, 1.0f, 1.0f}},
+};
+
+static const U16 APP_GFX_DEMO_INDICES[] = {
+    0u, 1u, 2u,
+};
+
+#if defined(PLATFORM_BUILD_DEBUG) && defined(PLATFORM_OS_WINDOWS)
+#define APP_GFX_DEV_SHADER_SOURCE_ENTRY(name, source, output) source,
+static const char* APP_GFX_DEV_SHADER_SOURCES[] = {
+    APP_SHADER_VULKAN_LIST(APP_GFX_DEV_SHADER_SOURCE_ENTRY)
+};
+#undef APP_GFX_DEV_SHADER_SOURCE_ENTRY
+#endif
 
 struct AppGfxDrawData {
     F32 offsetScale[4];
@@ -72,6 +89,16 @@ enum AppResourceType {
     AppResourceType_RawFile = 1,
 };
 
+enum AppGfxDemoLoadLog {
+    AppGfxDemoLoadLog_Started = (1u << 0u),
+    AppGfxDemoLoadLog_GeometryCreated = (1u << 1u),
+    AppGfxDemoLoadLog_GeometryUploaded = (1u << 2u),
+    AppGfxDemoLoadLog_TrianglePipeline = (1u << 3u),
+    AppGfxDemoLoadLog_ComputePipeline = (1u << 4u),
+    AppGfxDemoLoadLog_TextureUploaded = (1u << 5u),
+    AppGfxDemoLoadLog_Ready = (1u << 6u),
+};
+
 static const APP_StateDesc* app_state_desc(APP_StateKind kind);
 static void* app_state_require(APP_Context* ctx, APP_StateKind kind);
 static B32 app_context_from_call(AppHost* host, HOT_StateStore* store, APP_Context* outCtx);
@@ -81,10 +108,18 @@ static B32 app_ensure_job_system(APP_Context* ctx);
 static B32 app_resource_cache_init(APP_Context* ctx);
 static void app_resource_cache_shutdown(APP_Context* ctx);
 static B32 app_decode_ppm_rgba8(Arena* arena, const void* data, U64 size, AppImageRGBA8* outImage);
+#if defined(PLATFORM_BUILD_DEBUG) && defined(PLATFORM_OS_WINDOWS)
+static U64 app_gfx_newest_shader_source_timestamp(void);
+static void app_gfx_try_build_dev_shaders(APP_Context* ctx);
+#endif
 static B32 app_gfx_demo_init(APP_Context* ctx);
-static void app_gfx_try_create_triangle_pipeline(APP_Context* ctx);
-static void app_gfx_try_create_demo_compute_pipeline(APP_Context* ctx);
-static void app_gfx_upload_demo_texture(APP_Context* ctx, GfxFrame* frame);
+static void app_gfx_acquire_demo_artifacts(APP_Context* ctx, ArtifactUseScope* scope);
+static void app_gfx_demo_log_once(AppCoreState* state, U32 bit, const char* message);
+static void app_gfx_try_create_demo_buffers(APP_Context* ctx);
+static void app_gfx_upload_demo_geometry(APP_Context* ctx, GfxFrame* frame);
+static void app_gfx_try_update_triangle_pipeline(APP_Context* ctx, ArtifactUseScope* scope);
+static void app_gfx_try_update_demo_compute_pipeline(APP_Context* ctx, ArtifactUseScope* scope);
+static void app_gfx_upload_demo_texture(APP_Context* ctx, GfxFrame* frame, ArtifactUseScope* scope);
 static B32 app_gfx_dispatch_demo_materials(APP_Context* ctx, GfxCommandBuffer* commands, GfxFrame* frame);
 static void app_gfx_demo_shutdown(APP_Context* ctx);
 static void app_gfx_demo_frame(APP_Context* ctx);
@@ -98,10 +133,6 @@ static B32 app_boot(AppHost* host, HOT_StateStore* store) {
 
     APP_Context ctx = {};
     if (!app_context_from_call(host, store, &ctx)) {
-        return 0;
-    }
-
-    if (!app_gfx_demo_init(&ctx)) {
         return 0;
     }
 
@@ -128,10 +159,6 @@ static B32 app_after_reload(AppHost* host, HOT_StateStore* store) {
     }
 
     ctx.core->reloadCount += 1u;
-    if (!ctx.core->gfxDemoInitialized && !app_gfx_demo_init(&ctx)) {
-        return 0;
-    }
-
     return 1;
 }
 
@@ -213,6 +240,12 @@ static B32 app_resource_cache_init(APP_Context* ctx) {
     desc.initialHashCapacity = 128u;
     desc.budgetBytes = MB(16);
     desc.maxTypeId = AppResourceType_RawFile;
+#if defined(PLATFORM_BUILD_DEBUG)
+    desc.reloadScannerEnabled = 1;
+    desc.reloadScannerSleepMs = 100u;
+    desc.reloadScannerBatchCount = 16u;
+    desc.reloadDirtyQueueCapacity = 256u;
+#endif
 
     state->resourceCache = artifact_cache_alloc(&desc);
     if (state->resourceCache == 0) {
@@ -246,10 +279,48 @@ static void app_resource_cache_shutdown(APP_Context* ctx) {
         state->resourceArena = 0;
     }
 
-    state->gfxTriangleShader = ARTIFACT_HANDLE_INVALID;
+    state->gfxTriangleVertexShader = ARTIFACT_HANDLE_INVALID;
+    state->gfxTriangleFragmentShader = ARTIFACT_HANDLE_INVALID;
     state->gfxDemoComputeShader = ARTIFACT_HANDLE_INVALID;
     state->gfxDemoTextureSource = ARTIFACT_HANDLE_INVALID;
 }
+
+#if defined(PLATFORM_BUILD_DEBUG) && defined(PLATFORM_OS_WINDOWS)
+static U64 app_gfx_newest_shader_source_timestamp(void) {
+    U64 newestTimestamp = 0u;
+    for (U32 index = 0; index < ARRAY_COUNT(APP_GFX_DEV_SHADER_SOURCES); ++index) {
+        OS_FileInfo info = OS_get_file_info(APP_GFX_DEV_SHADER_SOURCES[index]);
+        if (info.exists && info.lastWriteTimestampNs > newestTimestamp) {
+            newestTimestamp = info.lastWriteTimestampNs;
+        }
+    }
+    return newestTimestamp;
+}
+
+static void app_gfx_try_build_dev_shaders(APP_Context* ctx) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->host != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    AppCoreState* state = ctx->core;
+    U64 sourceTimestamp = app_gfx_newest_shader_source_timestamp();
+    if (sourceTimestamp == 0u) {
+        return;
+    }
+    if (state->gfxShaderBuildInitialized && sourceTimestamp == state->gfxShaderSourceTimestamp) {
+        return;
+    }
+
+    LOG_INFO("gfx", "Building Vulkan shaders");
+    S32 buildResult = APP_OS_CALL(ctx->host, OS_execute, str8(".\\sob.exe shaders debug"));
+    state->gfxShaderBuildInitialized = 1;
+    state->gfxShaderSourceTimestamp = sourceTimestamp;
+    if (buildResult != 0) {
+        LOG_ERROR("gfx", "Shader build failed (exit code {})", buildResult);
+        return;
+    }
+}
+#endif
 
 static B32 app_ppm_is_space(U8 c) {
     return c == (U8)' ' ||
@@ -380,6 +451,9 @@ static B32 app_decode_ppm_rgba8(Arena* arena, const void* data, U64 size, AppIma
 
     U64 pixelBytes = bytesPerRow * height;
     U8* pixels = ARENA_PUSH_ARRAY(arena, U8, pixelBytes);
+    if (!pixels) {
+        return 0;
+    }
     MEMSET(pixels, 0, pixelBytes);
 
     for (U32 y = 0u; y < height; ++y) {
@@ -428,97 +502,161 @@ static B32 app_gfx_demo_init(APP_Context* ctx) {
         return 0;
     }
 
-    Temp scratch = get_scratch(0, 0);
-    if (scratch.arena != 0) {
-        ArtifactUseScope scope = {};
-        if (artifact_use_scope_open(state->resourceCache, scratch.arena, &scope)) {
-            StringU8 exeDir = OS_get_executable_directory(scratch.arena);
-            StringU8 shaderPath = str8_concat(scratch.arena, exeDir, str8("/../" APP_GFX_TRIANGLE_SHADER_PATH));
-            state->gfxTriangleShader = artifact_acquire(&scope,
-                                                        AppResourceType_RawFile,
-                                                        shaderPath,
-                                                        ArtifactAcquireFlags_Async);
-            StringU8 computePath = str8_concat(scratch.arena, exeDir, str8("/../" APP_GFX_DEMO_COMPUTE_SHADER_PATH));
-            state->gfxDemoComputeShader = artifact_acquire(&scope,
-                                                           AppResourceType_RawFile,
-                                                           computePath,
-                                                           ArtifactAcquireFlags_Async);
-            StringU8 texturePath = str8_concat(scratch.arena, exeDir, str8("/../" APP_GFX_DEMO_TEXTURE_PATH));
-            state->gfxDemoTextureSource = artifact_acquire(&scope,
-                                                           AppResourceType_RawFile,
-                                                           texturePath,
-                                                           ArtifactAcquireFlags_Async);
-            artifact_use_scope_close(&scope);
-        }
-        temp_end(&scratch);
-    }
-
-    static const AppGfxVertex vertices[] = {
-        {{ 0.0f,  0.55f}, {1.0f, 1.0f, 1.0f, 1.0f}},
-        {{-0.55f, -0.45f}, {1.0f, 1.0f, 1.0f, 1.0f}},
-        {{ 0.55f, -0.45f}, {1.0f, 1.0f, 1.0f, 1.0f}},
-    };
-
-    static const U16 indices[] = {
-        0u, 1u, 2u,
-    };
-
-    GfxBufferDesc vertexDesc = {};
-    vertexDesc.name = "triangle vertices";
-    vertexDesc.size = sizeof(vertices);
-    vertexDesc.usageFlags = GfxBufferUsageFlags_Vertex;
-    vertexDesc.memoryKind = GfxMemoryKind_Device;
-    vertexDesc.initialData = vertices;
-    state->gfxTriangleVertexBuffer = gfx_create_buffer(ctx->host->gfxDevice, &vertexDesc);
-
-    GfxBufferDesc indexDesc = {};
-    indexDesc.name = "triangle indices";
-    indexDesc.size = sizeof(indices);
-    indexDesc.usageFlags = GfxBufferUsageFlags_Index;
-    indexDesc.memoryKind = GfxMemoryKind_Device;
-    indexDesc.initialData = indices;
-    state->gfxTriangleIndexBuffer = gfx_create_buffer(ctx->host->gfxDevice, &indexDesc);
-
     state->gfxDemoMaterialCount = APP_GFX_DEMO_MATERIAL_COUNT;
-    GfxBufferDesc materialDesc = {};
-    materialDesc.name = "demo materials";
-    materialDesc.size = sizeof(AppGfxMaterial) * state->gfxDemoMaterialCount;
-    materialDesc.usageFlags = GfxBufferUsageFlags_Storage | GfxBufferUsageFlags_CopyDst;
-    materialDesc.memoryKind = GfxMemoryKind_Device;
-    state->gfxDemoMaterialBuffer = gfx_create_buffer(ctx->host->gfxDevice, &materialDesc);
-
-    app_gfx_try_create_triangle_pipeline(ctx);
-
+    state->gfxDemoMaterialDirty = 1;
     state->gfxDemoInitialized = 1;
+    app_gfx_demo_log_once(state, AppGfxDemoLoadLog_Started, "Demo resources requested");
     return 1;
 }
 
-static void app_gfx_try_create_triangle_pipeline(APP_Context* ctx) {
+static void app_gfx_acquire_demo_artifacts(APP_Context* ctx, ArtifactUseScope* scope) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    AppCoreState* state = ctx->core;
+    if (!scope || !state->resourceCache) {
+        return;
+    }
+
+    StringU8 exeDir = OS_get_executable_directory(scope->arena);
+    ArtifactReloadPolicy policy = {};
+    policy.checkIntervalNs = ARTIFACT_RELOAD_CHECK_INTERVAL_DEFAULT_NS;
+    U32 flags = ArtifactAcquireFlags_Async;
+#if defined(PLATFORM_BUILD_DEBUG)
+    flags |= ArtifactAcquireFlags_Reloadable;
+#endif
+
+    StringU8 vertexShaderPath = str8_concat(scope->arena, exeDir, str8("/../" APP_SHADER_TRIANGLE_VERTEX_RUNTIME_PATH));
+    state->gfxTriangleVertexShader = artifact_acquire_with_policy(scope,
+                                                                  AppResourceType_RawFile,
+                                                                  vertexShaderPath,
+                                                                  flags,
+                                                                  policy);
+    StringU8 fragmentShaderPath = str8_concat(scope->arena, exeDir, str8("/../" APP_SHADER_TRIANGLE_FRAGMENT_RUNTIME_PATH));
+    state->gfxTriangleFragmentShader = artifact_acquire_with_policy(scope,
+                                                                    AppResourceType_RawFile,
+                                                                    fragmentShaderPath,
+                                                                    flags,
+                                                                    policy);
+    StringU8 computePath = str8_concat(scope->arena, exeDir, str8("/../" APP_SHADER_DEMO_COMPUTE_RUNTIME_PATH));
+    state->gfxDemoComputeShader = artifact_acquire_with_policy(scope,
+                                                               AppResourceType_RawFile,
+                                                               computePath,
+                                                               flags,
+                                                               policy);
+    StringU8 texturePath = str8_concat(scope->arena, exeDir, str8("/../" APP_GFX_DEMO_TEXTURE_PATH));
+    state->gfxDemoTextureSource = artifact_acquire_with_policy(scope,
+                                                               AppResourceType_RawFile,
+                                                               texturePath,
+                                                               flags,
+                                                               policy);
+}
+
+static void app_gfx_demo_log_once(AppCoreState* state, U32 bit, const char* message) {
+    if (state == 0 || message == 0 || FLAGS_HAS(state->gfxDemoLoadLogMask, bit)) {
+        return;
+    }
+
+    LOG_INFO("gfx", "{}", str8(message));
+    state->gfxDemoLoadLogMask |= bit;
+}
+
+static void app_gfx_try_create_demo_buffers(APP_Context* ctx) {
     ASSERT_ALWAYS(ctx != 0);
     ASSERT_ALWAYS(ctx->host != 0);
     ASSERT_ALWAYS(ctx->core != 0);
 
     AppCoreState* state = ctx->core;
-    if (state->resourceCache == 0 || ctx->host->gfxDevice == 0) {
-        return;
-    }
-    if (state->gfxTrianglePipeline.index != 0u || state->gfxTrianglePipeline.generation != 0u) {
+    if (state->gfxDemoGeometryCreated || ctx->host->gfxDevice == 0) {
         return;
     }
 
-    Temp scratch = get_scratch(0, 0);
-    if (scratch.arena == 0) {
+    GfxBufferDesc vertexDesc = {};
+    vertexDesc.name = "triangle vertices";
+    vertexDesc.size = sizeof(APP_GFX_DEMO_VERTICES);
+    vertexDesc.usageFlags = GfxBufferUsageFlags_Vertex | GfxBufferUsageFlags_CopyDst;
+    vertexDesc.memoryKind = GfxMemoryKind_Device;
+    GfxBuffer vertexBuffer = gfx_create_buffer(ctx->host->gfxDevice, &vertexDesc);
+
+    GfxBufferDesc indexDesc = {};
+    indexDesc.name = "triangle indices";
+    indexDesc.size = sizeof(APP_GFX_DEMO_INDICES);
+    indexDesc.usageFlags = GfxBufferUsageFlags_Index | GfxBufferUsageFlags_CopyDst;
+    indexDesc.memoryKind = GfxMemoryKind_Device;
+    GfxBuffer indexBuffer = gfx_create_buffer(ctx->host->gfxDevice, &indexDesc);
+
+    GfxBufferDesc materialDesc = {};
+    materialDesc.name = "demo materials";
+    materialDesc.size = sizeof(AppGfxMaterial) * state->gfxDemoMaterialCount;
+    materialDesc.usageFlags = GfxBufferUsageFlags_Storage | GfxBufferUsageFlags_CopyDst;
+    materialDesc.memoryKind = GfxMemoryKind_Device;
+    GfxBuffer materialBuffer = gfx_create_buffer(ctx->host->gfxDevice, &materialDesc);
+
+    state->gfxDemoGeometryCreated = vertexBuffer.generation != 0u &&
+                                    indexBuffer.generation != 0u &&
+                                    materialBuffer.generation != 0u;
+    if (state->gfxDemoGeometryCreated) {
+        state->gfxTriangleVertexBuffer = vertexBuffer;
+        state->gfxTriangleIndexBuffer = indexBuffer;
+        state->gfxDemoMaterialBuffer = materialBuffer;
+        state->gfxDemoMaterialDirty = 1;
+        app_gfx_demo_log_once(state, AppGfxDemoLoadLog_GeometryCreated, "Demo GPU buffers created");
+    } else {
+        gfx_destroy_buffer(ctx->host->gfxDevice, materialBuffer);
+        gfx_destroy_buffer(ctx->host->gfxDevice, indexBuffer);
+        gfx_destroy_buffer(ctx->host->gfxDevice, vertexBuffer);
+    }
+}
+
+static void app_gfx_upload_demo_geometry(APP_Context* ctx, GfxFrame* frame) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    AppCoreState* state = ctx->core;
+    if (state->gfxDemoGeometryUploaded || !state->gfxDemoGeometryCreated || frame == 0) {
         return;
     }
 
-    ArtifactUseScope scope = {};
-    if (!artifact_use_scope_open(state->resourceCache, scratch.arena, &scope)) {
-        temp_end(&scratch);
+    B32 uploadedVertices = gfx_upload_buffer(frame,
+                                             state->gfxTriangleVertexBuffer,
+                                             0u,
+                                             APP_GFX_DEMO_VERTICES,
+                                             sizeof(APP_GFX_DEMO_VERTICES));
+    B32 uploadedIndices = gfx_upload_buffer(frame,
+                                            state->gfxTriangleIndexBuffer,
+                                            0u,
+                                            APP_GFX_DEMO_INDICES,
+                                            sizeof(APP_GFX_DEMO_INDICES));
+    state->gfxDemoGeometryUploaded = uploadedVertices && uploadedIndices;
+    if (state->gfxDemoGeometryUploaded) {
+        app_gfx_demo_log_once(state, AppGfxDemoLoadLog_GeometryUploaded, "Demo geometry upload recorded");
+    }
+}
+
+static void app_gfx_try_update_triangle_pipeline(APP_Context* ctx, ArtifactUseScope* scope) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->host != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    AppCoreState* state = ctx->core;
+    if (state->resourceCache == 0 || ctx->host->gfxDevice == 0 || scope == 0) {
+        return;
+    }
+    ArtifactView vertexShaderView = artifact_resolve_view(scope, state->gfxTriangleVertexShader);
+    ArtifactView fragmentShaderView = artifact_resolve_view(scope, state->gfxTriangleFragmentShader);
+    B32 generationChanged =
+        vertexShaderView.generation != state->gfxTriangleVertexShaderGeneration ||
+        fragmentShaderView.generation != state->gfxTriangleFragmentShaderGeneration;
+    if (!generationChanged) {
+        return;
+    }
+    if (vertexShaderView.generation == state->gfxTriangleFailedVertexShaderGeneration &&
+        fragmentShaderView.generation == state->gfxTriangleFailedFragmentShaderGeneration) {
         return;
     }
 
-    ArtifactView shaderView = artifact_resolve_view(&scope, state->gfxTriangleShader);
-    if (shaderView.data != 0 && shaderView.size != 0u) {
+    if (vertexShaderView.data != 0 && vertexShaderView.size != 0u &&
+        fragmentShaderView.data != 0 && fragmentShaderView.size != 0u) {
         GfxVertexAttribute attributes[2] = {};
         attributes[0].location = 0u;
         attributes[0].offset = 0u;
@@ -533,12 +671,21 @@ static void app_gfx_try_create_triangle_pipeline(APP_Context* ctx) {
 
         GfxGraphicsPipelineDesc pipelineDesc = {};
         pipelineDesc.name = "triangle pipeline";
+#if defined(PLATFORM_OS_WINDOWS)
+        pipelineDesc.vertexShader.format = GfxShaderFormat_SPIRV;
+        pipelineDesc.vertexShader.entry = "main";
+        pipelineDesc.fragmentShader.format = GfxShaderFormat_SPIRV;
+        pipelineDesc.fragmentShader.entry = "main";
+#else
         pipelineDesc.vertexShader.format = GfxShaderFormat_MSL_Source;
-        pipelineDesc.vertexShader.data = shaderView.data;
-        pipelineDesc.vertexShader.size = shaderView.size;
         pipelineDesc.vertexShader.entry = "vertex_main";
-        pipelineDesc.fragmentShader = pipelineDesc.vertexShader;
+        pipelineDesc.fragmentShader.format = GfxShaderFormat_MSL_Source;
         pipelineDesc.fragmentShader.entry = "fragment_main";
+#endif
+        pipelineDesc.vertexShader.data = vertexShaderView.data;
+        pipelineDesc.vertexShader.size = vertexShaderView.size;
+        pipelineDesc.fragmentShader.data = fragmentShaderView.data;
+        pipelineDesc.fragmentShader.size = fragmentShaderView.size;
         pipelineDesc.attributes = attributes;
         pipelineDesc.attributeCount = ARRAY_COUNT(attributes);
         pipelineDesc.vertexBuffer.stride = sizeof(AppGfxVertex);
@@ -550,123 +697,153 @@ static void app_gfx_try_create_triangle_pipeline(APP_Context* ctx) {
         pipelineDesc.colorFormatCount = ARRAY_COUNT(colorFormats);
         pipelineDesc.depthFormat = GfxFormat_Invalid;
 
-        state->gfxTrianglePipeline = gfx_create_graphics_pipeline(ctx->host->gfxDevice, &pipelineDesc);
+        GfxPipeline newPipeline = gfx_create_graphics_pipeline(ctx->host->gfxDevice, &pipelineDesc);
+        if (newPipeline.generation != 0u) {
+            GfxPipeline oldPipeline = state->gfxTrianglePipeline;
+            state->gfxTrianglePipeline = newPipeline;
+            state->gfxTriangleVertexShaderGeneration = vertexShaderView.generation;
+            state->gfxTriangleFragmentShaderGeneration = fragmentShaderView.generation;
+            state->gfxTriangleFailedVertexShaderGeneration = 0u;
+            state->gfxTriangleFailedFragmentShaderGeneration = 0u;
+            gfx_destroy_pipeline(ctx->host->gfxDevice, oldPipeline);
+            app_gfx_demo_log_once(state, AppGfxDemoLoadLog_TrianglePipeline, "Demo triangle pipeline ready");
+        } else {
+            state->gfxTriangleFailedVertexShaderGeneration = vertexShaderView.generation;
+            state->gfxTriangleFailedFragmentShaderGeneration = fragmentShaderView.generation;
+        }
     }
-
-    artifact_use_scope_close(&scope);
-    temp_end(&scratch);
 }
 
-static void app_gfx_try_create_demo_compute_pipeline(APP_Context* ctx) {
+static void app_gfx_try_update_demo_compute_pipeline(APP_Context* ctx, ArtifactUseScope* scope) {
     ASSERT_ALWAYS(ctx != 0);
     ASSERT_ALWAYS(ctx->host != 0);
     ASSERT_ALWAYS(ctx->core != 0);
 
     AppCoreState* state = ctx->core;
-    if (state->resourceCache == 0 || ctx->host->gfxDevice == 0) {
-        return;
-    }
-    if (state->gfxDemoComputePipeline.index != 0u || state->gfxDemoComputePipeline.generation != 0u) {
+    if (state->resourceCache == 0 || ctx->host->gfxDevice == 0 || scope == 0) {
         return;
     }
 
-    Temp scratch = get_scratch(0, 0);
-    if (scratch.arena == 0) {
+    ArtifactView shaderView = artifact_resolve_view(scope, state->gfxDemoComputeShader);
+    if (shaderView.generation == state->gfxDemoComputeShaderGeneration) {
+        return;
+    }
+    if (shaderView.generation == state->gfxDemoComputeFailedShaderGeneration) {
         return;
     }
 
-    ArtifactUseScope scope = {};
-    if (!artifact_use_scope_open(state->resourceCache, scratch.arena, &scope)) {
-        temp_end(&scratch);
-        return;
-    }
-
-    ArtifactView shaderView = artifact_resolve_view(&scope, state->gfxDemoComputeShader);
     if (shaderView.data != 0 && shaderView.size != 0u) {
         GfxComputePipelineDesc pipelineDesc = {};
         pipelineDesc.name = "demo material compute pipeline";
+#if defined(PLATFORM_OS_WINDOWS)
+        pipelineDesc.shader.format = GfxShaderFormat_SPIRV;
+        pipelineDesc.shader.entry = "main";
+#else
         pipelineDesc.shader.format = GfxShaderFormat_MSL_Source;
+        pipelineDesc.shader.entry = "material_main";
+#endif
         pipelineDesc.shader.data = shaderView.data;
         pipelineDesc.shader.size = shaderView.size;
-        pipelineDesc.shader.entry = "material_main";
         pipelineDesc.threadsPerThreadgroupX = APP_GFX_DEMO_COMPUTE_THREADS_PER_GROUP;
         pipelineDesc.threadsPerThreadgroupY = 1u;
         pipelineDesc.threadsPerThreadgroupZ = 1u;
 
-        state->gfxDemoComputePipeline = gfx_create_compute_pipeline(ctx->host->gfxDevice, &pipelineDesc);
+        GfxPipeline newPipeline = gfx_create_compute_pipeline(ctx->host->gfxDevice, &pipelineDesc);
+        if (newPipeline.generation != 0u) {
+            GfxPipeline oldPipeline = state->gfxDemoComputePipeline;
+            state->gfxDemoComputePipeline = newPipeline;
+            state->gfxDemoComputeShaderGeneration = shaderView.generation;
+            state->gfxDemoComputeFailedShaderGeneration = 0u;
+            state->gfxDemoMaterialDirty = 1;
+            gfx_destroy_pipeline(ctx->host->gfxDevice, oldPipeline);
+            app_gfx_demo_log_once(state, AppGfxDemoLoadLog_ComputePipeline, "Demo compute pipeline ready");
+        } else {
+            state->gfxDemoComputeFailedShaderGeneration = shaderView.generation;
+        }
     }
-
-    artifact_use_scope_close(&scope);
-    temp_end(&scratch);
 }
 
-static void app_gfx_upload_demo_texture(APP_Context* ctx, GfxFrame* frame) {
+static void app_gfx_upload_demo_texture(APP_Context* ctx, GfxFrame* frame, ArtifactUseScope* scope) {
     ASSERT_ALWAYS(ctx != 0);
     ASSERT_ALWAYS(ctx->host != 0);
     ASSERT_ALWAYS(ctx->core != 0);
 
     AppCoreState* state = ctx->core;
-    if (state->gfxDemoTextureUploaded ||
-        state->resourceCache == 0 ||
+    if (state->resourceCache == 0 ||
         ctx->host->gfxDevice == 0 ||
-        frame == 0) {
+        frame == 0 ||
+        scope == 0) {
         return;
     }
 
-    Temp scratch = get_scratch(0, 0);
-    if (scratch.arena == 0) {
+    if (state->gfxDemoSamplerId.index == 0u) {
+        GfxSamplerDesc samplerDesc = {};
+        samplerDesc.name = "demo sampler";
+        samplerDesc.minFilter = GfxFilter_Nearest;
+        samplerDesc.magFilter = GfxFilter_Nearest;
+        samplerDesc.addressU = GfxAddressMode_Repeat;
+        samplerDesc.addressV = GfxAddressMode_Repeat;
+        state->gfxDemoSampler = gfx_create_sampler(ctx->host->gfxDevice, &samplerDesc);
+        state->gfxDemoSamplerId = gfx_register_sampler(ctx->host->gfxDevice, state->gfxDemoSampler);
+    }
+    if (state->gfxDemoSamplerId.index == 0u) {
         return;
     }
 
-    ArtifactUseScope scope = {};
-    if (!artifact_use_scope_open(state->resourceCache, scratch.arena, &scope)) {
-        temp_end(&scratch);
+    ArtifactView textureView = artifact_resolve_view(scope, state->gfxDemoTextureSource);
+    if (textureView.generation == 0u ||
+        (state->gfxDemoTextureUploaded && textureView.generation == state->gfxDemoTextureGeneration)) {
+        return;
+    }
+    if (textureView.generation == state->gfxDemoTextureFailedGeneration) {
         return;
     }
 
-    ArtifactView textureView = artifact_resolve_view(&scope, state->gfxDemoTextureSource);
     AppImageRGBA8 image = {};
-    if (app_decode_ppm_rgba8(scratch.arena, textureView.data, textureView.size, &image)) {
-        if (state->gfxDemoTextureId.index == 0u) {
-            GfxTextureDesc textureDesc = {};
-            textureDesc.name = "demo texture";
-            textureDesc.width = image.width;
-            textureDesc.height = image.height;
-            textureDesc.mipCount = 1u;
-            textureDesc.format = GfxFormat_RGBA8_UNorm;
-            textureDesc.usageFlags = GfxTextureUsageFlags_Sampled | GfxTextureUsageFlags_CopyDst;
-            state->gfxDemoTexture = gfx_create_texture(ctx->host->gfxDevice, &textureDesc);
-            state->gfxDemoTextureId = gfx_register_texture(ctx->host->gfxDevice, state->gfxDemoTexture);
-        }
-
-        if (state->gfxDemoSamplerId.index == 0u) {
-            GfxSamplerDesc samplerDesc = {};
-            samplerDesc.name = "demo sampler";
-            samplerDesc.minFilter = GfxFilter_Nearest;
-            samplerDesc.magFilter = GfxFilter_Nearest;
-            samplerDesc.addressU = GfxAddressMode_Repeat;
-            samplerDesc.addressV = GfxAddressMode_Repeat;
-            state->gfxDemoSampler = gfx_create_sampler(ctx->host->gfxDevice, &samplerDesc);
-            state->gfxDemoSamplerId = gfx_register_sampler(ctx->host->gfxDevice, state->gfxDemoSampler);
-        }
-
-        if (state->gfxDemoTextureId.index != 0u &&
-            state->gfxDemoSamplerId.index != 0u) {
-            GfxTextureUploadRegion region = {};
-            region.layerCount = 1u;
-            region.width = image.width;
-            region.height = image.height;
-            region.depth = 1u;
-            region.bytesPerRow = image.bytesPerRow;
-            region.rowsPerImage = image.height;
-
-            gfx_upload_texture(frame, state->gfxDemoTexture, &region, image.pixels);
-            state->gfxDemoTextureUploaded = 1;
-        }
+    if (!app_decode_ppm_rgba8(scope->arena, textureView.data, textureView.size, &image)) {
+        state->gfxDemoTextureFailedGeneration = textureView.generation;
+        return;
     }
 
-    artifact_use_scope_close(&scope);
-    temp_end(&scratch);
+    GfxTextureDesc textureDesc = {};
+    textureDesc.name = "demo texture";
+    textureDesc.width = image.width;
+    textureDesc.height = image.height;
+    textureDesc.mipCount = 1u;
+    textureDesc.format = GfxFormat_RGBA8_UNorm;
+    textureDesc.usageFlags = GfxTextureUsageFlags_Sampled | GfxTextureUsageFlags_CopyDst;
+    GfxTexture newTexture = gfx_create_texture(ctx->host->gfxDevice, &textureDesc);
+    GfxResourceId newTextureId = gfx_register_texture(ctx->host->gfxDevice, newTexture);
+    if (newTextureId.index == 0u) {
+        gfx_destroy_texture(ctx->host->gfxDevice, newTexture);
+        state->gfxDemoTextureFailedGeneration = textureView.generation;
+        return;
+    }
+
+    GfxTextureUploadRegion region = {};
+    region.layerCount = 1u;
+    region.width = image.width;
+    region.height = image.height;
+    region.depth = 1u;
+    region.bytesPerRow = image.bytesPerRow;
+    region.rowsPerImage = image.height;
+
+    B32 uploaded = gfx_upload_texture(frame, newTexture, &region, image.pixels);
+    if (!uploaded) {
+        gfx_destroy_texture(ctx->host->gfxDevice, newTexture);
+        state->gfxDemoTextureFailedGeneration = textureView.generation;
+        return;
+    }
+
+    GfxTexture oldTexture = state->gfxDemoTexture;
+    state->gfxDemoTexture = newTexture;
+    state->gfxDemoTextureId = newTextureId;
+    state->gfxDemoTextureGeneration = textureView.generation;
+    state->gfxDemoTextureFailedGeneration = 0u;
+    state->gfxDemoTextureUploaded = 1;
+    state->gfxDemoMaterialDirty = 1;
+    gfx_destroy_texture(ctx->host->gfxDevice, oldTexture);
+    app_gfx_demo_log_once(state, AppGfxDemoLoadLog_TextureUploaded, "Demo texture upload recorded");
 }
 
 static B32 app_gfx_dispatch_demo_materials(APP_Context* ctx, GfxCommandBuffer* commands, GfxFrame* frame) {
@@ -674,7 +851,6 @@ static B32 app_gfx_dispatch_demo_materials(APP_Context* ctx, GfxCommandBuffer* c
     ASSERT_ALWAYS(ctx->core != 0);
 
     AppCoreState* state = ctx->core;
-    state->gfxDemoMaterialsUploaded = 0;
     if (!state->gfxDemoTextureUploaded ||
         state->gfxDemoTextureId.index == 0u ||
         state->gfxDemoSamplerId.index == 0u ||
@@ -684,6 +860,10 @@ static B32 app_gfx_dispatch_demo_materials(APP_Context* ctx, GfxCommandBuffer* c
         commands == 0 ||
         frame == 0) {
         return 0;
+    }
+
+    if (state->gfxDemoMaterialsReady && !state->gfxDemoMaterialDirty) {
+        return 1;
     }
 
     GfxTemp dispatchTemp = gfx_allocate_temp(frame, sizeof(AppGfxMaterialComputeData), 16u);
@@ -715,7 +895,8 @@ static B32 app_gfx_dispatch_demo_materials(APP_Context* ctx, GfxCommandBuffer* c
     dispatch.groupsZ = 1u;
 
     gfx_compute_pass(commands, &pass, &dispatch, 1u);
-    state->gfxDemoMaterialsUploaded = 1;
+    state->gfxDemoMaterialsReady = 1;
+    state->gfxDemoMaterialDirty = 0;
     return 1;
 }
 
@@ -726,7 +907,6 @@ static void app_gfx_demo_shutdown(APP_Context* ctx) {
     AppCoreState* state = ctx->core;
     GfxDevice* device = ctx->host ? ctx->host->gfxDevice : 0;
     if (device != 0) {
-        gfx_wait_idle(device);
         gfx_destroy_pipeline(device, state->gfxDemoComputePipeline);
         gfx_destroy_pipeline(device, state->gfxTrianglePipeline);
         gfx_destroy_buffer(device, state->gfxTriangleIndexBuffer);
@@ -749,7 +929,20 @@ static void app_gfx_demo_shutdown(APP_Context* ctx) {
     state->gfxDemoSamplerId = {};
     state->gfxDemoMaterialCount = 0u;
     state->gfxDemoTextureUploaded = 0;
-    state->gfxDemoMaterialsUploaded = 0;
+    state->gfxDemoMaterialsReady = 0;
+    state->gfxDemoMaterialDirty = 0;
+    state->gfxTriangleVertexShaderGeneration = 0u;
+    state->gfxTriangleFragmentShaderGeneration = 0u;
+    state->gfxTriangleFailedVertexShaderGeneration = 0u;
+    state->gfxTriangleFailedFragmentShaderGeneration = 0u;
+    state->gfxDemoComputeShaderGeneration = 0u;
+    state->gfxDemoComputeFailedShaderGeneration = 0u;
+    state->gfxDemoTextureGeneration = 0u;
+    state->gfxDemoTextureFailedGeneration = 0u;
+    state->gfxDemoGeometryCreated = 0;
+    state->gfxDemoGeometryUploaded = 0;
+    state->gfxDemoReady = 0;
+    state->gfxDemoLoadLogMask = 0u;
     state->gfxDemoInitialized = 0;
 }
 
@@ -758,78 +951,123 @@ static void app_gfx_demo_frame(APP_Context* ctx) {
     ASSERT_ALWAYS(ctx->host != 0);
     ASSERT_ALWAYS(ctx->core != 0);
 
-    if (!ctx->host->gfxDevice || !ctx->core->gfxDemoInitialized) {
+    if (!ctx->host->gfxDevice) {
         return;
     }
     if (ctx->host->windowWidth == 0u || ctx->host->windowHeight == 0u) {
         return;
     }
 
-    app_gfx_try_create_triangle_pipeline(ctx);
-    app_gfx_try_create_demo_compute_pipeline(ctx);
+    if (!ctx->core->gfxDemoInitialized && !app_gfx_demo_init(ctx)) {
+        return;
+    }
+
+#if defined(PLATFORM_BUILD_DEBUG) && defined(PLATFORM_OS_WINDOWS)
+    app_gfx_try_build_dev_shaders(ctx);
+#endif
+
+#if defined(PLATFORM_BUILD_DEBUG)
+    if (ctx->core->resourceCache) {
+        artifact_cache_tick(ctx->core->resourceCache, OS_get_time_nanoseconds(), 16u, 4u);
+    }
+#endif
+
+    Temp scratch = get_scratch(0, 0);
+    ArtifactUseScope scope = {};
+    B32 scopeOpen = 0;
+    if (scratch.arena != 0 && ctx->core->resourceCache != 0) {
+        scopeOpen = artifact_use_scope_open(ctx->core->resourceCache, scratch.arena, &scope);
+        if (scopeOpen) {
+            app_gfx_acquire_demo_artifacts(ctx, &scope);
+        }
+    }
 
     GfxFrame* frame = gfx_begin_frame(ctx->host->gfxDevice);
     if (!frame) {
+        if (scopeOpen) {
+            artifact_use_scope_close(&scope);
+        }
+        if (scratch.arena != 0) {
+            temp_end(&scratch);
+        }
         return;
     }
 
     GfxCommandBuffer* commands = gfx_get_command_buffer(frame);
     GfxTexture backbuffer = gfx_get_backbuffer(frame);
-    app_gfx_upload_demo_texture(ctx, frame);
-    B32 materialsReady = app_gfx_dispatch_demo_materials(ctx, commands, frame);
 
-    GfxTemp drawTemp = gfx_allocate_temp(frame, sizeof(AppGfxDrawData) * APP_GFX_DEMO_DRAW_COUNT, 16u);
-
-    Temp scratch = get_scratch(0, 0);
-    GfxDraw* draws = 0;
-    U32 drawCount = 0u;
-    if (scratch.arena != 0) {
-        draws = ARENA_PUSH_ARRAY(scratch.arena, GfxDraw, APP_GFX_DEMO_DRAW_COUNT);
-        drawCount = APP_GFX_DEMO_DRAW_COUNT;
+    if (!ctx->core->gfxDemoGeometryCreated) {
+        app_gfx_try_create_demo_buffers(ctx);
+    }
+    if (ctx->core->gfxDemoGeometryCreated && !ctx->core->gfxDemoGeometryUploaded) {
+        app_gfx_upload_demo_geometry(ctx, frame);
+    }
+    if (ctx->core->gfxDemoGeometryUploaded && scopeOpen) {
+        app_gfx_try_update_triangle_pipeline(ctx, &scope);
+        app_gfx_try_update_demo_compute_pipeline(ctx, &scope);
+        app_gfx_upload_demo_texture(ctx, frame, &scope);
     }
 
-    F32 cellWidth = 2.0f / (F32)APP_GFX_DEMO_DRAW_COLUMNS;
-    F32 cellHeight = 2.0f / (F32)APP_GFX_DEMO_DRAW_ROWS;
-    F32 scale = MIN(cellWidth, cellHeight) * 0.72f;
-    B32 resourcesReady = ctx->core->gfxDemoTextureUploaded &&
+    B32 materialsReady = app_gfx_dispatch_demo_materials(ctx, commands, frame);
+
+    B32 resourcesReady = ctx->core->gfxDemoGeometryUploaded &&
+                         ctx->core->gfxTrianglePipeline.generation != 0u &&
+                         ctx->core->gfxDemoTextureUploaded &&
                          ctx->core->gfxDemoTextureId.index != 0u &&
                          ctx->core->gfxDemoSamplerId.index != 0u &&
                          materialsReady;
-    AppGfxDrawData* drawDataBase = resourcesReady ? (AppGfxDrawData*)drawTemp.cpu : 0;
 
-    for (U32 row = 0u; row < APP_GFX_DEMO_DRAW_ROWS; ++row) {
-        for (U32 column = 0u; column < APP_GFX_DEMO_DRAW_COLUMNS; ++column) {
-            U32 drawIndex = row * APP_GFX_DEMO_DRAW_COLUMNS + column;
-            U64 drawDataOffset = sizeof(AppGfxDrawData) * drawIndex;
+    if (resourcesReady && !ctx->core->gfxDemoReady) {
+        ctx->core->gfxDemoReady = 1;
+        app_gfx_demo_log_once(ctx->core, AppGfxDemoLoadLog_Ready, "Demo resources ready");
+    }
 
-            GfxGpuSlice drawDataSlice = {};
-            if (drawDataBase != 0) {
-                AppGfxDrawData* drawData = drawDataBase + drawIndex;
-                drawData->offsetScale[0] = -1.0f + ((F32)column + 0.5f) * cellWidth;
-                drawData->offsetScale[1] = -1.0f + ((F32)row + 0.5f) * cellHeight;
-                drawData->offsetScale[2] = scale;
-                drawData->offsetScale[3] = 1.0f;
-                drawData->materialIndex = drawIndex;
-                drawData->objectId = drawIndex;
-                drawData->flags = 1u;
-                drawData->_padding = 0u;
+    GfxDraw* draws = 0;
+    U32 drawCount = 0u;
+    if (resourcesReady && scratch.arena != 0) {
+        GfxTemp drawTemp = gfx_allocate_temp(frame, sizeof(AppGfxDrawData) * APP_GFX_DEMO_DRAW_COUNT, 16u);
+        AppGfxDrawData* drawDataBase = (AppGfxDrawData*)drawTemp.cpu;
+        if (drawDataBase != 0) {
+            draws = ARENA_PUSH_ARRAY(scratch.arena, GfxDraw, APP_GFX_DEMO_DRAW_COUNT);
+        }
 
-                drawDataSlice = drawTemp.gpu;
-                drawDataSlice.offset += drawDataOffset;
-                drawDataSlice.size = sizeof(AppGfxDrawData);
+        if (draws != 0) {
+            F32 cellWidth = 2.0f / (F32)APP_GFX_DEMO_DRAW_COLUMNS;
+            F32 cellHeight = 2.0f / (F32)APP_GFX_DEMO_DRAW_ROWS;
+            F32 scale = MIN(cellWidth, cellHeight) * 0.72f;
+
+            for (U32 row = 0u; row < APP_GFX_DEMO_DRAW_ROWS; ++row) {
+                for (U32 column = 0u; column < APP_GFX_DEMO_DRAW_COLUMNS; ++column) {
+                    U32 drawIndex = row * APP_GFX_DEMO_DRAW_COLUMNS + column;
+                    U64 drawDataOffset = sizeof(AppGfxDrawData) * drawIndex;
+
+                    AppGfxDrawData* drawData = drawDataBase + drawIndex;
+                    drawData->offsetScale[0] = -1.0f + ((F32)column + 0.5f) * cellWidth;
+                    drawData->offsetScale[1] = -1.0f + ((F32)row + 0.5f) * cellHeight;
+                    drawData->offsetScale[2] = scale;
+                    drawData->offsetScale[3] = 1.0f;
+                    drawData->materialIndex = drawIndex;
+                    drawData->objectId = drawIndex;
+                    drawData->flags = 1u;
+                    drawData->_padding = 0u;
+
+                    GfxGpuSlice drawDataSlice = drawTemp.gpu;
+                    drawDataSlice.offset += drawDataOffset;
+                    drawDataSlice.size = sizeof(AppGfxDrawData);
+
+                    GfxDraw* draw = draws + drawIndex;
+                    *draw = {};
+                    draw->pipeline = ctx->core->gfxTrianglePipeline;
+                    draw->vertexBuffer = ctx->core->gfxTriangleVertexBuffer;
+                    draw->indexBuffer = ctx->core->gfxTriangleIndexBuffer;
+                    draw->indexCount = 3u;
+                    draw->instanceCount = 1u;
+                    draw->indexType = GfxIndexType_U16;
+                    draw->drawData = drawDataSlice;
+                }
             }
 
-            if (draws != 0) {
-                GfxDraw* draw = draws + drawIndex;
-                *draw = {};
-                draw->pipeline = ctx->core->gfxTrianglePipeline;
-                draw->vertexBuffer = ctx->core->gfxTriangleVertexBuffer;
-                draw->indexBuffer = ctx->core->gfxTriangleIndexBuffer;
-                draw->indexCount = 3u;
-                draw->instanceCount = 1u;
-                draw->indexType = GfxIndexType_U16;
-                draw->drawData = drawDataSlice;
-            }
+            drawCount = APP_GFX_DEMO_DRAW_COUNT;
         }
     }
 
@@ -868,7 +1106,12 @@ static void app_gfx_demo_frame(APP_Context* ctx) {
     area.drawCount = drawCount;
 
     gfx_render_pass(commands, &pass, &area, 1u);
-    temp_end(&scratch);
+    if (scopeOpen) {
+        artifact_use_scope_close(&scope);
+    }
+    if (scratch.arena != 0) {
+        temp_end(&scratch);
+    }
     gfx_submit(commands);
     gfx_end_frame(frame);
 }

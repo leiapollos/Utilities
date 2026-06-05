@@ -1,6 +1,6 @@
 //
 // AUTO-GENERATED FILE - DO NOT EDIT
-// Generated from: ../nstl/os/graphics/os_graphics.metadef
+// Generated from: ./nstl/os/graphics/os_graphics.metadef
 //
 
 #pragma once

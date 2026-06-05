@@ -9,9 +9,36 @@ struct ArtifactNode {
     U32 touchCount;
     U32 inFlight;
     U64 lastTouchSerial;
+    U64 publishedGeneration;
+    U64 failedGeneration;
+    U32 acquireFlags;
+    ArtifactReloadPolicy reloadPolicy;
+    U64 lastReloadCheckNs;
+    U64 lastWriteTimestampNs;
+    U64 lastWriteSize;
+    U64 sourceGeneration;
+    U64 dirtySourceGeneration;
+    U64 queuedSourceGeneration;
+    U64 loadingSourceGeneration;
+    U64 dirtyWriteTimestampNs;
+    U64 dirtyFileSize;
+    U64 failedSourceGeneration;
+    B32 reloadFailed;
 
     ArtifactReleaseProc* releaseProc;
     void* releaseUserData;
+};
+
+struct ArtifactReloadDirtyEntry {
+    ArtifactHandle handle;
+    U64 sourceGeneration;
+    U64 writeTimestampNs;
+    U64 fileSize;
+};
+
+struct ArtifactReloadScanCandidate {
+    ArtifactHandle handle;
+    StringU8 key;
 };
 
 enum ArtifactHashEntryState {
@@ -45,6 +72,17 @@ struct ArtifactCache {
     U64 budgetBytes;
     U64 residentBytes;
     U64 touchSerial;
+    U32 reloadScanCursor;
+    U32 reloadScannerBatchCount;
+    U32 reloadScannerSleepMs;
+    U32 reloadScannerShutdown;
+    U32 reloadScannerRunning;
+    OS_Handle reloadScannerThread;
+    ArtifactReloadDirtyEntry* reloadDirtyQueue;
+    U32 reloadDirtyQueueCapacity;
+    U32 reloadDirtyRead;
+    U32 reloadDirtyWrite;
+    U32 reloadDirtyCount;
 
     U32 pendingAsyncJobs;
 
@@ -60,6 +98,14 @@ struct ArtifactAsyncJobParams {
 
 static_assert(sizeof(ArtifactAsyncJobParams) <= JOB_PARAMETER_SPACE,
               "ArtifactAsyncJobParams exceeds job inline storage");
+
+enum ArtifactRawFileLoadStatus {
+    ArtifactRawFileLoadStatus_Error = 0,
+    ArtifactRawFileLoadStatus_Ready,
+    ArtifactRawFileLoadStatus_Retry,
+};
+
+#define ARTIFACT_RELOAD_SCANNER_BATCH_MAX 64u
 
 static U64 artifact_hash_key_(U32 typeId, StringU8 key);
 static U32 artifact_hash_capacity_from_requested_(U32 requested);
@@ -79,8 +125,16 @@ static B32 artifact_hash_insert_locked_(ArtifactCache* cache,
                                         ArtifactHandle handle);
 static void artifact_hash_remove_locked_(ArtifactCache* cache, U32 typeId, StringU8 key, U64 keyHash);
 static void artifact_release_node_payload_locked_(ArtifactNode* node);
-static B32 artifact_load_raw_file_(Arena* arena, StringU8 key, ArtifactPayload* outPayload);
-static ArtifactStatus artifact_run_load_for_handle_(ArtifactCache* cache, ArtifactHandle handle);
+static void artifact_release_payload_(ArtifactReleaseProc* releaseProc, void* releaseUserData,
+                                      U32 typeId, StringU8 key, ArtifactPayload payload);
+static ArtifactRawFileLoadStatus artifact_load_raw_file_(Arena* arena, StringU8 key, ArtifactPayload* outPayload,
+                                                         U64* outWriteTimestampNs, U64* outFileSize);
+static B32 artifact_reload_enqueue_dirty_locked_(ArtifactCache* cache, ArtifactHandle handle, ArtifactNode* node);
+static B32 artifact_reload_pop_dirty_locked_(ArtifactCache* cache, ArtifactReloadDirtyEntry* outEntry);
+static void artifact_reload_scanner_thread_(void* userData);
+static void artifact_reload_scanner_stop_(ArtifactCache* cache);
+static void artifact_finish_async_job_locked_(ArtifactCache* cache, B32 countAsAsyncJob);
+static ArtifactStatus artifact_run_load_for_handle_(ArtifactCache* cache, ArtifactHandle handle, B32 countAsAsyncJob);
 static void artifact_async_load_job_(void* parameters);
 static void artifact_scope_touch_(ArtifactUseScope* scope, ArtifactHandle handle);
 
@@ -337,6 +391,19 @@ static void artifact_hash_remove_locked_(ArtifactCache* cache, U32 typeId, Strin
     artifact_hash_mark_tombstone_(cache, index);
 }
 
+static void artifact_release_payload_(ArtifactReleaseProc* releaseProc, void* releaseUserData,
+                                      U32 typeId, StringU8 key, ArtifactPayload payload) {
+    if (!payload.data) {
+        return;
+    }
+
+    if (releaseProc) {
+        releaseProc(releaseUserData, typeId, key, payload);
+    } else if (payload.arena) {
+        arena_release(payload.arena);
+    }
+}
+
 static void artifact_release_node_payload_locked_(ArtifactNode* node) {
     ASSERT_ALWAYS(node != 0);
 
@@ -344,30 +411,91 @@ static void artifact_release_node_payload_locked_(ArtifactNode* node) {
         return;
     }
 
-    if (node->releaseProc) {
-        node->releaseProc(node->releaseUserData, node->typeId, node->key, node->payload);
-    }
+    artifact_release_payload_(node->releaseProc, node->releaseUserData, node->typeId, node->key, node->payload);
 
     node->payload.data = 0;
     node->payload.size = 0u;
+    node->payload.arena = 0;
 }
 
-static B32 artifact_load_raw_file_(Arena* arena, StringU8 key, ArtifactPayload* outPayload) {
-    if (arena == 0 || outPayload == 0 || key.data == 0 || key.size == 0u) {
+static B32 artifact_reload_enqueue_dirty_locked_(ArtifactCache* cache, ArtifactHandle handle, ArtifactNode* node) {
+    ASSERT_ALWAYS(cache != 0);
+    ASSERT_ALWAYS(node != 0);
+
+    if (!cache->reloadDirtyQueue || cache->reloadDirtyQueueCapacity == 0u) {
         return 0;
+    }
+    if (node->dirtySourceGeneration == 0u ||
+        node->queuedSourceGeneration == node->dirtySourceGeneration) {
+        return 0;
+    }
+    if (cache->reloadDirtyCount >= cache->reloadDirtyQueueCapacity) {
+        return 0;
+    }
+
+    ArtifactReloadDirtyEntry* entry = &cache->reloadDirtyQueue[cache->reloadDirtyWrite];
+    entry->handle = handle;
+    entry->sourceGeneration = node->dirtySourceGeneration;
+    entry->writeTimestampNs = node->dirtyWriteTimestampNs;
+    entry->fileSize = node->dirtyFileSize;
+
+    cache->reloadDirtyWrite = (cache->reloadDirtyWrite + 1u) % cache->reloadDirtyQueueCapacity;
+    cache->reloadDirtyCount += 1u;
+    node->queuedSourceGeneration = node->dirtySourceGeneration;
+    return 1;
+}
+
+static B32 artifact_reload_pop_dirty_locked_(ArtifactCache* cache, ArtifactReloadDirtyEntry* outEntry) {
+    ASSERT_ALWAYS(cache != 0);
+    ASSERT_ALWAYS(outEntry != 0);
+
+    if (!cache->reloadDirtyQueue || cache->reloadDirtyQueueCapacity == 0u || cache->reloadDirtyCount == 0u) {
+        return 0;
+    }
+
+    *outEntry = cache->reloadDirtyQueue[cache->reloadDirtyRead];
+    cache->reloadDirtyRead = (cache->reloadDirtyRead + 1u) % cache->reloadDirtyQueueCapacity;
+    cache->reloadDirtyCount -= 1u;
+    return 1;
+}
+
+static ArtifactRawFileLoadStatus artifact_load_raw_file_(Arena* arena, StringU8 key, ArtifactPayload* outPayload,
+                                                         U64* outWriteTimestampNs, U64* outFileSize) {
+    (void)arena;
+    if (outWriteTimestampNs) {
+        *outWriteTimestampNs = 0u;
+    }
+    if (outFileSize) {
+        *outFileSize = 0u;
+    }
+    if (outPayload == 0 || key.data == 0 || key.size == 0u) {
+        return ArtifactRawFileLoadStatus_Error;
+    }
+
+    OS_FileInfo preInfo = OS_get_file_info((const char*)key.data);
+    if (!preInfo.exists) {
+        LOG_ERROR("artifact", "Raw file missing '{}'", key);
+        return ArtifactRawFileLoadStatus_Error;
     }
 
     OS_Handle file = OS_file_open((const char*) key.data, OS_FileOpenMode_Read);
     if (!file.handle) {
-        LOG_ERROR("artifact", "Failed to open raw file '{}'", key);
-        return 0;
+        LOG_WARNING("artifact", "Raw file '{}' could not be opened; retrying later", key);
+        return ArtifactRawFileLoadStatus_Retry;
     }
 
-    U64 fileSize = OS_file_size(file);
-    U8* data = ARENA_PUSH_ARRAY(arena, U8, fileSize + 1u);
+    U64 fileSize = preInfo.size;
+    Arena* payloadArena = arena_alloc();
+    if (!payloadArena) {
+        OS_file_close(file);
+        return ArtifactRawFileLoadStatus_Error;
+    }
+
+    U8* data = ARENA_PUSH_ARRAY(payloadArena, U8, fileSize + 1u);
     if (data == 0) {
         OS_file_close(file);
-        return 0;
+        arena_release(payloadArena);
+        return ArtifactRawFileLoadStatus_Error;
     }
 
     U64 readSize = 0u;
@@ -378,18 +506,199 @@ static B32 artifact_load_raw_file_(Arena* arena, StringU8 key, ArtifactPayload* 
 
     OS_file_close(file);
 
+    OS_FileInfo postInfo = OS_get_file_info((const char*)key.data);
     if (readSize != fileSize) {
-        LOG_ERROR("artifact", "Failed to read raw file '{}'", key);
-        return 0;
+        LOG_WARNING("artifact", "Raw file '{}' changed during read; retrying later", key);
+        arena_release(payloadArena);
+        return ArtifactRawFileLoadStatus_Retry;
+    }
+    if (!postInfo.exists ||
+        postInfo.lastWriteTimestampNs != preInfo.lastWriteTimestampNs ||
+        postInfo.size != preInfo.size) {
+        LOG_WARNING("artifact", "Raw file '{}' was not stable during read; retrying later", key);
+        arena_release(payloadArena);
+        return ArtifactRawFileLoadStatus_Retry;
     }
 
     data[fileSize] = 0;
     outPayload->data = data;
     outPayload->size = fileSize;
-    return 1;
+    outPayload->arena = payloadArena;
+    if (outWriteTimestampNs) {
+        *outWriteTimestampNs = postInfo.lastWriteTimestampNs;
+    }
+    if (outFileSize) {
+        *outFileSize = postInfo.size;
+    }
+    return ArtifactRawFileLoadStatus_Ready;
 }
 
-static ArtifactStatus artifact_run_load_for_handle_(ArtifactCache* cache, ArtifactHandle handle) {
+static void artifact_reload_scanner_thread_(void* userData) {
+    ArtifactCache* cache = (ArtifactCache*)userData;
+    if (!cache) {
+        return;
+    }
+
+    ArtifactReloadScanCandidate candidates[ARTIFACT_RELOAD_SCANNER_BATCH_MAX] = {};
+
+    for (;;) {
+        U32 candidateCount = 0u;
+
+        OS_mutex_lock(cache->mutex);
+        if (cache->reloadScannerShutdown) {
+            cache->reloadScannerRunning = 0u;
+            OS_condition_variable_broadcast(cache->condition);
+            OS_mutex_unlock(cache->mutex);
+            return;
+        }
+
+        U32 capacity = cache->slots.capacity;
+        U32 batchCount = cache->reloadScannerBatchCount;
+        if (batchCount == 0u) {
+            batchCount = ARTIFACT_RELOAD_SCANNER_BATCH_DEFAULT;
+        }
+        if (batchCount > ARTIFACT_RELOAD_SCANNER_BATCH_MAX) {
+            batchCount = ARTIFACT_RELOAD_SCANNER_BATCH_MAX;
+        }
+
+        U64 nowNs = OS_get_time_nanoseconds();
+        U32 attempts = 0u;
+        while (candidateCount < batchCount && attempts < capacity) {
+            U32 slot = (cache->reloadScanCursor + attempts) % capacity;
+            attempts += 1u;
+            cache->reloadScanCursor = (slot + 1u) % capacity;
+
+            if (!slot_map_is_occupied(&cache->slots, slot)) {
+                continue;
+            }
+
+            ArtifactNode* node = (ArtifactNode*)slot_map_item_at(&cache->slots, slot);
+            if (!node || !(node->acquireFlags & ArtifactAcquireFlags_Reloadable)) {
+                continue;
+            }
+            if (node->typeId > cache->maxTypeId || !cache->typeRegistered[node->typeId]) {
+                continue;
+            }
+
+            ArtifactTypeOps ops = cache->typeOps[node->typeId];
+            if (ops.kind != ArtifactTypeKind_RawFile) {
+                continue;
+            }
+
+            ArtifactHandle handle = {};
+            handle.slot = slot;
+            handle.generation = cache->slots.generations[slot];
+
+            if (node->dirtySourceGeneration != 0u &&
+                node->queuedSourceGeneration != node->dirtySourceGeneration) {
+                artifact_reload_enqueue_dirty_locked_(cache, handle, node);
+                continue;
+            }
+
+            if (node->inFlight != 0u) {
+                continue;
+            }
+
+            U64 intervalNs = node->reloadPolicy.checkIntervalNs ?
+                node->reloadPolicy.checkIntervalNs :
+                ARTIFACT_RELOAD_CHECK_INTERVAL_DEFAULT_NS;
+            if (node->lastReloadCheckNs != 0u && nowNs - node->lastReloadCheckNs < intervalNs) {
+                continue;
+            }
+
+            node->lastReloadCheckNs = nowNs;
+            candidates[candidateCount].handle = handle;
+            candidates[candidateCount].key = node->key;
+            candidateCount += 1u;
+        }
+        OS_mutex_unlock(cache->mutex);
+
+        for (U32 candidateIndex = 0u; candidateIndex < candidateCount; ++candidateIndex) {
+            ArtifactReloadScanCandidate candidate = candidates[candidateIndex];
+            OS_FileInfo info = OS_get_file_info((const char*)candidate.key.data);
+
+            OS_mutex_lock(cache->mutex);
+            ArtifactNode* node = (ArtifactNode*)slot_map_get(&cache->slots,
+                                                              candidate.handle.slot,
+                                                              candidate.handle.generation);
+            if (!node ||
+                !(node->acquireFlags & ArtifactAcquireFlags_Reloadable) ||
+                node->typeId > cache->maxTypeId ||
+                !cache->typeRegistered[node->typeId]) {
+                OS_mutex_unlock(cache->mutex);
+                continue;
+            }
+
+            ArtifactTypeOps ops = cache->typeOps[node->typeId];
+            if (ops.kind != ArtifactTypeKind_RawFile) {
+                OS_mutex_unlock(cache->mutex);
+                continue;
+            }
+
+            U64 writeTimestampNs = info.exists ? info.lastWriteTimestampNs : 0u;
+            U64 fileSize = info.exists ? info.size : 0u;
+            B32 changed = (writeTimestampNs != node->lastWriteTimestampNs ||
+                           fileSize != node->lastWriteSize) ? 1 : 0;
+            B32 alreadyDirtyForFacts =
+                (node->dirtySourceGeneration != 0u &&
+                 node->dirtyWriteTimestampNs == writeTimestampNs &&
+                 node->dirtyFileSize == fileSize);
+
+            if (changed && !alreadyDirtyForFacts) {
+                node->sourceGeneration += 1u;
+                if (node->sourceGeneration == 0u) {
+                    node->sourceGeneration = 1u;
+                }
+                node->dirtySourceGeneration = node->sourceGeneration;
+                node->dirtyWriteTimestampNs = writeTimestampNs;
+                node->dirtyFileSize = fileSize;
+                node->queuedSourceGeneration = 0u;
+                node->reloadFailed = 0;
+            }
+
+            if (node->dirtySourceGeneration != 0u &&
+                node->queuedSourceGeneration != node->dirtySourceGeneration) {
+                artifact_reload_enqueue_dirty_locked_(cache, candidate.handle, node);
+            }
+
+            OS_mutex_unlock(cache->mutex);
+        }
+
+        U32 sleepMs = cache->reloadScannerSleepMs;
+        if (sleepMs == 0u) {
+            sleepMs = ARTIFACT_RELOAD_SCANNER_SLEEP_DEFAULT_MS;
+        }
+        OS_sleep_milliseconds(sleepMs);
+    }
+}
+
+static void artifact_reload_scanner_stop_(ArtifactCache* cache) {
+    if (!cache || !cache->reloadScannerThread.handle) {
+        return;
+    }
+
+    OS_mutex_lock(cache->mutex);
+    cache->reloadScannerShutdown = 1u;
+    OS_mutex_unlock(cache->mutex);
+
+    OS_thread_join(cache->reloadScannerThread);
+    cache->reloadScannerThread.handle = 0;
+    cache->reloadScannerRunning = 0u;
+}
+
+static void artifact_finish_async_job_locked_(ArtifactCache* cache, B32 countAsAsyncJob) {
+    if (!countAsAsyncJob) {
+        return;
+    }
+
+    ASSERT_DEBUG(cache != 0);
+    ASSERT_DEBUG(cache->pendingAsyncJobs > 0u);
+    if (cache && cache->pendingAsyncJobs > 0u) {
+        cache->pendingAsyncJobs -= 1u;
+    }
+}
+
+static ArtifactStatus artifact_run_load_for_handle_(ArtifactCache* cache, ArtifactHandle handle, B32 countAsAsyncJob) {
     if (!cache || ARTIFACT_HANDLE_IS_INVALID(handle)) {
         return ArtifactStatus_InvalidHandle;
     }
@@ -402,18 +711,26 @@ static ArtifactStatus artifact_run_load_for_handle_(ArtifactCache* cache, Artifa
 
     ArtifactNode* node = (ArtifactNode*)slot_map_get(&cache->slots, handle.slot, handle.generation);
     if (!node) {
+        artifact_finish_async_job_locked_(cache, countAsAsyncJob);
+        OS_condition_variable_broadcast(cache->condition);
         OS_mutex_unlock(cache->mutex);
         return ArtifactStatus_InvalidHandle;
     }
 
-    if (node->status != ArtifactStatus_Pending || node->inFlight == 0u) {
+    if (node->inFlight == 0u ||
+        (node->status != ArtifactStatus_Pending &&
+         node->status != ArtifactStatus_Ready &&
+         node->status != ArtifactStatus_Error)) {
         ArtifactStatus status = node->status;
+        artifact_finish_async_job_locked_(cache, countAsAsyncJob);
+        OS_condition_variable_broadcast(cache->condition);
         OS_mutex_unlock(cache->mutex);
         return status;
     }
 
     typeId = node->typeId;
     key = node->key;
+    U64 loadSourceGeneration = node->loadingSourceGeneration;
 
     if (typeId <= cache->maxTypeId && cache->typeRegistered[typeId]) {
         ops = cache->typeOps[typeId];
@@ -421,16 +738,25 @@ static ArtifactStatus artifact_run_load_for_handle_(ArtifactCache* cache, Artifa
 
     OS_mutex_unlock(cache->mutex);
 
+    U64 loadWriteTimestampNs = 0u;
+    U64 loadFileSize = 0u;
     ArtifactPayload loadedPayload = {};
     B32 loadOk = 0;
+    B32 loadRetry = 0;
     if (ops.kind == ArtifactTypeKind_RawFile) {
         if (cache->loadArenaMutex.handle) {
             OS_mutex_lock(cache->loadArenaMutex);
         }
-        loadOk = artifact_load_raw_file_(cache->arena, key, &loadedPayload);
+        ArtifactRawFileLoadStatus rawStatus = artifact_load_raw_file_(cache->arena,
+                                                                       key,
+                                                                       &loadedPayload,
+                                                                       &loadWriteTimestampNs,
+                                                                       &loadFileSize);
         if (cache->loadArenaMutex.handle) {
             OS_mutex_unlock(cache->loadArenaMutex);
         }
+        loadOk = (rawStatus == ArtifactRawFileLoadStatus_Ready) ? 1 : 0;
+        loadRetry = (rawStatus == ArtifactRawFileLoadStatus_Retry) ? 1 : 0;
     } else if (ops.load) {
         if (cache->loadArenaMutex.handle) {
             OS_mutex_lock(cache->loadArenaMutex);
@@ -455,32 +781,83 @@ static ArtifactStatus artifact_run_load_for_handle_(ArtifactCache* cache, Artifa
             staleReleaseProc = ops.release;
             staleReleaseUserData = ops.userData;
         }
-        if (cache->pendingAsyncJobs > 0u) {
-            cache->pendingAsyncJobs -= 1u;
-        }
+        artifact_finish_async_job_locked_(cache, countAsAsyncJob);
         OS_condition_variable_broadcast(cache->condition);
         OS_mutex_unlock(cache->mutex);
 
-        if (staleReleaseProc && stalePayloadToRelease.data) {
-            staleReleaseProc(staleReleaseUserData, typeId, key, stalePayloadToRelease);
+        if (stalePayloadToRelease.data) {
+            artifact_release_payload_(staleReleaseProc, staleReleaseUserData, typeId, key, stalePayloadToRelease);
         }
         return ArtifactStatus_InvalidHandle;
     }
 
-    if (commitNode->status == ArtifactStatus_Pending && commitNode->inFlight != 0u) {
+    if (commitNode->inFlight != 0u) {
         commitNode->inFlight = 0u;
 
         if (loadOk) {
+            if (commitNode->status == ArtifactStatus_Ready && commitNode->payload.data) {
+                stalePayloadToRelease = commitNode->payload;
+                staleReleaseProc = commitNode->releaseProc;
+                staleReleaseUserData = commitNode->releaseUserData;
+                if (cache->residentBytes >= commitNode->payload.size) {
+                    cache->residentBytes -= commitNode->payload.size;
+                } else {
+                    cache->residentBytes = 0u;
+                }
+            }
+
             commitNode->payload = loadedPayload;
             commitNode->status = ArtifactStatus_Ready;
             commitNode->releaseProc = ops.release;
             commitNode->releaseUserData = ops.userData;
             commitNode->lastTouchSerial = ++cache->touchSerial;
+            commitNode->publishedGeneration += 1u;
+            if (commitNode->publishedGeneration == 0u) {
+                commitNode->publishedGeneration = 1u;
+            }
+            commitNode->lastWriteTimestampNs = loadWriteTimestampNs;
+            commitNode->lastWriteSize = loadFileSize;
+            if (loadSourceGeneration != 0u &&
+                commitNode->dirtySourceGeneration <= loadSourceGeneration) {
+                commitNode->dirtySourceGeneration = 0u;
+                commitNode->queuedSourceGeneration = 0u;
+                commitNode->dirtyWriteTimestampNs = 0u;
+                commitNode->dirtyFileSize = 0u;
+            }
+            commitNode->loadingSourceGeneration = 0u;
+            commitNode->failedSourceGeneration = 0u;
+            commitNode->reloadFailed = 0;
             cache->residentBytes += loadedPayload.size;
             finalStatus = ArtifactStatus_Ready;
+        } else if (loadRetry && loadSourceGeneration != 0u) {
+            commitNode->queuedSourceGeneration = 0u;
+            commitNode->loadingSourceGeneration = 0u;
+            if (commitNode->status != ArtifactStatus_Ready || !commitNode->payload.data) {
+                commitNode->status = ArtifactStatus_Error;
+                commitNode->reloadFailed = 1;
+                finalStatus = ArtifactStatus_Error;
+            } else {
+                finalStatus = ArtifactStatus_Pending;
+            }
         } else {
-            commitNode->payload = {};
-            commitNode->status = ArtifactStatus_Error;
+            if (commitNode->status != ArtifactStatus_Ready || !commitNode->payload.data) {
+                commitNode->payload = {};
+                commitNode->status = ArtifactStatus_Error;
+                commitNode->publishedGeneration = 0u;
+            }
+            commitNode->reloadFailed = 1;
+            commitNode->failedGeneration = commitNode->publishedGeneration;
+            commitNode->failedSourceGeneration = loadSourceGeneration;
+            if (loadSourceGeneration != 0u &&
+                commitNode->dirtySourceGeneration <= loadSourceGeneration) {
+                commitNode->dirtySourceGeneration = 0u;
+                commitNode->queuedSourceGeneration = 0u;
+                commitNode->dirtyWriteTimestampNs = 0u;
+                commitNode->dirtyFileSize = 0u;
+            }
+            commitNode->loadingSourceGeneration = 0u;
+            commitNode->lastWriteTimestampNs = loadWriteTimestampNs;
+            commitNode->lastWriteSize = loadFileSize;
             finalStatus = ArtifactStatus_Error;
         }
     } else {
@@ -492,15 +869,13 @@ static ArtifactStatus artifact_run_load_for_handle_(ArtifactCache* cache, Artifa
         finalStatus = commitNode->status;
     }
 
-    if (cache->pendingAsyncJobs > 0u) {
-        cache->pendingAsyncJobs -= 1u;
-    }
+    artifact_finish_async_job_locked_(cache, countAsAsyncJob);
 
     OS_condition_variable_broadcast(cache->condition);
     OS_mutex_unlock(cache->mutex);
 
-    if (staleReleaseProc && stalePayloadToRelease.data) {
-        staleReleaseProc(staleReleaseUserData, typeId, key, stalePayloadToRelease);
+    if (stalePayloadToRelease.data) {
+        artifact_release_payload_(staleReleaseProc, staleReleaseUserData, typeId, key, stalePayloadToRelease);
     }
 
     return finalStatus;
@@ -512,7 +887,7 @@ static void artifact_async_load_job_(void* parameters) {
         return;
     }
 
-    artifact_run_load_for_handle_(params->cache, params->handle);
+    artifact_run_load_for_handle_(params->cache, params->handle, 1);
 }
 
 static void artifact_scope_touch_(ArtifactUseScope* scope, ArtifactHandle handle) {
@@ -566,6 +941,15 @@ B32 artifact_cache_create(const ArtifactCacheDesc* desc, ArtifactCache* outCache
     outCache->jobSystem = desc->jobSystem;
     outCache->budgetBytes = desc->budgetBytes;
     outCache->maxTypeId = desc->maxTypeId;
+    outCache->reloadScannerBatchCount = desc->reloadScannerBatchCount ?
+        desc->reloadScannerBatchCount :
+        ARTIFACT_RELOAD_SCANNER_BATCH_DEFAULT;
+    if (outCache->reloadScannerBatchCount > ARTIFACT_RELOAD_SCANNER_BATCH_MAX) {
+        outCache->reloadScannerBatchCount = ARTIFACT_RELOAD_SCANNER_BATCH_MAX;
+    }
+    outCache->reloadScannerSleepMs = desc->reloadScannerSleepMs ?
+        desc->reloadScannerSleepMs :
+        ARTIFACT_RELOAD_SCANNER_SLEEP_DEFAULT_MS;
 
     if (outCache->maxTypeId == 0u) {
         outCache->maxTypeId = 256u;
@@ -593,6 +977,18 @@ B32 artifact_cache_create(const ArtifactCacheDesc* desc, ArtifactCache* outCache
         return 0;
     }
 
+    if (desc->reloadScannerEnabled) {
+        U32 dirtyCapacity = desc->reloadDirtyQueueCapacity ?
+            desc->reloadDirtyQueueCapacity :
+            ARTIFACT_RELOAD_DIRTY_QUEUE_DEFAULT_CAPACITY;
+        outCache->reloadDirtyQueue = ARENA_PUSH_ARRAY(outCache->arena, ArtifactReloadDirtyEntry, dirtyCapacity);
+        if (!outCache->reloadDirtyQueue) {
+            MEMSET(outCache, 0, sizeof(*outCache));
+            return 0;
+        }
+        outCache->reloadDirtyQueueCapacity = dirtyCapacity;
+    }
+
     outCache->mutex = OS_mutex_create();
     outCache->loadArenaMutex = OS_mutex_create();
     outCache->condition = OS_condition_variable_create();
@@ -609,6 +1005,19 @@ B32 artifact_cache_create(const ArtifactCacheDesc* desc, ArtifactCache* outCache
         }
         MEMSET(outCache, 0, sizeof(*outCache));
         return 0;
+    }
+
+    if (desc->reloadScannerEnabled) {
+        outCache->reloadScannerRunning = 1u;
+        outCache->reloadScannerThread = OS_thread_create(artifact_reload_scanner_thread_, outCache);
+        if (!outCache->reloadScannerThread.handle) {
+            outCache->reloadScannerRunning = 0u;
+            OS_condition_variable_destroy(outCache->condition);
+            OS_mutex_destroy(outCache->loadArenaMutex);
+            OS_mutex_destroy(outCache->mutex);
+            MEMSET(outCache, 0, sizeof(*outCache));
+            return 0;
+        }
     }
 
     return 1;
@@ -636,6 +1045,7 @@ void artifact_cache_destroy(ArtifactCache* cache) {
         return;
     }
 
+    artifact_reload_scanner_stop_(cache);
     artifact_cache_reset(cache);
 
     if (cache->condition.handle) {
@@ -658,6 +1068,8 @@ void artifact_cache_reset(ArtifactCache* cache) {
     if (!cache || !cache->mutex.handle) {
         return;
     }
+
+    artifact_reload_scanner_stop_(cache);
 
     OS_mutex_lock(cache->mutex);
 
@@ -696,6 +1108,10 @@ void artifact_cache_reset(ArtifactCache* cache) {
     cache->hashTombstones = 0u;
     cache->residentBytes = 0u;
     cache->touchSerial = 0u;
+    cache->reloadScanCursor = 0u;
+    cache->reloadDirtyRead = 0u;
+    cache->reloadDirtyWrite = 0u;
+    cache->reloadDirtyCount = 0u;
 
     if (cache->typeRegistered && cache->typeOps && cache->maxTypeId > 0u) {
         MEMSET(cache->typeOps, 0, sizeof(ArtifactTypeOps) * (cache->maxTypeId + 1u));
@@ -774,6 +1190,12 @@ void artifact_use_scope_close(ArtifactUseScope* scope) {
 }
 
 ArtifactHandle artifact_acquire(ArtifactUseScope* scope, U32 typeId, StringU8 key, U32 acquireFlags) {
+    ArtifactReloadPolicy policy = {};
+    return artifact_acquire_with_policy(scope, typeId, key, acquireFlags, policy);
+}
+
+ArtifactHandle artifact_acquire_with_policy(ArtifactUseScope* scope, U32 typeId, StringU8 key,
+                                            U32 acquireFlags, ArtifactReloadPolicy policy) {
     ArtifactHandle invalid = ARTIFACT_HANDLE_INVALID;
 
     if (!scope || !scope->cache || !scope->arena || str8_is_nil(key) || key.size == 0u) {
@@ -784,6 +1206,10 @@ ArtifactHandle artifact_acquire(ArtifactUseScope* scope, U32 typeId, StringU8 ke
 
     B32 wantsAsync = (acquireFlags & ArtifactAcquireFlags_Async) ? 1 : 0;
     B32 wantsSync = (acquireFlags & ArtifactAcquireFlags_Sync) ? 1 : 0;
+    B32 wantsReloadable = (acquireFlags & ArtifactAcquireFlags_Reloadable) ? 1 : 0;
+    if (policy.checkIntervalNs == 0u) {
+        policy.checkIntervalNs = ARTIFACT_RELOAD_CHECK_INTERVAL_DEFAULT_NS;
+    }
     if (!wantsAsync && !wantsSync) {
         wantsSync = 1;
     }
@@ -810,6 +1236,11 @@ ArtifactHandle artifact_acquire(ArtifactUseScope* scope, U32 typeId, StringU8 ke
     if (found) {
         ArtifactHashEntry* entry = &cache->hashEntries[entryIndex];
         handle = entry->handle;
+        ArtifactNode* node = (ArtifactNode*)slot_map_get(&cache->slots, handle.slot, handle.generation);
+        if (node && wantsReloadable) {
+            node->acquireFlags |= ArtifactAcquireFlags_Reloadable;
+            node->reloadPolicy = policy;
+        }
     } else {
         void* slotItem = 0;
         U32 slotIndex = 0u;
@@ -828,6 +1259,21 @@ ArtifactHandle artifact_acquire(ArtifactUseScope* scope, U32 typeId, StringU8 ke
         node->touchCount = 0u;
         node->inFlight = 0u;
         node->lastTouchSerial = ++cache->touchSerial;
+        node->publishedGeneration = 0u;
+        node->failedGeneration = 0u;
+        node->acquireFlags = acquireFlags;
+        node->reloadPolicy = policy;
+        node->lastReloadCheckNs = 0u;
+        node->lastWriteTimestampNs = 0u;
+        node->lastWriteSize = 0u;
+        node->sourceGeneration = 0u;
+        node->dirtySourceGeneration = 0u;
+        node->queuedSourceGeneration = 0u;
+        node->loadingSourceGeneration = 0u;
+        node->dirtyWriteTimestampNs = 0u;
+        node->dirtyFileSize = 0u;
+        node->failedSourceGeneration = 0u;
+        node->reloadFailed = 0;
         node->releaseProc = 0;
         node->releaseUserData = 0;
 
@@ -890,7 +1336,7 @@ ArtifactHandle artifact_acquire(ArtifactUseScope* scope, U32 typeId, StringU8 ke
                 OS_mutex_unlock(cache->mutex);
             }
         } else if (!wantsAsync) {
-            artifact_run_load_for_handle_(cache, handle);
+            artifact_run_load_for_handle_(cache, handle, 0);
         }
     }
 
@@ -899,6 +1345,72 @@ ArtifactHandle artifact_acquire(ArtifactUseScope* scope, U32 typeId, StringU8 ke
     }
 
     return handle;
+}
+
+ArtifactCacheTickResult artifact_cache_tick(ArtifactCache* cache, U64 nowNs, U32 maxChecks, U32 maxPublishes) {
+    ArtifactCacheTickResult result = {};
+    (void)nowNs;
+    if (!cache || !cache->mutex.handle) {
+        return result;
+    }
+
+    if (maxChecks == 0u) {
+        maxChecks = 0xFFFFFFFFu;
+    }
+    if (maxPublishes == 0u) {
+        maxPublishes = 0xFFFFFFFFu;
+    }
+
+    for (;;) {
+        if (result.checkedCount >= maxChecks || result.submittedCount >= maxPublishes) {
+            break;
+        }
+
+        ArtifactReloadDirtyEntry dirty = {};
+
+        OS_mutex_lock(cache->mutex);
+        if (!artifact_reload_pop_dirty_locked_(cache, &dirty)) {
+            OS_mutex_unlock(cache->mutex);
+            break;
+        }
+        OS_mutex_unlock(cache->mutex);
+
+        result.checkedCount += 1u;
+
+        OS_mutex_lock(cache->mutex);
+        ArtifactNode* node = (ArtifactNode*)slot_map_get(&cache->slots,
+                                                          dirty.handle.slot,
+                                                          dirty.handle.generation);
+        if (!node ||
+            node->dirtySourceGeneration != dirty.sourceGeneration ||
+            node->failedSourceGeneration == dirty.sourceGeneration) {
+            OS_mutex_unlock(cache->mutex);
+            continue;
+        }
+        if (node->inFlight != 0u) {
+            if (node->queuedSourceGeneration == dirty.sourceGeneration) {
+                node->queuedSourceGeneration = 0u;
+            }
+            OS_mutex_unlock(cache->mutex);
+            continue;
+        }
+        node->inFlight = 1u;
+        node->loadingSourceGeneration = dirty.sourceGeneration;
+        if (node->status != ArtifactStatus_Ready) {
+            node->status = ArtifactStatus_Pending;
+        }
+        OS_mutex_unlock(cache->mutex);
+
+        result.submittedCount += 1u;
+        ArtifactStatus loadStatus = artifact_run_load_for_handle_(cache, dirty.handle, 0);
+        if (loadStatus == ArtifactStatus_Ready) {
+            result.publishedCount += 1u;
+        } else if (loadStatus == ArtifactStatus_Error) {
+            result.failedCount += 1u;
+        }
+    }
+
+    return result;
 }
 
 ArtifactStatus artifact_status(ArtifactCache* cache, ArtifactHandle handle) {
@@ -921,6 +1433,9 @@ ArtifactStatus artifact_view(ArtifactUseScope* scope, ArtifactHandle handle, Art
 
     outView->data = 0;
     outView->size = 0u;
+    outView->generation = 0u;
+    outView->flags = ArtifactViewFlags_None;
+    outView->status = ArtifactStatus_Invalid;
 
     ArtifactCache* cache = scope->cache;
 
@@ -932,6 +1447,14 @@ ArtifactStatus artifact_view(ArtifactUseScope* scope, ArtifactHandle handle, Art
     }
 
     ArtifactStatus status = node->status;
+    outView->status = status;
+    outView->generation = node->publishedGeneration;
+    if (node->inFlight != 0u && node->status == ArtifactStatus_Ready) {
+        outView->flags |= ArtifactViewFlags_ReloadPending;
+    }
+    if (node->reloadFailed) {
+        outView->flags |= ArtifactViewFlags_ReloadFailed;
+    }
     if (status == ArtifactStatus_Ready && node->payload.data) {
         outView->data = node->payload.data;
         outView->size = node->payload.size;
@@ -1153,11 +1676,10 @@ void artifact_cache_evict(ArtifactCache* cache, U32 passCount) {
 
         OS_mutex_unlock(cache->mutex);
 
-        if (nodeCopy.releaseProc && nodeCopy.payload.data) {
-            nodeCopy.releaseProc(nodeCopy.releaseUserData,
-                                 nodeCopy.typeId,
-                                 nodeCopy.key,
-                                 nodeCopy.payload);
-        }
+        artifact_release_payload_(nodeCopy.releaseProc,
+                                  nodeCopy.releaseUserData,
+                                  nodeCopy.typeId,
+                                  nodeCopy.key,
+                                  nodeCopy.payload);
     }
 }

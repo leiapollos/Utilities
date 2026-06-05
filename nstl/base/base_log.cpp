@@ -19,19 +19,19 @@ static Arena* g_logDomainArena = nullptr;
 static OS_Handle g_logDomainMutex = {};
 
 static const LogLevelInfo g_logLevelInfo[] = {
-    [LogLevel_Debug] = {
+    {
         .name = str8("DEBUG"),
         .colorCode = str8("\033[36m"), // Cyan
     },
-    [LogLevel_Info] = {
+    {
         .name = str8("INFO"),
         .colorCode = str8("\033[32m"), // Green
     },
-    [LogLevel_Warning] = {
+    {
         .name = str8("WARNING"),
         .colorCode = str8("\033[33m"), // Yellow
     },
-    [LogLevel_Error] = {
+    {
         .name = str8("ERROR"),
         .colorCode = str8("\033[31m"), // Red
     },

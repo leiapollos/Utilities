@@ -33,9 +33,6 @@ static const char* HOST_MODULE_BUILD_INPUTS[] = {
     "app.cpp",
     "app_interface.hpp",
     "app_state.hpp",
-    "app/shaders/triangle.metal",
-    "app/shaders/demo_compute.metal",
-    "app/textures/demo.ppm",
     "nstl/artifact/artifact.hpp",
     "nstl/artifact/artifact.cpp",
     "nstl/artifact/artifact_include.hpp",
@@ -164,6 +161,7 @@ static void host_destroy_gfx_device(HostState* state);
 static StringU8 host_build_module_path(StringU8 relativePath, Arena* arena);
 static void host_record_retired_module(HostState* state, OS_SharedLibrary library, StringU8 path);
 static B32 host_copy_file(StringU8 srcPath, StringU8 dstPath);
+static void host_delete_file(StringU8 path);
 static U64 host_get_newest_module_input_timestamp(void);
 static StringU8 host_export_status_string(B32 passed);
 static B32 host_validate_app_code(const AppCode* code, StringU8 modulePath);
@@ -194,6 +192,7 @@ static B32 host_init(HostState* state) {
              state->storage.permanentSize, state->storage.transientSize);
 
     state->sourceTimestamp = host_get_newest_module_input_timestamp();
+
     state->windowFocused = 1;
     state->targetFpsFocused = HOST_DEFAULT_TARGET_FPS_FOCUSED;
     state->targetFpsUnfocused = HOST_DEFAULT_TARGET_FPS_UNFOCUSED;
@@ -271,6 +270,8 @@ static B32 host_init(HostState* state) {
         return 0;
     }
 
+    OS_window_show(state->window);
+
     return 1;
 }
 
@@ -281,6 +282,7 @@ static void host_update(HostState* state, F32 deltaSeconds) {
     arena_pop_to(state->frameArena, 0);
 
     host_try_reload_module(state);
+
     host_update_input(state, deltaSeconds);
     if (state->host.shouldQuit) {
         return;
@@ -453,11 +455,28 @@ static B32 host_copy_file(StringU8 srcPath, StringU8 dstPath) {
     }
 
     int errorCode = errno;
+#if defined(COMPILER_MSVC)
+    char errorBuffer[256] = {};
+    strerror_s(errorBuffer, sizeof(errorBuffer), errorCode);
+    StringU8 errorMsg = errorBuffer[0] ? str8(errorBuffer) : str8("<unknown>");
+#else
     const char* errorText = strerror(errorCode);
     StringU8 errorMsg = errorText ? str8(errorText) : str8("<unknown>");
+#endif
     LOG_ERROR("host", "Failed to copy module from '{}' to '{}' (errno={} '{}')", srcPath, dstPath, errorCode,
               errorMsg);
     return 0;
+}
+
+static void host_delete_file(StringU8 path) {
+    if (!path.data || path.size == 0) {
+        return;
+    }
+#if defined(PLATFORM_OS_WINDOWS)
+    DeleteFileA((const char*) path.data);
+#else
+    unlink((const char*) path.data);
+#endif
 }
 
 static void host_record_retired_module(HostState* state, OS_SharedLibrary library, StringU8 path) {
@@ -471,7 +490,7 @@ static void host_record_retired_module(HostState* state, OS_SharedLibrary librar
             OS_library_close(oldLibrary);
         }
         if (state->retiredModulePaths[0].data && state->retiredModulePaths[0].size > 0) {
-            unlink((const char*) state->retiredModulePaths[0].data);
+            host_delete_file(state->retiredModulePaths[0]);
         }
         for (U32 i = 1; i < state->retiredModuleCount; ++i) {
             state->retiredModules[i - 1] = state->retiredModules[i];
@@ -548,10 +567,15 @@ static B32 host_load_candidate(HostState* state, LoadedModule* outModule, String
 
     state->moduleGeneration += 1;
 
+#if defined(PLATFORM_OS_WINDOWS)
+    StringU8 moduleSuffix = str8(".dll");
+#else
+    StringU8 moduleSuffix = str8(".dylib");
+#endif
     StringU8 loadPathRelative = str8_concat(arena,
                                             str8("hot/utilities_app_loaded_"),
                                             str8_from_U64(arena, state->moduleGeneration, 10),
-                                            str8(".dylib"));
+                                            moduleSuffix);
     if (!loadPathRelative.data || loadPathRelative.size == 0) {
         LOG_ERROR("host", "Failed to generate module load name");
         return 0;
@@ -652,7 +676,7 @@ static B32 host_commit_candidate(HostState* state, LoadedModule* candidate, Stri
     if (!commitOk) {
         host_close_module(candidate);
         if (candidatePath.data && candidatePath.size > 0) {
-            unlink((const char*) candidatePath.data);
+            host_delete_file(candidatePath);
         }
         return 0;
     }
@@ -677,7 +701,7 @@ static B32 host_commit_candidate(HostState* state, LoadedModule* candidate, Stri
         StringU8 moduleSourcePath = host_build_module_path(str8(APP_MODULE_SOURCE_RELATIVE), scratch.arena);
         OS_FileInfo moduleInfo = OS_get_file_info((const char*) moduleSourcePath.data);
         state->moduleTimestamp = moduleInfo.exists ? moduleInfo.lastWriteTimestampNs : state->moduleTimestamp;
-        temp_end(&scratch);
+            temp_end(&scratch);
     }
 
     LOG_INFO("host", "Committed module from '{}'", state->currentModulePath);
@@ -752,7 +776,7 @@ static void host_unload_module(HostState* state) {
     if (state->module.library.handle) {
         OS_library_close(state->module.library);
         if (state->currentModulePath.data && state->currentModulePath.size > 0) {
-            unlink((const char*) state->currentModulePath.data);
+            host_delete_file(state->currentModulePath);
         }
     }
 
@@ -782,7 +806,11 @@ static void host_try_build_module(HostState* state) {
     }
 
     LOG_INFO("host", "Detected app module source changes -> rebuilding module");
+#if defined(PLATFORM_OS_WINDOWS)
+    S32 buildResult = APP_OS_CALL(&state->host, OS_execute, str8(".\\sob.exe module debug"));
+#else
     S32 buildResult = APP_OS_CALL(&state->host, OS_execute, str8("./sob module debug"));
+#endif
     if (buildResult != 0) {
         LOG_ERROR("host", "Module rebuild failed (exit code {})", buildResult);
         state->sourceTimestamp = sourceTimestamp;
@@ -858,7 +886,7 @@ static void host_cleanup_retired_modules(HostState* state) {
         }
 
         if (state->retiredModulePaths[index].data && state->retiredModulePaths[index].size > 0) {
-            unlink((const char*) state->retiredModulePaths[index].data);
+            host_delete_file(state->retiredModulePaths[index]);
         }
         state->retiredModulePaths[index] = STR8_NIL;
     }
@@ -896,6 +924,9 @@ static B32 host_create_main_window(HostState* state) {
     desc.title = HOST_WINDOW_TITLE;
     desc.width = state->windowWidth;
     desc.height = state->windowHeight;
+#if defined(PLATFORM_OS_WINDOWS)
+    desc.hidden = 1;
+#endif
 
     state->window = OS_window_create(desc);
     if (!state->window.handle) {
@@ -903,10 +934,10 @@ static B32 host_create_main_window(HostState* state) {
         return 0;
     }
 
-    OS_WindowSurfaceInfo surface = OS_window_get_surface_info(state->window);
-    if (surface.drawableWidth != 0u && surface.drawableHeight != 0u) {
-        state->windowWidth = surface.drawableWidth;
-        state->windowHeight = surface.drawableHeight;
+    OS_WindowInfo info = OS_window_get_info(state->window);
+    if (info.drawableWidth != 0u && info.drawableHeight != 0u) {
+        state->windowWidth = info.drawableWidth;
+        state->windowHeight = info.drawableHeight;
     }
 
     state->host.window = state->window;
@@ -940,11 +971,17 @@ static B32 host_create_gfx_device(HostState* state) {
     }
 
     GfxDeviceDesc desc = {};
+#if defined(PLATFORM_OS_WINDOWS)
+    desc.backend = GfxBackend_Vulkan;
+#else
     desc.backend = GfxBackend_Metal;
+#endif
     desc.window = state->window;
     desc.framesInFlight = HOST_GFX_FRAMES_IN_FLIGHT;
     desc.tempBufferSize = HOST_GFX_TEMP_BUFFER_SIZE;
-    desc.enableValidation = 1;
+    desc.validationFlags = GfxValidationFlags_Api |
+                           GfxValidationFlags_Backend |
+                           GfxValidationFlags_GpuMarkers;
 
     GfxDevice* device = 0;
     if (!gfx_device_create(&desc, state->programArena, &device)) {
@@ -1012,11 +1049,13 @@ static void host_update_input(HostState* state, F32 deltaSeconds) {
                 if (event->window.handle == state->window.handle &&
                     event->windowShown.width != 0u &&
                     event->windowShown.height != 0u) {
+                    B32 sizeChanged = event->windowShown.width != state->windowWidth ||
+                                      event->windowShown.height != state->windowHeight;
                     state->windowWidth = event->windowShown.width;
                     state->windowHeight = event->windowShown.height;
                     state->host.windowWidth = state->windowWidth;
                     state->host.windowHeight = state->windowHeight;
-                    if (state->host.gfxDevice) {
+                    if (sizeChanged && state->host.gfxDevice) {
                         gfx_device_resize(state->host.gfxDevice, state->windowWidth, state->windowHeight);
                     }
                 }
@@ -1027,11 +1066,13 @@ static void host_update_input(HostState* state, F32 deltaSeconds) {
                 if (event->window.handle == state->window.handle &&
                     event->windowResized.width != 0u &&
                     event->windowResized.height != 0u) {
+                    B32 sizeChanged = event->windowResized.width != state->windowWidth ||
+                                      event->windowResized.height != state->windowHeight;
                     state->windowWidth = event->windowResized.width;
                     state->windowHeight = event->windowResized.height;
                     state->host.windowWidth = state->windowWidth;
                     state->host.windowHeight = state->windowHeight;
-                    if (state->host.gfxDevice) {
+                    if (sizeChanged && state->host.gfxDevice) {
                         gfx_device_resize(state->host.gfxDevice, state->windowWidth, state->windowHeight);
                     }
                 }

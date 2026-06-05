@@ -19,22 +19,22 @@ struct LogLevelInfo {
     StringU8 colorCode; // ANSI color escape
 };
 
-void log_init();
-void set_log_level(LogLevel level);
-void set_log_domain_level(StringU8 domain, LogLevel level);
+UTILITIES_SHARED_API void log_init();
+UTILITIES_SHARED_API void set_log_level(LogLevel level);
+UTILITIES_SHARED_API void set_log_domain_level(StringU8 domain, LogLevel level);
 
-void log(LogLevel level, StringU8 domain, StringU8 str);
+UTILITIES_SHARED_API void log(LogLevel level, StringU8 domain, StringU8 str);
 
 
 // ////////////////////////
 // Log Formatting
 
-void log_fmt_(LogLevel level,
-              StringU8 domain,
-              B32 addNewline,
-              StringU8 fmt,
-              const Str8FmtArg* args,
-              U64 argCount);
+UTILITIES_SHARED_API void log_fmt_(LogLevel level,
+                                   StringU8 domain,
+                                   B32 addNewline,
+                                   StringU8 fmt,
+                                   const Str8FmtArg* args,
+                                   U64 argCount);
 
 static inline StringU8 log_domain_wrap(const char* domain) {
     return str8(domain);

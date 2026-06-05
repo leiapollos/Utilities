@@ -1,0 +1,65 @@
+#version 450
+
+#define GFX_SHADER_SLOT_DISPATCH_DATA 8
+#define GFX_SHADER_SLOT_PASS_DATA 10
+#define GFX_DISPATCH_DATA_STRIDE_BYTES 32u
+#define GFX_MATERIAL_STRIDE_BYTES 32u
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct Material {
+    vec4 baseColor;
+    uint albedoTexture;
+    uint samplerIndex;
+    uint flags;
+    uint _padding;
+};
+
+struct MaterialComputeData {
+    uint materialCount;
+    uint columns;
+    uint rows;
+    uint albedoTexture;
+    uint samplerIndex;
+    uint _padding0;
+    uint _padding1;
+    uint _padding2;
+};
+
+layout(set = 1, binding = GFX_SHADER_SLOT_DISPATCH_DATA, std430) readonly buffer DispatchDataBuffer {
+    MaterialComputeData data[];
+} dispatchDataBuffer;
+
+layout(set = 1, binding = GFX_SHADER_SLOT_PASS_DATA, std430) buffer MaterialBuffer {
+    Material materials[];
+} materialBuffer;
+
+layout(push_constant) uniform PushConstants {
+    uint dataByteOffset;
+    uint passByteOffset;
+    uint _padding0;
+    uint _padding1;
+} pushConstants;
+
+void main() {
+    MaterialComputeData data = dispatchDataBuffer.data[pushConstants.dataByteOffset / GFX_DISPATCH_DATA_STRIDE_BYTES];
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= data.materialCount) {
+        return;
+    }
+
+    uint column = index % data.columns;
+    uint row = index / data.columns;
+    float columnT = (data.columns > 1u) ? (float(column) / float(data.columns - 1u)) : 0.0;
+    float rowT = (data.rows > 1u) ? (float(row) / float(data.rows - 1u)) : 0.0;
+
+    uint materialIndex = (pushConstants.passByteOffset / GFX_MATERIAL_STRIDE_BYTES) + index;
+    materialBuffer.materials[materialIndex].baseColor = vec4(0.30 + 0.70 * columnT,
+                                                             0.30 + 0.70 * rowT,
+                                                             1.00 - 0.50 * ((columnT + rowT) * 0.5),
+                                                             1.0);
+    materialBuffer.materials[materialIndex].albedoTexture = data.albedoTexture;
+    materialBuffer.materials[materialIndex].samplerIndex = data.samplerIndex;
+    materialBuffer.materials[materialIndex].flags = 1u;
+    materialBuffer.materials[materialIndex]._padding = 0u;
+}

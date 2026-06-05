@@ -37,11 +37,14 @@ static B8 is_alnum(U8 c) {
     return is_alpha(c) || is_digit(c);
 }
 
-static const TokenKind g_charToToken[256] = {
-#define X_CHAR(name, ch) [(U8)(ch)] = TokenKind_##name,
+static TokenKind token_kind_from_char(U8 c) {
+    switch (c) {
+#define X_CHAR(name, ch) case (U8)(ch): return TokenKind_##name;
     CHAR_TOKENS
 #undef X_CHAR
-};
+        default: return TokenKind_Invalid;
+    }
+}
 
 static TokenKind keyword_or_identifier(StringU8 text) {
 #define X(name, str) if (str8_equal(text, str8(str))) { return TokenKind_##name; }
@@ -185,7 +188,7 @@ Token lexer_next_token(Lexer* lexer) {
 
     lexer_advance_char(lexer);
     token.text = str8(lexer->source.data + lexer->pos - 1, 1);
-    token.kind = g_charToToken[c];
+    token.kind = token_kind_from_char(c);
 
     return token;
 }

@@ -9,9 +9,13 @@
 #include "nstl/os/graphics/os_graphics.hpp"
 #include "nstl/gfx/gfx_include.hpp"
 
-#define APP_ABI_VERSION 14u
+#define APP_ABI_VERSION 15u
 #define APP_STATE_SCHEMA_VERSION 2u
+#if defined(PLATFORM_OS_WINDOWS)
+#define APP_MODULE_SOURCE_RELATIVE "hot/utilities_app.dll"
+#else
 #define APP_MODULE_SOURCE_RELATIVE "hot/utilities_app.dylib"
+#endif
 #define HOT_STATE_STORE_MAGIC 0x4853544F52453031ull
 #define HOT_STATE_STORE_VERSION 1u
 #define HOT_STATE_STORE_MAX_SLOTS 64u
@@ -24,7 +28,7 @@
     X(OS_window_create) \
     X(OS_window_destroy) \
     X(OS_window_is_open) \
-    X(OS_window_get_surface_info) \
+    X(OS_window_get_info) \
     X(OS_reserve) \
     X(OS_commit) \
     X(OS_decommit) \
@@ -236,7 +240,9 @@ struct AppCode {
     AppShutdownProc* shutdown;
 };
 
-#if defined(COMPILER_CLANG) || defined(COMPILER_GCC)
+#if defined(PLATFORM_OS_WINDOWS)
+#define APP_EXPORT extern "C" __declspec(dllexport)
+#elif defined(COMPILER_CLANG) || defined(COMPILER_GCC)
 #define APP_EXPORT extern "C" __attribute__((visibility("default")))
 #else
 #define APP_EXPORT extern "C"

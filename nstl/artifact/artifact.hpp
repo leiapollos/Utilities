@@ -1,7 +1,11 @@
 #pragma once
 
-#define ARTIFACT_CACHE_API_VERSION 1u
+#define ARTIFACT_CACHE_API_VERSION 2u
 #define ARTIFACT_WAIT_INFINITE 0xFFFFFFFFu
+#define ARTIFACT_RELOAD_CHECK_INTERVAL_DEFAULT_NS (250ull * 1000000ull)
+#define ARTIFACT_RELOAD_SCANNER_SLEEP_DEFAULT_MS 100u
+#define ARTIFACT_RELOAD_SCANNER_BATCH_DEFAULT 16u
+#define ARTIFACT_RELOAD_DIRTY_QUEUE_DEFAULT_CAPACITY 256u
 
 struct ArtifactCache;
 struct ArtifactUseScope;
@@ -30,6 +34,13 @@ enum ArtifactAcquireFlags {
     ArtifactAcquireFlags_None = 0,
     ArtifactAcquireFlags_Async = (1u << 0),
     ArtifactAcquireFlags_Sync = (1u << 1),
+    ArtifactAcquireFlags_Reloadable = (1u << 2),
+};
+
+enum ArtifactViewFlags {
+    ArtifactViewFlags_None = 0,
+    ArtifactViewFlags_ReloadPending = (1u << 0),
+    ArtifactViewFlags_ReloadFailed = (1u << 1),
 };
 
 enum ArtifactTypeKind {
@@ -40,11 +51,26 @@ enum ArtifactTypeKind {
 struct ArtifactPayload {
     void* data;
     U64 size;
+    Arena* arena;
 };
 
 struct ArtifactView {
     const void* data;
     U64 size;
+    U64 generation;
+    U32 flags;
+    ArtifactStatus status;
+};
+
+struct ArtifactReloadPolicy {
+    U64 checkIntervalNs;
+};
+
+struct ArtifactCacheTickResult {
+    U32 checkedCount;
+    U32 submittedCount;
+    U32 publishedCount;
+    U32 failedCount;
 };
 
 typedef B32 ArtifactLoadProc(void* userData, Arena* arena, U32 typeId, StringU8 key, ArtifactPayload* outPayload);
@@ -66,6 +92,10 @@ struct ArtifactCacheDesc {
     U32 initialHashCapacity;
     U64 budgetBytes;
     U32 maxTypeId;
+    B32 reloadScannerEnabled;
+    U32 reloadScannerSleepMs;
+    U32 reloadScannerBatchCount;
+    U32 reloadDirtyQueueCapacity;
 };
 
 struct ArtifactTouchedEntry {
@@ -91,6 +121,9 @@ B32 artifact_use_scope_open(ArtifactCache* cache, Arena* arena, ArtifactUseScope
 void artifact_use_scope_close(ArtifactUseScope* scope);
 
 ArtifactHandle artifact_acquire(ArtifactUseScope* scope, U32 typeId, StringU8 key, U32 acquireFlags);
+ArtifactHandle artifact_acquire_with_policy(ArtifactUseScope* scope, U32 typeId, StringU8 key,
+                                            U32 acquireFlags, ArtifactReloadPolicy policy);
+ArtifactCacheTickResult artifact_cache_tick(ArtifactCache* cache, U64 nowNs, U32 maxChecks, U32 maxPublishes);
 ArtifactStatus artifact_status(ArtifactCache* cache, ArtifactHandle handle);
 ArtifactStatus artifact_view(ArtifactUseScope* scope, ArtifactHandle handle, ArtifactView* outView);
 ArtifactView artifact_resolve_view(ArtifactUseScope* scope, ArtifactHandle handle);

@@ -150,12 +150,19 @@ enum GfxCompareOp {
     GfxCompareOp_LessEqual,
 };
 
+enum GfxValidationFlags {
+    GfxValidationFlags_None       = 0,
+    GfxValidationFlags_Api        = (1u << 0),
+    GfxValidationFlags_Backend    = (1u << 1),
+    GfxValidationFlags_GpuMarkers = (1u << 2),
+};
+
 struct GfxDeviceDesc {
     GfxBackend backend;
     OS_WindowHandle window;
     U32 framesInFlight;
     U64 tempBufferSize;
-    B32 enableValidation;
+    U32 validationFlags;
 };
 
 struct GfxBufferDesc {
@@ -332,34 +339,34 @@ struct GfxStats {
     U64 frameIndex;
 };
 
-B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDevice);
-void gfx_device_destroy(GfxDevice* device);
-void gfx_device_resize(GfxDevice* device, U32 width, U32 height);
-void gfx_wait_idle(GfxDevice* device);
+UTILITIES_SHARED_API B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDevice);
+UTILITIES_SHARED_API void gfx_device_destroy(GfxDevice* device);
+UTILITIES_SHARED_API void gfx_device_resize(GfxDevice* device, U32 width, U32 height);
+UTILITIES_SHARED_API void gfx_wait_idle(GfxDevice* device);
 
-GfxBuffer gfx_create_buffer(GfxDevice* device, const GfxBufferDesc* desc);
-GfxTexture gfx_create_texture(GfxDevice* device, const GfxTextureDesc* desc);
-GfxSampler gfx_create_sampler(GfxDevice* device, const GfxSamplerDesc* desc);
-GfxPipeline gfx_create_graphics_pipeline(GfxDevice* device, const GfxGraphicsPipelineDesc* desc);
-GfxPipeline gfx_create_compute_pipeline(GfxDevice* device, const GfxComputePipelineDesc* desc);
-void gfx_destroy_buffer(GfxDevice* device, GfxBuffer buffer);
-void gfx_destroy_texture(GfxDevice* device, GfxTexture texture);
-void gfx_destroy_sampler(GfxDevice* device, GfxSampler sampler);
-void gfx_destroy_pipeline(GfxDevice* device, GfxPipeline pipeline);
+UTILITIES_SHARED_API GfxBuffer gfx_create_buffer(GfxDevice* device, const GfxBufferDesc* desc);
+UTILITIES_SHARED_API GfxTexture gfx_create_texture(GfxDevice* device, const GfxTextureDesc* desc);
+UTILITIES_SHARED_API GfxSampler gfx_create_sampler(GfxDevice* device, const GfxSamplerDesc* desc);
+UTILITIES_SHARED_API GfxPipeline gfx_create_graphics_pipeline(GfxDevice* device, const GfxGraphicsPipelineDesc* desc);
+UTILITIES_SHARED_API GfxPipeline gfx_create_compute_pipeline(GfxDevice* device, const GfxComputePipelineDesc* desc);
+UTILITIES_SHARED_API void gfx_destroy_buffer(GfxDevice* device, GfxBuffer buffer);
+UTILITIES_SHARED_API void gfx_destroy_texture(GfxDevice* device, GfxTexture texture);
+UTILITIES_SHARED_API void gfx_destroy_sampler(GfxDevice* device, GfxSampler sampler);
+UTILITIES_SHARED_API void gfx_destroy_pipeline(GfxDevice* device, GfxPipeline pipeline);
 
-GfxResourceId gfx_register_texture(GfxDevice* device, GfxTexture texture);
-GfxResourceId gfx_register_sampler(GfxDevice* device, GfxSampler sampler);
-GfxResourceId gfx_register_buffer(GfxDevice* device, GfxBuffer buffer);
+UTILITIES_SHARED_API GfxResourceId gfx_register_texture(GfxDevice* device, GfxTexture texture);
+UTILITIES_SHARED_API GfxResourceId gfx_register_sampler(GfxDevice* device, GfxSampler sampler);
+UTILITIES_SHARED_API GfxResourceId gfx_register_buffer(GfxDevice* device, GfxBuffer buffer);
 
-GfxFrame* gfx_begin_frame(GfxDevice* device);
-GfxCommandBuffer* gfx_get_command_buffer(GfxFrame* frame);
-GfxTexture gfx_get_backbuffer(GfxFrame* frame);
-GfxTemp gfx_allocate_temp(GfxFrame* frame, U64 size, U64 alignment);
-void gfx_upload_buffer(GfxFrame* frame, GfxBuffer dst, U64 dstOffset, const void* src, U64 size);
-void gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRegion* region, const void* src);
+UTILITIES_SHARED_API GfxFrame* gfx_begin_frame(GfxDevice* device);
+UTILITIES_SHARED_API GfxCommandBuffer* gfx_get_command_buffer(GfxFrame* frame);
+UTILITIES_SHARED_API GfxTexture gfx_get_backbuffer(GfxFrame* frame);
+UTILITIES_SHARED_API GfxTemp gfx_allocate_temp(GfxFrame* frame, U64 size, U64 alignment);
+UTILITIES_SHARED_API B32 gfx_upload_buffer(GfxFrame* frame, GfxBuffer dst, U64 dstOffset, const void* src, U64 size);
+UTILITIES_SHARED_API B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRegion* region, const void* src);
 
-void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, const GfxDrawArea* areas, U32 areaCount);
-void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc, const GfxDispatch* dispatches, U32 dispatchCount);
-void gfx_submit(GfxCommandBuffer* commands);
-void gfx_end_frame(GfxFrame* frame);
-GfxStats gfx_get_stats(GfxDevice* device);
+UTILITIES_SHARED_API void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, const GfxDrawArea* areas, U32 areaCount);
+UTILITIES_SHARED_API void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc, const GfxDispatch* dispatches, U32 dispatchCount);
+UTILITIES_SHARED_API void gfx_submit(GfxCommandBuffer* commands);
+UTILITIES_SHARED_API void gfx_end_frame(GfxFrame* frame);
+UTILITIES_SHARED_API GfxStats gfx_get_stats(GfxDevice* device);

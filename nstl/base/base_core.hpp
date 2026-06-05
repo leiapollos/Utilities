@@ -5,6 +5,9 @@
 #pragma once
 
 #include <stdarg.h>
+#if defined(COMPILER_MSVC)
+#include <intrin.h>
+#endif
 
 // ////////////////////////
 // Assert
@@ -59,15 +62,8 @@ static inline S32 safe_cast_u32_s32_impl(U32 value) {
 // Branch Prediction
 
 #if defined(COMPILER_MSVC)
-#if _MSC_VER >= 1928 && defined(CPP_LANG) && _MSVC_LANG >= 202002L
-// MSVC with C++20 support for [[likely]] and [[unlikely]]
-#define LIKELY(condition) [[likely]] (condition)
-#define UNLIKELY(condition) [[unlikely]] (condition)
-#else
-// Older MSVC or non-C++20 path
 #define LIKELY(condition) (condition)
 #define UNLIKELY(condition) (condition)
-#endif
 #elif defined(COMPILER_CLANG) || defined(COMPILER_GCC)
 #define LIKELY(condition) __builtin_expect((condition), 1)
 #define UNLIKELY(condition) __builtin_expect((condition), 0)
@@ -97,7 +93,7 @@ static inline S32 safe_cast_u32_s32_impl(U32 value) {
 #if defined(COMPILER_MSVC) || (defined(COMPILER_CLANG) && defined(PLATFORM_OS_WINDOWS))
 // # pragma section(".rdata$", read)
 // # define READ_ONLY __declspec(allocate(".rdata$"))
-#error check if the above is working correctly
+# define READ_ONLY
 #elif defined(COMPILER_CLANG) && defined(PLATFORM_OS_MACOS)
 #define READ_ONLY __attribute__((section("__DATA,__const"))) \
 __attribute__((used))
@@ -361,6 +357,140 @@ struct RangeU64 {
 // Fences
 #define ATOMIC_THREAD_FENCE(mo) __atomic_thread_fence((mo))
 #define ATOMIC_SIGNAL_FENCE(mo) __atomic_signal_fence((mo))
+#elif defined(COMPILER_MSVC)
+#define MEMORY_ORDER_RELAXED 0
+#define MEMORY_ORDER_ACQUIRE 1
+#define MEMORY_ORDER_RELEASE 2
+#define MEMORY_ORDER_ACQ_REL 3
+#define MEMORY_ORDER_SEQ_CST 4
+
+template <typename T>
+FORCE_INLINE T msvc_atomic_load(T* ptr, int) {
+    static_assert(sizeof(T) == 4 || sizeof(T) == 8, "MSVC atomics support 32-bit and 64-bit values");
+    if constexpr (sizeof(T) == 8) {
+        return (T)_InterlockedCompareExchange64((volatile __int64*)ptr, 0, 0);
+    } else {
+        return (T)_InterlockedCompareExchange((volatile long*)ptr, 0, 0);
+    }
+}
+
+template <typename T, typename V>
+FORCE_INLINE void msvc_atomic_store(T* ptr, V value, int) {
+    static_assert(sizeof(T) == 4 || sizeof(T) == 8, "MSVC atomics support 32-bit and 64-bit values");
+    T typedValue = (T)value;
+    if constexpr (sizeof(T) == 8) {
+        _InterlockedExchange64((volatile __int64*)ptr, (__int64)typedValue);
+    } else {
+        _InterlockedExchange((volatile long*)ptr, (long)typedValue);
+    }
+}
+
+template <typename T, typename V>
+FORCE_INLINE T msvc_atomic_exchange(T* ptr, V value, int) {
+    static_assert(sizeof(T) == 4 || sizeof(T) == 8, "MSVC atomics support 32-bit and 64-bit values");
+    T typedValue = (T)value;
+    if constexpr (sizeof(T) == 8) {
+        return (T)_InterlockedExchange64((volatile __int64*)ptr, (__int64)typedValue);
+    } else {
+        return (T)_InterlockedExchange((volatile long*)ptr, (long)typedValue);
+    }
+}
+
+template <typename T, typename V>
+FORCE_INLINE B32 msvc_atomic_compare_exchange(T* ptr, T* expected, V desired, B32, int, int) {
+    static_assert(sizeof(T) == 4 || sizeof(T) == 8, "MSVC atomics support 32-bit and 64-bit values");
+    T expectedValue = *expected;
+    T desiredValue = (T)desired;
+    T previous = {};
+    if constexpr (sizeof(T) == 8) {
+        previous = (T)_InterlockedCompareExchange64((volatile __int64*)ptr,
+                                                    (__int64)desiredValue,
+                                                    (__int64)expectedValue);
+    } else {
+        previous = (T)_InterlockedCompareExchange((volatile long*)ptr,
+                                                  (long)desiredValue,
+                                                  (long)expectedValue);
+    }
+    if (previous == expectedValue) {
+        return 1;
+    }
+    *expected = previous;
+    return 0;
+}
+
+template <typename T, typename V>
+FORCE_INLINE T msvc_atomic_fetch_add(T* ptr, V value, int) {
+    static_assert(sizeof(T) == 4 || sizeof(T) == 8, "MSVC atomics support 32-bit and 64-bit values");
+    T typedValue = (T)value;
+    if constexpr (sizeof(T) == 8) {
+        return (T)_InterlockedExchangeAdd64((volatile __int64*)ptr, (__int64)typedValue);
+    } else {
+        return (T)_InterlockedExchangeAdd((volatile long*)ptr, (long)typedValue);
+    }
+}
+
+template <typename T, typename V>
+FORCE_INLINE T msvc_atomic_fetch_sub(T* ptr, V value, int order) {
+    return msvc_atomic_fetch_add(ptr, (T)(0 - (T)value), order);
+}
+
+template <typename T, typename V>
+FORCE_INLINE T msvc_atomic_fetch_and(T* ptr, V value, int) {
+    static_assert(sizeof(T) == 4 || sizeof(T) == 8, "MSVC atomics support 32-bit and 64-bit values");
+    T typedValue = (T)value;
+    if constexpr (sizeof(T) == 8) {
+        return (T)_InterlockedAnd64((volatile __int64*)ptr, (__int64)typedValue);
+    } else {
+        return (T)_InterlockedAnd((volatile long*)ptr, (long)typedValue);
+    }
+}
+
+template <typename T, typename V>
+FORCE_INLINE T msvc_atomic_fetch_or(T* ptr, V value, int) {
+    static_assert(sizeof(T) == 4 || sizeof(T) == 8, "MSVC atomics support 32-bit and 64-bit values");
+    T typedValue = (T)value;
+    if constexpr (sizeof(T) == 8) {
+        return (T)_InterlockedOr64((volatile __int64*)ptr, (__int64)typedValue);
+    } else {
+        return (T)_InterlockedOr((volatile long*)ptr, (long)typedValue);
+    }
+}
+
+template <typename T, typename V>
+FORCE_INLINE T msvc_atomic_fetch_xor(T* ptr, V value, int) {
+    static_assert(sizeof(T) == 4 || sizeof(T) == 8, "MSVC atomics support 32-bit and 64-bit values");
+    T typedValue = (T)value;
+    if constexpr (sizeof(T) == 8) {
+        return (T)_InterlockedXor64((volatile __int64*)ptr, (__int64)typedValue);
+    } else {
+        return (T)_InterlockedXor((volatile long*)ptr, (long)typedValue);
+    }
+}
+
+FORCE_INLINE void msvc_atomic_thread_fence(int) {
+    volatile long barrier = 0;
+    _InterlockedExchange(&barrier, 0);
+    _ReadWriteBarrier();
+}
+
+FORCE_INLINE void msvc_atomic_signal_fence(int) {
+    _ReadWriteBarrier();
+}
+
+#define ATOMIC_LOAD(p, mo)          msvc_atomic_load((p), (mo))
+#define ATOMIC_STORE(p, v, mo)      msvc_atomic_store((p), (v), (mo))
+#define ATOMIC_EXCHANGE(p, v, mo)   msvc_atomic_exchange((p), (v), (mo))
+#define ATOMIC_COMPARE_EXCHANGE(p, expected_ptr, desired, weak, s, f)       \
+                                    msvc_atomic_compare_exchange((p), (expected_ptr), (desired), (weak), (s), (f))
+
+#define ATOMIC_FETCH_ADD(p, v, mo) msvc_atomic_fetch_add((p), (v), (mo))
+#define ATOMIC_FETCH_SUB(p, v, mo) msvc_atomic_fetch_sub((p), (v), (mo))
+#define ATOMIC_FETCH_AND(p, v, mo) msvc_atomic_fetch_and((p), (v), (mo))
+#define ATOMIC_FETCH_OR(p, v, mo)  msvc_atomic_fetch_or((p), (v), (mo))
+#define ATOMIC_FETCH_XOR(p, v, mo) msvc_atomic_fetch_xor((p), (v), (mo))
+
+#define ATOMIC_THREAD_FENCE(mo) msvc_atomic_thread_fence((mo))
+#define ATOMIC_SIGNAL_FENCE(mo) msvc_atomic_signal_fence((mo))
 #else
 #error "Atomics not implemented for this compiler"
 #endif

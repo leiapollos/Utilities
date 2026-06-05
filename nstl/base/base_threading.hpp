@@ -93,6 +93,6 @@ struct ThreadContext {
     SPMDMembership* membership;
 };
 
-ThreadContext* thread_context_alloc();
-void thread_context_release();
-ThreadContext* thread_context();
+UTILITIES_SHARED_API ThreadContext* thread_context_alloc();
+UTILITIES_SHARED_API void thread_context_release();
+UTILITIES_SHARED_API ThreadContext* thread_context();

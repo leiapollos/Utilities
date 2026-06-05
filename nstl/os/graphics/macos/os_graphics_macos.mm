@@ -708,17 +708,6 @@ static void free_OS_graphics_entity(OS_MACOS_GraphicsEntity* entity) {
 // ////////////////////////
 // Graphics System
 
-B32 OS_graphics_has_metal_device() {
-    @autoreleasepool {
-        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-        B32 result = device ? 1 : 0;
-        if (device) {
-            [device release];
-        }
-        return result;
-    }
-}
-
 B32 OS_graphics_init() {
     if (g_OS_MacOSGraphicsState.initialized) {
         return 1;
@@ -826,16 +815,33 @@ OS_WindowHandle OS_window_create(OS_WindowDesc desc) {
         entity->window.windowDelegate = windowDelegate;
         [window setDelegate:windowDelegate];
 
-        [window makeKeyAndOrderFront:nil];
-        [NSApp activateIgnoringOtherApps:YES];
-
         entity->window.window = window;
 
-        os_push_window_event(entity, OS_GraphicsEvent_Tag_WindowShown, window);
+        if (!desc.hidden) {
+            OS_WindowHandle handle = {(U64*) entity};
+            OS_window_show(handle);
+        }
     }
 
     OS_WindowHandle handle = {(U64*) entity};
     return handle;
+}
+
+void OS_window_show(OS_WindowHandle windowHandle) {
+    if (!windowHandle.handle) {
+        return;
+    }
+
+    OS_MACOS_GraphicsEntity* entity = (OS_MACOS_GraphicsEntity*) windowHandle.handle;
+    if (entity->type != OS_MACOS_GraphicsEntityType_Window || !entity->window.window) {
+        return;
+    }
+
+    @autoreleasepool {
+        [entity->window.window makeKeyAndOrderFront:nil];
+        [NSApp activateIgnoringOtherApps:YES];
+        os_push_window_event(entity, OS_GraphicsEvent_Tag_WindowShown, entity->window.window);
+    }
 }
 
 void OS_window_destroy(OS_WindowHandle windowHandle) {
@@ -874,22 +880,8 @@ void OS_window_destroy(OS_WindowHandle windowHandle) {
     free_OS_graphics_entity(entity);
 }
 
-void* OS_window_get_native_handle(OS_WindowHandle windowHandle) {
-    if (!windowHandle.handle) {
-        return 0;
-    }
-
-    OS_MACOS_GraphicsEntity* entity = (OS_MACOS_GraphicsEntity*) windowHandle.handle;
-    if (entity->type != OS_MACOS_GraphicsEntityType_Window) {
-        return 0;
-    }
-
-    NSView* contentView = [entity->window.window contentView];
-    return (__bridge void*) contentView;
-}
-
-OS_WindowSurfaceInfo OS_window_get_surface_info(OS_WindowHandle windowHandle) {
-    OS_WindowSurfaceInfo info = {};
+OS_WindowInfo OS_window_get_info(OS_WindowHandle windowHandle) {
+    OS_WindowInfo info = {};
 
     if (!windowHandle.handle) {
         return info;
@@ -905,16 +897,7 @@ OS_WindowSurfaceInfo OS_window_get_surface_info(OS_WindowHandle windowHandle) {
     }
 
     @autoreleasepool {
-        NSView* contentView = [entity->window.window contentView];
-        if (contentView) {
-            info.viewPtr = (__bridge void*) contentView;
-            os_window_get_drawable_size(entity->window.window, &info.drawableWidth, &info.drawableHeight);
-
-            CALayer* layer = [contentView layer];
-            if (layer && [layer isKindOfClass:[CAMetalLayer class]]) {
-                info.metalLayerPtr = (__bridge void*) ((CAMetalLayer*) layer);
-            }
-        }
+        os_window_get_drawable_size(entity->window.window, &info.drawableWidth, &info.drawableHeight);
     }
 
     return info;

@@ -6,6 +6,9 @@
 
 #include <string.h>
 #include <stdarg.h>
+#if defined(COMPILER_MSVC)
+#include <intrin.h>
+#endif
 
 // ////////////////////////
 // Debug Break
@@ -129,7 +132,7 @@ struct RangeU64 {
 
 
 // ////////////////////////
-// Atomics (GCC/Clang)
+// Atomics
 
 #if defined(COMPILER_CLANG) || defined(COMPILER_GCC)
 #define MEMORY_ORDER_RELAXED __ATOMIC_RELAXED
@@ -142,6 +145,54 @@ struct RangeU64 {
 #define ATOMIC_STORE(p, v, mo)      __atomic_store_n((p), (v), (mo))
 #define ATOMIC_FETCH_ADD(p, v, mo)  __atomic_fetch_add((p), (v), (mo))
 #define ATOMIC_FETCH_SUB(p, v, mo)  __atomic_fetch_sub((p), (v), (mo))
+#elif defined(COMPILER_MSVC)
+#define MEMORY_ORDER_RELAXED 0
+#define MEMORY_ORDER_ACQUIRE 1
+#define MEMORY_ORDER_RELEASE 2
+#define MEMORY_ORDER_ACQ_REL 3
+#define MEMORY_ORDER_SEQ_CST 4
+
+template <typename T>
+FORCE_INLINE T msvc_atomic_load(T* ptr, int) {
+    static_assert(sizeof(T) == 4 || sizeof(T) == 8, "MSVC atomics support 32-bit and 64-bit values");
+    if constexpr (sizeof(T) == 8) {
+        return (T)_InterlockedCompareExchange64((volatile __int64*)ptr, 0, 0);
+    } else {
+        return (T)_InterlockedCompareExchange((volatile long*)ptr, 0, 0);
+    }
+}
+
+template <typename T, typename V>
+FORCE_INLINE void msvc_atomic_store(T* ptr, V value, int) {
+    static_assert(sizeof(T) == 4 || sizeof(T) == 8, "MSVC atomics support 32-bit and 64-bit values");
+    T typedValue = (T)value;
+    if constexpr (sizeof(T) == 8) {
+        _InterlockedExchange64((volatile __int64*)ptr, (__int64)typedValue);
+    } else {
+        _InterlockedExchange((volatile long*)ptr, (long)typedValue);
+    }
+}
+
+template <typename T, typename V>
+FORCE_INLINE T msvc_atomic_fetch_add(T* ptr, V value, int) {
+    static_assert(sizeof(T) == 4 || sizeof(T) == 8, "MSVC atomics support 32-bit and 64-bit values");
+    T typedValue = (T)value;
+    if constexpr (sizeof(T) == 8) {
+        return (T)_InterlockedExchangeAdd64((volatile __int64*)ptr, (__int64)typedValue);
+    } else {
+        return (T)_InterlockedExchangeAdd((volatile long*)ptr, (long)typedValue);
+    }
+}
+
+template <typename T, typename V>
+FORCE_INLINE T msvc_atomic_fetch_sub(T* ptr, V value, int order) {
+    return msvc_atomic_fetch_add(ptr, (T)(0 - (T)value), order);
+}
+
+#define ATOMIC_LOAD(p, mo)          msvc_atomic_load((p), (mo))
+#define ATOMIC_STORE(p, v, mo)      msvc_atomic_store((p), (v), (mo))
+#define ATOMIC_FETCH_ADD(p, v, mo)  msvc_atomic_fetch_add((p), (v), (mo))
+#define ATOMIC_FETCH_SUB(p, v, mo)  msvc_atomic_fetch_sub((p), (v), (mo))
 #else
 #error "Atomics not implemented for this compiler"
 #endif

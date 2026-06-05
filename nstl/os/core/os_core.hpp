@@ -12,45 +12,45 @@ struct OS_SystemInfo {
     U64 pageSize;
 };
 
-OS_SystemInfo* OS_get_system_info();
+UTILITIES_SHARED_API OS_SystemInfo* OS_get_system_info();
 
 
 // ////////////////////////
 // Executable Path
 
-StringU8 OS_get_executable_directory(Arena* arena);
+UTILITIES_SHARED_API StringU8 OS_get_executable_directory(Arena* arena);
 
 
 // ////////////////////////
 // Environment
 
-void OS_set_environment_variable(StringU8 name, StringU8 value);
-StringU8 OS_get_environment_variable(Arena* arena, StringU8 name);
+UTILITIES_SHARED_API void OS_set_environment_variable(StringU8 name, StringU8 value);
+UTILITIES_SHARED_API StringU8 OS_get_environment_variable(Arena* arena, StringU8 name);
 
 // ////////////////////////
 // Time
-U64 OS_get_time_microseconds();
-U64 OS_get_time_nanoseconds();
-U64 OS_get_counter_frequency_hz();
+UTILITIES_SHARED_API U64 OS_get_time_microseconds();
+UTILITIES_SHARED_API U64 OS_get_time_nanoseconds();
+UTILITIES_SHARED_API U64 OS_get_counter_frequency_hz();
 
-U64 OS_rdtsc_relaxed();
-U64 OS_rdtscp_serialized();
+UTILITIES_SHARED_API U64 OS_rdtsc_relaxed();
+UTILITIES_SHARED_API U64 OS_rdtscp_serialized();
 
-void OS_sleep_milliseconds(U32 milliseconds);
+UTILITIES_SHARED_API void OS_sleep_milliseconds(U32 milliseconds);
 
 // ////////////////////////
 // Aborting
 
-void OS_abort(S32 exit_code);
+UTILITIES_SHARED_API void OS_abort(S32 exit_code);
 
 
 // ////////////////////////
 // Memory allocation
 
-void* OS_reserve(U64 size);
-B32 OS_commit(void* addr, U64 size);
-void OS_decommit(void* addr, U64 size);
-void OS_release(void* addr, U64 size);
+UTILITIES_SHARED_API void* OS_reserve(U64 size);
+UTILITIES_SHARED_API B32 OS_commit(void* addr, U64 size);
+UTILITIES_SHARED_API void OS_decommit(void* addr, U64 size);
+UTILITIES_SHARED_API void OS_release(void* addr, U64 size);
 
 
 // ////////////////////////
@@ -64,36 +64,36 @@ typedef struct OS_SharedLibrary {
     void* handle;
 } OS_SharedLibrary;
 
-B32 OS_library_open(StringU8 path, OS_SharedLibrary* outLibrary);
-void OS_library_close(OS_SharedLibrary library);
-void* OS_library_load_symbol(OS_SharedLibrary library, StringU8 symbolName);
-StringU8 OS_library_last_error(Arena* arena);
+UTILITIES_SHARED_API B32 OS_library_open(StringU8 path, OS_SharedLibrary* outLibrary);
+UTILITIES_SHARED_API void OS_library_close(OS_SharedLibrary library);
+UTILITIES_SHARED_API void* OS_library_load_symbol(OS_SharedLibrary library, StringU8 symbolName);
+UTILITIES_SHARED_API StringU8 OS_library_last_error(Arena* arena);
 
-S32 OS_execute(StringU8 command);
+UTILITIES_SHARED_API S32 OS_execute(StringU8 command);
 
 typedef void OS_ThreadFunc(void* ptr);
 
-OS_Handle OS_thread_create(OS_ThreadFunc* func, void* arg);
-B32 OS_thread_join(OS_Handle thread);
-void OS_thread_detach(OS_Handle thread);
-void OS_thread_yield();
-void OS_cpu_pause();
+UTILITIES_SHARED_API OS_Handle OS_thread_create(OS_ThreadFunc* func, void* arg);
+UTILITIES_SHARED_API B32 OS_thread_join(OS_Handle thread);
+UTILITIES_SHARED_API void OS_thread_detach(OS_Handle thread);
+UTILITIES_SHARED_API void OS_thread_yield();
+UTILITIES_SHARED_API void OS_cpu_pause();
 
-U32 OS_get_thread_id_u32();
-OS_Handle OS_mutex_create();
-void OS_mutex_destroy(OS_Handle mutex);
-void OS_mutex_lock(OS_Handle mutex);
-void OS_mutex_unlock(OS_Handle mutex);
+UTILITIES_SHARED_API U32 OS_get_thread_id_u32();
+UTILITIES_SHARED_API OS_Handle OS_mutex_create();
+UTILITIES_SHARED_API void OS_mutex_destroy(OS_Handle mutex);
+UTILITIES_SHARED_API void OS_mutex_lock(OS_Handle mutex);
+UTILITIES_SHARED_API void OS_mutex_unlock(OS_Handle mutex);
 
-OS_Handle OS_condition_variable_create();
-void OS_condition_variable_destroy(OS_Handle conditionVariable);
-void OS_condition_variable_wait(OS_Handle conditionVariable, OS_Handle mutex);
-void OS_condition_variable_signal(OS_Handle conditionVariable);
-void OS_condition_variable_broadcast(OS_Handle conditionVariable);
+UTILITIES_SHARED_API OS_Handle OS_condition_variable_create();
+UTILITIES_SHARED_API void OS_condition_variable_destroy(OS_Handle conditionVariable);
+UTILITIES_SHARED_API void OS_condition_variable_wait(OS_Handle conditionVariable, OS_Handle mutex);
+UTILITIES_SHARED_API void OS_condition_variable_signal(OS_Handle conditionVariable);
+UTILITIES_SHARED_API void OS_condition_variable_broadcast(OS_Handle conditionVariable);
 
-OS_Handle OS_barrier_create(U32 threadCount);
-void OS_barrier_destroy(OS_Handle barrier);
-void OS_barrier_wait(OS_Handle barrier);
+UTILITIES_SHARED_API OS_Handle OS_barrier_create(U32 threadCount);
+UTILITIES_SHARED_API void OS_barrier_destroy(OS_Handle barrier);
+UTILITIES_SHARED_API void OS_barrier_wait(OS_Handle barrier);
 
 // ////////////////////////
 // File I/O
@@ -115,20 +115,20 @@ struct OS_FileInfo {
     U64 lastWriteTimestampNs;
 };
 
-OS_Handle OS_file_open(const char* path, OS_FileOpenMode mode);
-void OS_file_close(OS_Handle h);
-U64 OS_file_read(OS_Handle h, RangeU64 range, void* dst);
-U64 OS_file_read(OS_Handle fileHandle, U64 size, void* dst);
-U64 OS_file_write(OS_Handle h, RangeU64 range, const void* src);
-U64 OS_file_write(OS_Handle h, U64 size, const void* src);
-U64 OS_file_size(OS_Handle h);
-OS_FileMapping OS_file_map_ro(OS_Handle h);
-void OS_file_unmap(OS_FileMapping m);
-OS_FileInfo OS_get_file_info(const char* path);
-B32 OS_file_copy_contents(const char* srcPath, const char* dstPath);
-OS_Handle OS_get_log_handle();
+UTILITIES_SHARED_API OS_Handle OS_file_open(const char* path, OS_FileOpenMode mode);
+UTILITIES_SHARED_API void OS_file_close(OS_Handle h);
+UTILITIES_SHARED_API U64 OS_file_read(OS_Handle h, RangeU64 range, void* dst);
+UTILITIES_SHARED_API U64 OS_file_read(OS_Handle fileHandle, U64 size, void* dst);
+UTILITIES_SHARED_API U64 OS_file_write(OS_Handle h, RangeU64 range, const void* src);
+UTILITIES_SHARED_API U64 OS_file_write(OS_Handle h, U64 size, const void* src);
+UTILITIES_SHARED_API U64 OS_file_size(OS_Handle h);
+UTILITIES_SHARED_API OS_FileMapping OS_file_map_ro(OS_Handle h);
+UTILITIES_SHARED_API void OS_file_unmap(OS_FileMapping m);
+UTILITIES_SHARED_API OS_FileInfo OS_get_file_info(const char* path);
+UTILITIES_SHARED_API B32 OS_file_copy_contents(const char* srcPath, const char* dstPath);
+UTILITIES_SHARED_API OS_Handle OS_get_log_handle();
 
-B32 OS_terminal_supports_color();
+UTILITIES_SHARED_API B32 OS_terminal_supports_color();
 
 enum OS_FileHintFlags {
     OS_FileHint_None = 0,
@@ -136,7 +136,7 @@ enum OS_FileHintFlags {
     OS_FileHint_Sequential = (1ull << 1),
 };
 
-void OS_file_set_hints(OS_Handle h, U64 hints);
+UTILITIES_SHARED_API void OS_file_set_hints(OS_Handle h, U64 hints);
 
 
 // ////////////////////////

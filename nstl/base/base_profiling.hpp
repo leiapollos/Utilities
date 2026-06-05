@@ -85,23 +85,23 @@ struct ProfClock {
     static U64 to_micros(U64 ticksOrMicros);
 };
 
-void profiler_init_thread(const char* name, U32 traceEventCapacityIfEnabled);
-void profiler_set_thread_name(const char* name);
-struct ProfilerThreadState* profiler_get_tls();
+UTILITIES_SHARED_API void profiler_init_thread(const char* name, U32 traceEventCapacityIfEnabled);
+UTILITIES_SHARED_API void profiler_set_thread_name(const char* name);
+UTILITIES_SHARED_API struct ProfilerThreadState* profiler_get_tls();
 
 struct TimedScope {
     U32 index;
     U32 prevParent;
     U64 startTicks;
 
-    TimedScope(U32 index_, const char* label_) noexcept;
-    ~TimedScope() noexcept;
+    UTILITIES_SHARED_API TimedScope(U32 index_, const char* label_) noexcept;
+    UTILITIES_SHARED_API ~TimedScope() noexcept;
 };
 
-void profiler_initialize();
-void profiler_shutdown();
-void profiler_print_report();
-void profiler_dump_trace_json(const char* path);
+UTILITIES_SHARED_API void profiler_initialize();
+UTILITIES_SHARED_API void profiler_shutdown();
+UTILITIES_SHARED_API void profiler_print_report();
+UTILITIES_SHARED_API void profiler_dump_trace_json(const char* path);
 
 #else
 

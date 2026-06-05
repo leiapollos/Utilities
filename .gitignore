@@ -28,6 +28,11 @@ x86/
 [Aa][Rr][Mm]64/
 bld/
 [Bb]in/
+!third_party/vulkan/bin/
+!third_party/vulkan/bin/win64/
+!third_party/vulkan/bin/win64/glslc.exe
+!third_party/vulkan/bin/win64/shaderc_shared.dll
+!third_party/vulkan/bin/win64/SPIRV-Tools-shared.dll
 [Oo]bj/
 [Ll]og/
 [Ll]ogs/
@@ -411,3 +416,4 @@ Utilities
 
 # sob bootstrap executable
 /sob
+/sob.exe

@@ -48,6 +48,18 @@
 #endif
 
 // -----------------------------------------------------------------------------
+// Shared Runtime Boundary
+// -----------------------------------------------------------------------------
+
+#if defined(PLATFORM_OS_WINDOWS) && defined(UTILITIES_SHARED_EXPORT)
+#define UTILITIES_SHARED_API __declspec(dllexport)
+#elif defined(PLATFORM_OS_WINDOWS) && defined(UTILITIES_SHARED_IMPORT)
+#define UTILITIES_SHARED_API __declspec(dllimport)
+#else
+#define UTILITIES_SHARED_API
+#endif
+
+// -----------------------------------------------------------------------------
 // Build Configuration
 // -----------------------------------------------------------------------------
 
