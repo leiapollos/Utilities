@@ -35,9 +35,20 @@ struct AppCoreState {
     Arena* resourceArena;
     ArtifactCache* resourceCache;
     ArtifactHandle gfxTriangleShader;
+    ArtifactHandle gfxDemoComputeShader;
+    ArtifactHandle gfxDemoTextureSource;
     GfxBuffer gfxTriangleVertexBuffer;
     GfxBuffer gfxTriangleIndexBuffer;
     GfxPipeline gfxTrianglePipeline;
+    GfxPipeline gfxDemoComputePipeline;
+    GfxTexture gfxDemoTexture;
+    GfxSampler gfxDemoSampler;
+    GfxBuffer gfxDemoMaterialBuffer;
+    GfxResourceId gfxDemoTextureId;
+    GfxResourceId gfxDemoSamplerId;
+    U32 gfxDemoMaterialCount;
+    B32 gfxDemoTextureUploaded;
+    B32 gfxDemoMaterialsUploaded;
 };
 
 struct APP_Context {

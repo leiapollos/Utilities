@@ -2,7 +2,10 @@
 
 #define GFX_MAX_COLOR_TARGETS 4u
 #define GFX_SHADER_SLOT_DRAW_DATA 8u
+#define GFX_SHADER_SLOT_DISPATCH_DATA GFX_SHADER_SLOT_DRAW_DATA
 #define GFX_SHADER_SLOT_RESOURCE_TABLE 9u
+#define GFX_SHADER_SLOT_PASS_DATA 10u
+#define GFX_TEXTURE_UPLOAD_BYTES_PER_ROW_ALIGNMENT 256u
 
 struct GfxDevice;
 struct GfxFrame;
@@ -79,6 +82,7 @@ enum GfxTextureUsageFlags {
     GfxTextureUsageFlags_Sampled     = (1u << 2),
     GfxTextureUsageFlags_Storage     = (1u << 3),
     GfxTextureUsageFlags_Transient   = (1u << 4),
+    GfxTextureUsageFlags_CopyDst     = (1u << 5),
 };
 
 enum GfxLoadOp {
@@ -171,6 +175,20 @@ struct GfxTextureDesc {
     U32 usageFlags;
 };
 
+struct GfxTextureUploadRegion {
+    U32 mip;
+    U32 layer;
+    U32 layerCount;
+    U32 x;
+    U32 y;
+    U32 z;
+    U32 width;
+    U32 height;
+    U32 depth;
+    U64 bytesPerRow;
+    U32 rowsPerImage;
+};
+
 struct GfxSamplerDesc {
     const char* name;
     GfxFilter minFilter;
@@ -222,6 +240,14 @@ struct GfxGraphicsPipelineDesc {
     GfxFormat depthFormat;
 };
 
+struct GfxComputePipelineDesc {
+    const char* name;
+    GfxShaderCode shader;
+    U32 threadsPerThreadgroupX;
+    U32 threadsPerThreadgroupY;
+    U32 threadsPerThreadgroupZ;
+};
+
 struct GfxViewport {
     F32 x;
     F32 y;
@@ -259,6 +285,14 @@ struct GfxDrawArea {
     U32 drawCount;
 };
 
+struct GfxDispatch {
+    GfxPipeline pipeline;
+    GfxGpuSlice dispatchData;
+    U32 groupsX;
+    U32 groupsY;
+    U32 groupsZ;
+};
+
 struct GfxColorTarget {
     GfxTexture texture;
     GfxLoadOp loadOp;
@@ -278,12 +312,19 @@ struct GfxRenderPassDesc {
     const GfxColorTarget* colorTargets;
     U32 colorTargetCount;
     const GfxDepthTarget* depthTarget;
+    GfxGpuSlice passData;
     U32 width;
     U32 height;
 };
 
+struct GfxComputePassDesc {
+    const char* name;
+    GfxGpuSlice passData;
+};
+
 struct GfxStats {
     U32 drawCount;
+    U32 dispatchCount;
     U32 pipelineSwitchCount;
     U32 resourceTableCount;
     U32 tempOverflowCount;
@@ -300,6 +341,7 @@ GfxBuffer gfx_create_buffer(GfxDevice* device, const GfxBufferDesc* desc);
 GfxTexture gfx_create_texture(GfxDevice* device, const GfxTextureDesc* desc);
 GfxSampler gfx_create_sampler(GfxDevice* device, const GfxSamplerDesc* desc);
 GfxPipeline gfx_create_graphics_pipeline(GfxDevice* device, const GfxGraphicsPipelineDesc* desc);
+GfxPipeline gfx_create_compute_pipeline(GfxDevice* device, const GfxComputePipelineDesc* desc);
 void gfx_destroy_buffer(GfxDevice* device, GfxBuffer buffer);
 void gfx_destroy_texture(GfxDevice* device, GfxTexture texture);
 void gfx_destroy_sampler(GfxDevice* device, GfxSampler sampler);
@@ -314,8 +356,10 @@ GfxCommandBuffer* gfx_get_command_buffer(GfxFrame* frame);
 GfxTexture gfx_get_backbuffer(GfxFrame* frame);
 GfxTemp gfx_allocate_temp(GfxFrame* frame, U64 size, U64 alignment);
 void gfx_upload_buffer(GfxFrame* frame, GfxBuffer dst, U64 dstOffset, const void* src, U64 size);
+void gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRegion* region, const void* src);
 
 void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, const GfxDrawArea* areas, U32 areaCount);
+void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc, const GfxDispatch* dispatches, U32 dispatchCount);
 void gfx_submit(GfxCommandBuffer* commands);
 void gfx_end_frame(GfxFrame* frame);
 GfxStats gfx_get_stats(GfxDevice* device);
