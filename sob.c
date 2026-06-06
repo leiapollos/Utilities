@@ -36,6 +36,9 @@
 #define METAGEN_INPUT_PATH ".."
 #endif
 
+#define SOB_STRINGIZE_(x) #x
+#define SOB_STRINGIZE(x) SOB_STRINGIZE_(x)
+
 #if SOB_WINDOWS
 #define SOB_REBUILT_EXE_PATH "build\\tools\\sob_rebuilt.exe"
 #define SOB_REBUILT_OBJ_PATH "build\\tools\\sob_rebuilt.obj"
@@ -47,10 +50,15 @@
 #define VULKAN_VENDOR_LOADER_GENERATED_DIR VULKAN_VENDOR_LOADER_DIR "/generated"
 #define VULKAN_VENDOR_LIB_DIR VULKAN_VENDOR_ROOT "/lib/win64"
 #define VULKAN_VENDOR_STATIC_LOADER_LIB VULKAN_VENDOR_LIB_DIR "/VKstatic.1.lib"
-#define VULKAN_VENDOR_GLSLC_PATH VULKAN_VENDOR_ROOT "/bin/win64/glslc.exe"
-#define VULKAN_VENDOR_SHADERC_DLL VULKAN_VENDOR_ROOT "/bin/win64/shaderc_shared.dll"
-#define VULKAN_VENDOR_SPIRV_TOOLS_DLL VULKAN_VENDOR_ROOT "/bin/win64/SPIRV-Tools-shared.dll"
 #define VULKAN_LOADER_OBJ_DIR BUILD_TOOLS_DIR "/vulkan_loader"
+#endif
+
+#if SOB_WINDOWS
+#define SLANG_VENDOR_PATH "third_party/slang/bin/win64/slangc.exe"
+#elif SOB_MACOS
+#define SLANG_VENDOR_PATH "third_party/slang/bin/macos/slangc"
+#else
+#define SLANG_VENDOR_PATH "third_party/slang/bin/linux/slangc"
 #endif
 
 typedef enum BuildMode {
@@ -428,7 +436,7 @@ static U64 newest_sob_input_mtime(void) {
     if (sobHeaderTime > result) {
         result = sobHeaderTime;
     }
-    U64 shaderManifestTime = sob_fs_mtime("app/shaders/shader_manifest.h");
+    U64 shaderManifestTime = sob_fs_mtime(APP_SHADER_MANIFEST_SOURCE);
     if (shaderManifestTime > result) {
         result = shaderManifestTime;
     }
@@ -923,65 +931,151 @@ static int configure_windows_vulkan_vendor(Sob_Arena* arena, Sob_Target* target)
     sob_target_link(target, VULKAN_VENDOR_STATIC_LOADER_LIB, .kind = Sob_LibKind_Static);
     return 1;
 }
+#endif
 
-static int build_windows_vulkan_shaders(Sob_Arena* arena) {
+static const char* find_slangc_path(void) {
+    const char* envPath = getenv("SLANGC");
+    if (envPath && envPath[0] != 0) {
+        return envPath;
+    }
+    if (sob_fs_exists(SLANG_VENDOR_PATH)) {
+        return SLANG_VENDOR_PATH;
+    }
+    return "slangc";
+}
+
+static U64 newest_shader_input_mtime(void) {
+    U64 result = sob_fs_mtime(APP_SHADER_MANIFEST_SOURCE);
+
+#define SHADER_INPUT_MTIME(name, source) \
+    do { \
+        U64 sourceTime = sob_fs_mtime(source); \
+        if (sourceTime > result) { \
+            result = sourceTime; \
+        } \
+    } while (0);
+    APP_SHADER_SOURCE_LIST(SHADER_INPUT_MTIME)
+#undef SHADER_INPUT_MTIME
+
+    return result;
+}
+
+static int verify_shader_inputs_exist(void) {
+    int result = 1;
+#define SHADER_INPUT_EXISTS(name, source) \
+    do { \
+        if (!sob_fs_exists(source)) { \
+            fprintf(stderr, "Error: shader source missing: '%s'\n", source); \
+            result = 0; \
+        } \
+    } while (0);
+    APP_SHADER_SOURCE_LIST(SHADER_INPUT_EXISTS)
+#undef SHADER_INPUT_EXISTS
+    return result;
+}
+
+static int build_slang_shaders(Sob_Arena* arena) {
     if (!arena) {
         return 1;
     }
 
-    if (!windows_require_vulkan_vendor_file(VULKAN_VENDOR_GLSLC_PATH, "shader compiler") ||
-        !windows_require_vulkan_vendor_file(VULKAN_VENDOR_SHADERC_DLL, "shader compiler DLL") ||
-        !windows_require_vulkan_vendor_file(VULKAN_VENDOR_SPIRV_TOOLS_DLL, "shader compiler DLL")) {
+    if (!verify_shader_inputs_exist()) {
         return 1;
     }
 
-    if (sob_fs_mkdir_p(APP_SHADER_VULKAN_OUTPUT_DIR) != 0 &&
-        !sob_fs_is_dir(APP_SHADER_VULKAN_OUTPUT_DIR)) {
-        fprintf(stderr, "Error: failed to create '%s'\n", APP_SHADER_VULKAN_OUTPUT_DIR);
+    if (sob_fs_mkdir_p(APP_SHADER_OUTPUT_DIR) != 0 &&
+        !sob_fs_is_dir(APP_SHADER_OUTPUT_DIR)) {
+        fprintf(stderr, "Error: failed to create '%s'\n", APP_SHADER_OUTPUT_DIR);
         return 1;
     }
 
     struct ShaderBuildItem {
         const char* src;
         const char* dst;
+        const char* entry;
+        const char* stage;
+        const char* stageKind;
     };
-#define SHADER_BUILD_ITEM(name, source, output) {source, output},
+#define SHADER_BUILD_ITEM(name, source, output, entry, stage, stageKind) \
+    {source, output, entry, SOB_STRINGIZE(stage), SOB_STRINGIZE(stageKind)},
     static const struct ShaderBuildItem shaders[] = {
-        APP_SHADER_VULKAN_LIST(SHADER_BUILD_ITEM)
+#if SOB_WINDOWS
+        APP_SHADER_VULKAN_OUTPUT_LIST(SHADER_BUILD_ITEM)
+#elif SOB_MACOS
+        APP_SHADER_METAL_OUTPUT_LIST(SHADER_BUILD_ITEM)
+#else
+#error No shader build backend configured for this platform.
+#endif
     };
 #undef SHADER_BUILD_ITEM
 
+    const char* slangcPath = find_slangc_path();
+    U64 inputTime = newest_shader_input_mtime();
     for (S32 i = 0; i < (S32)(sizeof(shaders) / sizeof(shaders[0])); ++i) {
-        U64 srcTime = sob_fs_mtime(shaders[i].src);
         U64 dstTime = sob_fs_mtime(shaders[i].dst);
-        if (srcTime == 0u) {
-            fprintf(stderr, "Error: Vulkan shader source missing: '%s'\n", shaders[i].src);
-            return 1;
-        }
-        if (dstTime != 0u && dstTime >= srcTime) {
+        if (dstTime != 0u && dstTime >= inputTime) {
             continue;
         }
+
+        char tempPath[1024];
+        snprintf(tempPath, sizeof(tempPath), "%s.tmp", shaders[i].dst);
+        sob_fs_remove(tempPath);
 
         Sob_Cmd* cmd = sob_cmd_create(arena);
         if (!cmd) {
             return 1;
         }
 
-        sob_cmd_append(cmd, VULKAN_VENDOR_GLSLC_PATH);
+        sob_cmd_append(cmd, slangcPath);
         sob_cmd_append(cmd, shaders[i].src);
+        sob_cmd_append(cmd, "-I");
+        sob_cmd_append(cmd, "app/shaders");
+#if SOB_WINDOWS
+        sob_cmd_append(cmd, "-DGFX_SHADER_TARGET_VULKAN=1");
+        sob_cmd_append(cmd, "-target");
+        sob_cmd_append(cmd, "spirv");
+        sob_cmd_append(cmd, "-profile");
+        sob_cmd_append(cmd, "glsl_450");
+        sob_cmd_append(cmd, "-fvk-use-entrypoint-name");
+#elif SOB_MACOS
+        sob_cmd_append(cmd, "-DGFX_SHADER_TARGET_METAL=1");
+        sob_cmd_append(cmd, "-target");
+        sob_cmd_append(cmd, "metal");
+        sob_cmd_append(cmd, "-profile");
+        sob_cmd_append(cmd, "sm_6_0");
+#else
+#error No shader compiler target configured for this platform.
+#endif
+        if (strcmp(shaders[i].stageKind, "compute") == 0) {
+            sob_cmd_append(cmd, "-DGFX_SHADER_STAGE_COMPUTE=1");
+        } else {
+            sob_cmd_append(cmd, "-DGFX_SHADER_STAGE_GRAPHICS=1");
+        }
+        sob_cmd_append(cmd, "-warnings-disable");
+        sob_cmd_append(cmd, "39029");
+        sob_cmd_append(cmd, "-entry");
+        sob_cmd_append(cmd, shaders[i].entry);
+        sob_cmd_append(cmd, "-stage");
+        sob_cmd_append(cmd, shaders[i].stage);
         sob_cmd_append(cmd, "-o");
-        sob_cmd_append(cmd, shaders[i].dst);
+        sob_cmd_append(cmd, tempPath);
 
-        printf("==> Compiling Vulkan shader %s -> %s\n", shaders[i].src, shaders[i].dst);
+        printf("==> Compiling shader %s:%s -> %s\n", shaders[i].src, shaders[i].entry, shaders[i].dst);
         S32 result = sob_cmd_run(cmd);
         if (result != 0) {
+            sob_fs_remove(tempPath);
             return result;
         }
+        if (sob_fs_copy(tempPath, shaders[i].dst) != 0) {
+            sob_fs_remove(tempPath);
+            fprintf(stderr, "Error: failed to publish shader output '%s'\n", shaders[i].dst);
+            return 1;
+        }
+        sob_fs_remove(tempPath);
     }
 
     return 0;
 }
-#endif
 
 static int configure_runtime_executable(Sob_Arena* arena, Sob_Target* target, BuildMode mode) {
 #if !SOB_WINDOWS
@@ -1129,19 +1223,11 @@ static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
         return 1;
     }
 
-#if SOB_WINDOWS
     if (requestedTarget == BuildTarget_Shaders) {
-        S32 shaderResult = build_windows_vulkan_shaders(arena);
+        S32 shaderResult = build_slang_shaders(arena);
         sob_arena_destroy(arena);
         return shaderResult;
     }
-#else
-    if (requestedTarget == BuildTarget_Shaders) {
-        printf("==> No shader build step required on this platform.\n");
-        sob_arena_destroy(arena);
-        return 0;
-    }
-#endif
 
     Sob_BuildContext* ctx = sob_build_create(arena);
     if (!ctx) {
@@ -1152,15 +1238,13 @@ static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
 
     configure_compiler_for_mode(ctx, mode);
 
-#if SOB_WINDOWS
     if (requestedTarget == BuildTarget_Ship) {
-        S32 shaderResult = build_windows_vulkan_shaders(arena);
+        S32 shaderResult = build_slang_shaders(arena);
         if (shaderResult != 0) {
             sob_arena_destroy(arena);
             return shaderResult;
         }
     }
-#endif
 
     if (requestedTarget == BuildTarget_Module || requestedTarget == BuildTarget_All ||
         requestedTarget == BuildTarget_Dev) {
@@ -1305,15 +1389,15 @@ static S32 build_dev_targets_parallel(BuildMode mode, const char* selfPath) {
 }
 
 static S32 build_dev_targets(BuildMode mode, const char* selfPath) {
-#if SOB_WINDOWS
-    (void)selfPath;
-    printf("==> Building dev (%s): host then module...\n", build_mode_name(mode));
-    fflush(stdout);
-
     S32 shaderResult = build_project_targets(BuildTarget_Shaders, mode);
     if (shaderResult != 0) {
         return shaderResult;
     }
+
+#if SOB_WINDOWS
+    (void)selfPath;
+    printf("==> Building dev (%s): host then module...\n", build_mode_name(mode));
+    fflush(stdout);
 
     S32 hostResult = build_project_targets(BuildTarget_Host, mode);
     if (hostResult != 0) {

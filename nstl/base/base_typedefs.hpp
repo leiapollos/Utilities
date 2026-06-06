@@ -5,6 +5,7 @@
 #pragma once
 
 #define __STDC_LIMIT_MACROS
+#include <stddef.h>
 #include <stdint.h>
 
 typedef int8_t S8;

@@ -300,6 +300,44 @@ struct GfxDispatch {
     U32 groupsZ;
 };
 
+enum GfxStageFlags {
+    GfxStageFlags_None     = 0,
+    GfxStageFlags_Vertex   = (1u << 0),
+    GfxStageFlags_Fragment = (1u << 1),
+    GfxStageFlags_Compute  = (1u << 2),
+};
+
+enum GfxAccessFlags {
+    GfxAccessFlags_None  = 0,
+    GfxAccessFlags_Read  = (1u << 0),
+    GfxAccessFlags_Write = (1u << 1),
+};
+
+struct GfxBufferBinding {
+    U32 slot;
+    GfxGpuSlice slice;
+    U32 stages;
+    U32 access;
+};
+
+FORCE_INLINE GfxBufferBinding gfx_buffer_read(U32 slot, GfxGpuSlice slice, U32 stages) {
+    GfxBufferBinding result = {};
+    result.slot = slot;
+    result.slice = slice;
+    result.stages = stages;
+    result.access = GfxAccessFlags_Read;
+    return result;
+}
+
+FORCE_INLINE GfxBufferBinding gfx_buffer_write(U32 slot, GfxGpuSlice slice, U32 stages) {
+    GfxBufferBinding result = {};
+    result.slot = slot;
+    result.slice = slice;
+    result.stages = stages;
+    result.access = GfxAccessFlags_Write;
+    return result;
+}
+
 struct GfxColorTarget {
     GfxTexture texture;
     GfxLoadOp loadOp;
@@ -319,14 +357,16 @@ struct GfxRenderPassDesc {
     const GfxColorTarget* colorTargets;
     U32 colorTargetCount;
     const GfxDepthTarget* depthTarget;
-    GfxGpuSlice passData;
+    const GfxBufferBinding* bufferBindings;
+    U32 bufferBindingCount;
     U32 width;
     U32 height;
 };
 
 struct GfxComputePassDesc {
     const char* name;
-    GfxGpuSlice passData;
+    const GfxBufferBinding* bufferBindings;
+    U32 bufferBindingCount;
 };
 
 struct GfxStats {

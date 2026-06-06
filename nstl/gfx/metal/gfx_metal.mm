@@ -8,10 +8,10 @@
 #define GFX_METAL_RESOURCE_TABLE_CAPACITY 256u
 #define GFX_METAL_RESOURCE_TABLE_TEXTURE_BASE 0u
 #define GFX_METAL_RESOURCE_TABLE_SAMPLER_BASE GFX_METAL_RESOURCE_TABLE_CAPACITY
-#define GFX_METAL_RETIRED_BUFFER_CAPACITY 512u
-#define GFX_METAL_RETIRED_TEXTURE_CAPACITY 256u
-#define GFX_METAL_RETIRED_SAMPLER_CAPACITY 256u
-#define GFX_METAL_RETIRED_PIPELINE_CAPACITY 256u
+#define GFX_METAL_INITIAL_RETIRED_BUFFER_CAPACITY 512u
+#define GFX_METAL_INITIAL_RETIRED_TEXTURE_CAPACITY 256u
+#define GFX_METAL_INITIAL_RETIRED_SAMPLER_CAPACITY 256u
+#define GFX_METAL_INITIAL_RETIRED_PIPELINE_CAPACITY 256u
 
 enum GfxMetalResourceKind {
     GfxMetalResourceKind_Invalid = 0,
@@ -143,12 +143,16 @@ struct GfxDevice {
 
     GfxMetalRetiredBuffer* retiredBuffers;
     U32 retiredBufferCount;
+    U32 retiredBufferCapacity;
     GfxMetalRetiredTexture* retiredTextures;
     U32 retiredTextureCount;
+    U32 retiredTextureCapacity;
     GfxMetalRetiredSampler* retiredSamplers;
     U32 retiredSamplerCount;
+    U32 retiredSamplerCapacity;
     GfxMetalRetiredPipeline* retiredPipelines;
     U32 retiredPipelineCount;
+    U32 retiredPipelineCapacity;
 
     GfxTexture backbuffer;
     U32 drawableWidth;
@@ -191,6 +195,10 @@ static void gfx_metal_retire_texture(GfxDevice* device, GfxMetalTexture* item);
 static void gfx_metal_retire_sampler(GfxDevice* device, GfxMetalSampler* item);
 static void gfx_metal_retire_pipeline(GfxDevice* device, GfxMetalPipeline* item);
 static void gfx_metal_drain_retired(GfxDevice* device);
+static B32 gfx_metal_retired_buffers_reserve(GfxDevice* device, U32 neededCapacity);
+static B32 gfx_metal_retired_textures_reserve(GfxDevice* device, U32 neededCapacity);
+static B32 gfx_metal_retired_samplers_reserve(GfxDevice* device, U32 neededCapacity);
+static B32 gfx_metal_retired_pipelines_reserve(GfxDevice* device, U32 neededCapacity);
 static GfxBuffer gfx_metal_create_buffer_internal(GfxDevice* device, const GfxBufferDesc* desc, B32 internal);
 static B32 gfx_metal_resource_table_init(GfxDevice* device);
 static void gfx_metal_resource_table_set_texture(GfxDevice* device, GfxResourceId resourceId, id<MTLTexture> texture);
@@ -786,6 +794,106 @@ static void gfx_metal_release_retired_pipeline(GfxMetalRetiredPipeline* item) {
     }
 }
 
+static B32 gfx_metal_retired_buffers_reserve(GfxDevice* device, U32 neededCapacity) {
+    if (!device) {
+        return 0;
+    }
+    if (neededCapacity <= device->retiredBufferCapacity) {
+        return 1;
+    }
+
+    U32 newCapacity = device->retiredBufferCapacity ? device->retiredBufferCapacity * 2u : GFX_METAL_INITIAL_RETIRED_BUFFER_CAPACITY;
+    while (newCapacity < neededCapacity) {
+        newCapacity *= 2u;
+    }
+    GfxMetalRetiredBuffer* newItems = ARENA_PUSH_ARRAY(device->arena, GfxMetalRetiredBuffer, newCapacity);
+    if (!newItems) {
+        return 0;
+    }
+    MEMSET(newItems, 0, sizeof(GfxMetalRetiredBuffer) * newCapacity);
+    if (device->retiredBuffers && device->retiredBufferCount != 0u) {
+        MEMCPY(newItems, device->retiredBuffers, sizeof(GfxMetalRetiredBuffer) * device->retiredBufferCount);
+    }
+    device->retiredBuffers = newItems;
+    device->retiredBufferCapacity = newCapacity;
+    return 1;
+}
+
+static B32 gfx_metal_retired_textures_reserve(GfxDevice* device, U32 neededCapacity) {
+    if (!device) {
+        return 0;
+    }
+    if (neededCapacity <= device->retiredTextureCapacity) {
+        return 1;
+    }
+
+    U32 newCapacity = device->retiredTextureCapacity ? device->retiredTextureCapacity * 2u : GFX_METAL_INITIAL_RETIRED_TEXTURE_CAPACITY;
+    while (newCapacity < neededCapacity) {
+        newCapacity *= 2u;
+    }
+    GfxMetalRetiredTexture* newItems = ARENA_PUSH_ARRAY(device->arena, GfxMetalRetiredTexture, newCapacity);
+    if (!newItems) {
+        return 0;
+    }
+    MEMSET(newItems, 0, sizeof(GfxMetalRetiredTexture) * newCapacity);
+    if (device->retiredTextures && device->retiredTextureCount != 0u) {
+        MEMCPY(newItems, device->retiredTextures, sizeof(GfxMetalRetiredTexture) * device->retiredTextureCount);
+    }
+    device->retiredTextures = newItems;
+    device->retiredTextureCapacity = newCapacity;
+    return 1;
+}
+
+static B32 gfx_metal_retired_samplers_reserve(GfxDevice* device, U32 neededCapacity) {
+    if (!device) {
+        return 0;
+    }
+    if (neededCapacity <= device->retiredSamplerCapacity) {
+        return 1;
+    }
+
+    U32 newCapacity = device->retiredSamplerCapacity ? device->retiredSamplerCapacity * 2u : GFX_METAL_INITIAL_RETIRED_SAMPLER_CAPACITY;
+    while (newCapacity < neededCapacity) {
+        newCapacity *= 2u;
+    }
+    GfxMetalRetiredSampler* newItems = ARENA_PUSH_ARRAY(device->arena, GfxMetalRetiredSampler, newCapacity);
+    if (!newItems) {
+        return 0;
+    }
+    MEMSET(newItems, 0, sizeof(GfxMetalRetiredSampler) * newCapacity);
+    if (device->retiredSamplers && device->retiredSamplerCount != 0u) {
+        MEMCPY(newItems, device->retiredSamplers, sizeof(GfxMetalRetiredSampler) * device->retiredSamplerCount);
+    }
+    device->retiredSamplers = newItems;
+    device->retiredSamplerCapacity = newCapacity;
+    return 1;
+}
+
+static B32 gfx_metal_retired_pipelines_reserve(GfxDevice* device, U32 neededCapacity) {
+    if (!device) {
+        return 0;
+    }
+    if (neededCapacity <= device->retiredPipelineCapacity) {
+        return 1;
+    }
+
+    U32 newCapacity = device->retiredPipelineCapacity ? device->retiredPipelineCapacity * 2u : GFX_METAL_INITIAL_RETIRED_PIPELINE_CAPACITY;
+    while (newCapacity < neededCapacity) {
+        newCapacity *= 2u;
+    }
+    GfxMetalRetiredPipeline* newItems = ARENA_PUSH_ARRAY(device->arena, GfxMetalRetiredPipeline, newCapacity);
+    if (!newItems) {
+        return 0;
+    }
+    MEMSET(newItems, 0, sizeof(GfxMetalRetiredPipeline) * newCapacity);
+    if (device->retiredPipelines && device->retiredPipelineCount != 0u) {
+        MEMCPY(newItems, device->retiredPipelines, sizeof(GfxMetalRetiredPipeline) * device->retiredPipelineCount);
+    }
+    device->retiredPipelines = newItems;
+    device->retiredPipelineCapacity = newCapacity;
+    return 1;
+}
+
 static void gfx_metal_retire_buffer(GfxDevice* device, GfxMetalBuffer* item) {
     if (!device || !item || !item->buffer) {
         return;
@@ -799,9 +907,8 @@ static void gfx_metal_retire_buffer(GfxDevice* device, GfxMetalBuffer* item) {
         item->resourceId = {};
         return;
     }
-    ASSERT_DEBUG(device->retiredBufferCount < GFX_METAL_RETIRED_BUFFER_CAPACITY);
-    if (device->retiredBufferCount >= GFX_METAL_RETIRED_BUFFER_CAPACITY) {
-        LOG_WARNING("gfx", "Metal retired buffer queue full; buffer will stay alive until process exit");
+    if (!gfx_metal_retired_buffers_reserve(device, device->retiredBufferCount + 1u)) {
+        LOG_WARNING("gfx", "Metal retired buffer queue allocation failed; buffer will stay alive until process exit");
         item->buffer = nil;
         return;
     }
@@ -832,9 +939,8 @@ static void gfx_metal_retire_texture(GfxDevice* device, GfxMetalTexture* item) {
         item->resourceId = {};
         return;
     }
-    ASSERT_DEBUG(device->retiredTextureCount < GFX_METAL_RETIRED_TEXTURE_CAPACITY);
-    if (device->retiredTextureCount >= GFX_METAL_RETIRED_TEXTURE_CAPACITY) {
-        LOG_WARNING("gfx", "Metal retired texture queue full; texture will stay alive until process exit");
+    if (!gfx_metal_retired_textures_reserve(device, device->retiredTextureCount + 1u)) {
+        LOG_WARNING("gfx", "Metal retired texture queue allocation failed; texture will stay alive until process exit");
         item->texture = nil;
         return;
     }
@@ -860,9 +966,8 @@ static void gfx_metal_retire_sampler(GfxDevice* device, GfxMetalSampler* item) {
         item->resourceId = {};
         return;
     }
-    ASSERT_DEBUG(device->retiredSamplerCount < GFX_METAL_RETIRED_SAMPLER_CAPACITY);
-    if (device->retiredSamplerCount >= GFX_METAL_RETIRED_SAMPLER_CAPACITY) {
-        LOG_WARNING("gfx", "Metal retired sampler queue full; sampler will stay alive until process exit");
+    if (!gfx_metal_retired_samplers_reserve(device, device->retiredSamplerCount + 1u)) {
+        LOG_WARNING("gfx", "Metal retired sampler queue allocation failed; sampler will stay alive until process exit");
         item->sampler = nil;
         return;
     }
@@ -894,9 +999,8 @@ static void gfx_metal_retire_pipeline(GfxDevice* device, GfxMetalPipeline* item)
         item->depthState = nil;
         return;
     }
-    ASSERT_DEBUG(device->retiredPipelineCount < GFX_METAL_RETIRED_PIPELINE_CAPACITY);
-    if (device->retiredPipelineCount >= GFX_METAL_RETIRED_PIPELINE_CAPACITY) {
-        LOG_WARNING("gfx", "Metal retired pipeline queue full; pipeline will stay alive until process exit");
+    if (!gfx_metal_retired_pipelines_reserve(device, device->retiredPipelineCount + 1u)) {
+        LOG_WARNING("gfx", "Metal retired pipeline queue allocation failed; pipeline will stay alive until process exit");
         item->graphicsPipeline = nil;
         item->computePipeline = nil;
         item->depthState = nil;
@@ -1045,11 +1149,10 @@ B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDe
         return 0;
     }
 
-    device->retiredBuffers = ARENA_PUSH_ARRAY(arena, GfxMetalRetiredBuffer, GFX_METAL_RETIRED_BUFFER_CAPACITY);
-    device->retiredTextures = ARENA_PUSH_ARRAY(arena, GfxMetalRetiredTexture, GFX_METAL_RETIRED_TEXTURE_CAPACITY);
-    device->retiredSamplers = ARENA_PUSH_ARRAY(arena, GfxMetalRetiredSampler, GFX_METAL_RETIRED_SAMPLER_CAPACITY);
-    device->retiredPipelines = ARENA_PUSH_ARRAY(arena, GfxMetalRetiredPipeline, GFX_METAL_RETIRED_PIPELINE_CAPACITY);
-    if (!device->retiredBuffers || !device->retiredTextures || !device->retiredSamplers || !device->retiredPipelines) {
+    if (!gfx_metal_retired_buffers_reserve(device, GFX_METAL_INITIAL_RETIRED_BUFFER_CAPACITY) ||
+        !gfx_metal_retired_textures_reserve(device, GFX_METAL_INITIAL_RETIRED_TEXTURE_CAPACITY) ||
+        !gfx_metal_retired_samplers_reserve(device, GFX_METAL_INITIAL_RETIRED_SAMPLER_CAPACITY) ||
+        !gfx_metal_retired_pipelines_reserve(device, GFX_METAL_INITIAL_RETIRED_PIPELINE_CAPACITY)) {
         LOG_ERROR("gfx", "Failed to allocate Metal retired resource queues");
         gfx_device_destroy(device);
         return 0;
@@ -2058,14 +2161,22 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
         }
     }
 
-    GfxMetalBuffer* passDataBuffer = gfx_metal_resolve_buffer(device, desc->passData.buffer);
-    if (passDataBuffer->buffer) {
-        [encoder setVertexBuffer:passDataBuffer->buffer
-                           offset:(NSUInteger)desc->passData.offset
-                          atIndex:GFX_SHADER_SLOT_PASS_DATA];
-        [encoder setFragmentBuffer:passDataBuffer->buffer
-                             offset:(NSUInteger)desc->passData.offset
-                            atIndex:GFX_SHADER_SLOT_PASS_DATA];
+    for (U32 bindingIndex = 0u; bindingIndex < desc->bufferBindingCount; ++bindingIndex) {
+        const GfxBufferBinding* binding = desc->bufferBindings + bindingIndex;
+        GfxMetalBuffer* buffer = gfx_metal_resolve_buffer(device, binding->slice.buffer);
+        if (!buffer->buffer) {
+            continue;
+        }
+        if (FLAGS_HAS(binding->stages, GfxStageFlags_Vertex)) {
+            [encoder setVertexBuffer:buffer->buffer
+                               offset:(NSUInteger)binding->slice.offset
+                              atIndex:binding->slot];
+        }
+        if (FLAGS_HAS(binding->stages, GfxStageFlags_Fragment)) {
+            [encoder setFragmentBuffer:buffer->buffer
+                                 offset:(NSUInteger)binding->slice.offset
+                                atIndex:binding->slot];
+        }
     }
 
     if (device->resourceArgumentBuffer) {
@@ -2189,11 +2300,6 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
         return;
     }
 
-    GfxMetalBuffer* passDataBuffer = gfx_metal_resolve_buffer(device, desc->passData.buffer);
-    if (!passDataBuffer->buffer) {
-        return;
-    }
-
     id<MTLComputeCommandEncoder> encoder = [[frame->commandBuffer computeCommandEncoder] retain];
     if (!encoder) {
         LOG_ERROR("gfx", "Failed to create Metal compute encoder");
@@ -2211,9 +2317,19 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
         }
     }
 
-    [encoder setBuffer:passDataBuffer->buffer
-                offset:(NSUInteger)desc->passData.offset
-               atIndex:GFX_SHADER_SLOT_PASS_DATA];
+    for (U32 bindingIndex = 0u; bindingIndex < desc->bufferBindingCount; ++bindingIndex) {
+        const GfxBufferBinding* binding = desc->bufferBindings + bindingIndex;
+        if (!FLAGS_HAS(binding->stages, GfxStageFlags_Compute)) {
+            continue;
+        }
+        GfxMetalBuffer* buffer = gfx_metal_resolve_buffer(device, binding->slice.buffer);
+        if (!buffer->buffer) {
+            continue;
+        }
+        [encoder setBuffer:buffer->buffer
+                    offset:(NSUInteger)binding->slice.offset
+                   atIndex:binding->slot];
+    }
 
     for (U32 dispatchIndex = 0u; dispatchIndex < dispatchCount; ++dispatchIndex) {
         const GfxDispatch* dispatch = dispatches + dispatchIndex;

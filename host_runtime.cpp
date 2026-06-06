@@ -29,16 +29,40 @@
 #define UTILITIES_STATIC_APP 0
 #endif
 
-static const char* HOST_MODULE_BUILD_INPUTS[] = {
+static const char* HOST_HOT_MODULE_INPUTS[] = {
     "app.cpp",
-    "app_interface.hpp",
     "app_state.hpp",
+    "nstl/content/content.hpp",
+    "nstl/content/content.cpp",
+    "nstl/content/content_include.hpp",
+    "nstl/content/content_include.cpp",
+    "nstl/file_stream/file_stream.hpp",
+    "nstl/file_stream/file_stream.cpp",
+    "nstl/file_stream/file_stream_include.hpp",
+    "nstl/file_stream/file_stream_include.cpp",
     "nstl/artifact/artifact.hpp",
     "nstl/artifact/artifact.cpp",
     "nstl/artifact/artifact_include.hpp",
     "nstl/artifact/artifact_include.cpp",
+    "app/shaders/shader_manifest.h",
+};
+
+static const char* HOST_SHADER_INPUTS[] = {
+    "app/shaders/shader_manifest.h",
+    "app/shaders/demo.slang",
+    "app/shaders/gfx_shader_abi.slang",
+};
+
+static const char* HOST_RESTART_REQUIRED_INPUTS[] = {
+    "app_interface.hpp",
+    "host_runtime.cpp",
+    "main.cpp",
+    "main.mm",
     "nstl/gfx/gfx.hpp",
     "nstl/gfx/gfx_include.hpp",
+    "nstl/gfx/gfx_include.cpp",
+    "nstl/gfx/metal/gfx_metal.mm",
+    "nstl/gfx/vulkan/gfx_vulkan.cpp",
 };
 
 typedef B32 (*AppLoadProc)(AppLoadParams* params, AppCode* outCode);
@@ -136,12 +160,14 @@ struct HostState {
     B32 graphicsInitialized;
     U64 moduleTimestamp;
     U64 sourceTimestamp;
+    U64 restartRequiredTimestamp;
     U64 moduleGeneration;
     StringU8 currentModulePath;
     OS_SharedLibrary retiredModules[HOT_MODULE_HISTORY_MAX];
     StringU8 retiredModulePaths[HOT_MODULE_HISTORY_MAX];
     U32 retiredModuleCount;
     B32 buildFailed;
+    B32 restartRequired;
     B32 windowFocused;
     U32 targetFpsFocused;
     U32 targetFpsUnfocused;
@@ -162,7 +188,10 @@ static StringU8 host_build_module_path(StringU8 relativePath, Arena* arena);
 static void host_record_retired_module(HostState* state, OS_SharedLibrary library, StringU8 path);
 static B32 host_copy_file(StringU8 srcPath, StringU8 dstPath);
 static void host_delete_file(StringU8 path);
+static U64 host_get_newest_input_timestamp(const char* const* inputs, U32 inputCount, const char** outNewestPath);
 static U64 host_get_newest_module_input_timestamp(void);
+static U64 host_get_newest_restart_required_input_timestamp(const char** outNewestPath);
+static B32 host_restart_required_inputs_changed(HostState* state);
 static StringU8 host_export_status_string(B32 passed);
 static B32 host_validate_app_code(const AppCode* code, StringU8 modulePath);
 static B32 host_load_candidate(HostState* state, LoadedModule* outModule, StringU8* outPath);
@@ -192,6 +221,7 @@ static B32 host_init(HostState* state) {
              state->storage.permanentSize, state->storage.transientSize);
 
     state->sourceTimestamp = host_get_newest_module_input_timestamp();
+    state->restartRequiredTimestamp = host_get_newest_restart_required_input_timestamp(0);
 
     state->windowFocused = 1;
     state->targetFpsFocused = HOST_DEFAULT_TARGET_FPS_FOCUSED;
@@ -658,17 +688,8 @@ static B32 host_commit_candidate(HostState* state, LoadedModule* candidate, Stri
             commitOk = 0;
         }
     } else {
-        if (state->module.code.before_reload) {
-            state->module.code.before_reload(&state->host, &state->store);
-        }
         if (!candidate->code.after_reload(&state->host, &state->store)) {
             LOG_ERROR("host", "App after_reload reported failure; keeping active module");
-            if (state->module.code.after_reload) {
-                if (!state->module.code.after_reload(&state->host, &state->store)) {
-                    LOG_ERROR("host", "Active module failed to restore after rejected reload; quitting");
-                    state->host.shouldQuit = 1;
-                }
-            }
             commitOk = 0;
         }
     }
@@ -784,18 +805,68 @@ static void host_unload_module(HostState* state) {
     state->currentModulePath = STR8_NIL;
 }
 
-static U64 host_get_newest_module_input_timestamp(void) {
+static U64 host_get_newest_input_timestamp(const char* const* inputs, U32 inputCount, const char** outNewestPath) {
     U64 newestTimestamp = 0;
-    for (U32 index = 0; index < ARRAY_COUNT(HOST_MODULE_BUILD_INPUTS); ++index) {
-        OS_FileInfo info = OS_get_file_info(HOST_MODULE_BUILD_INPUTS[index]);
+    const char* newestPath = 0;
+    if (outNewestPath) {
+        *outNewestPath = 0;
+    }
+
+    if (!inputs) {
+        return newestTimestamp;
+    }
+
+    for (U32 index = 0; index < inputCount; ++index) {
+        OS_FileInfo info = OS_get_file_info(inputs[index]);
         if (info.exists && info.lastWriteTimestampNs > newestTimestamp) {
             newestTimestamp = info.lastWriteTimestampNs;
+            newestPath = inputs[index];
         }
+    }
+
+    if (outNewestPath) {
+        *outNewestPath = newestPath;
     }
     return newestTimestamp;
 }
 
+static U64 host_get_newest_module_input_timestamp(void) {
+    return host_get_newest_input_timestamp(HOST_HOT_MODULE_INPUTS,
+                                          ARRAY_COUNT(HOST_HOT_MODULE_INPUTS),
+                                          0);
+}
+
+static U64 host_get_newest_restart_required_input_timestamp(const char** outNewestPath) {
+    return host_get_newest_input_timestamp(HOST_RESTART_REQUIRED_INPUTS,
+                                          ARRAY_COUNT(HOST_RESTART_REQUIRED_INPUTS),
+                                          outNewestPath);
+}
+
+static B32 host_restart_required_inputs_changed(HostState* state) {
+    ASSERT_ALWAYS(state != 0);
+
+    if (state->restartRequired) {
+        return 1;
+    }
+
+    const char* newestPath = 0;
+    U64 newestTimestamp = host_get_newest_restart_required_input_timestamp(&newestPath);
+    if (newestTimestamp != 0u && newestTimestamp > state->restartRequiredTimestamp) {
+        state->restartRequiredTimestamp = newestTimestamp;
+        state->restartRequired = 1;
+        LOG_ERROR("host", "Host-owned input '{}' changed; restart required, hot reload disabled",
+                  str8(newestPath ? newestPath : "<unknown>"));
+        return 1;
+    }
+
+    return 0;
+}
+
 static void host_try_build_module(HostState* state) {
+    if (host_restart_required_inputs_changed(state)) {
+        return;
+    }
+
     U64 sourceTimestamp = host_get_newest_module_input_timestamp();
     if (sourceTimestamp == 0) {
         return;
@@ -830,6 +901,10 @@ static void host_try_reload_module(HostState* state) {
     return;
 #else
     host_try_build_module(state);
+
+    if (state->restartRequired) {
+        return;
+    }
 
     if (state->buildFailed) {
         return;

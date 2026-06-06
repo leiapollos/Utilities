@@ -6,9 +6,11 @@
 #include "app_state.hpp"
 #include "app/shaders/shader_manifest.h"
 
+#include "nstl/content/content_include.cpp"
+#include "nstl/file_stream/file_stream_include.cpp"
 #include "nstl/artifact/artifact_include.cpp"
 
-#define APP_CORE_STATE_VERSION 30u
+#define APP_CORE_STATE_VERSION 32u
 #define APP_GFX_DEMO_TEXTURE_PATH "app/textures/demo.ppm"
 #define APP_GFX_DEMO_DRAW_COLUMNS 12u
 #define APP_GFX_DEMO_DRAW_ROWS 8u
@@ -32,10 +34,11 @@ static const U16 APP_GFX_DEMO_INDICES[] = {
     0u, 1u, 2u,
 };
 
-#if defined(PLATFORM_BUILD_DEBUG) && defined(PLATFORM_OS_WINDOWS)
-#define APP_GFX_DEV_SHADER_SOURCE_ENTRY(name, source, output) source,
+#if defined(PLATFORM_BUILD_DEBUG)
+#define APP_GFX_DEV_SHADER_SOURCE_ENTRY(name, source) source,
 static const char* APP_GFX_DEV_SHADER_SOURCES[] = {
-    APP_SHADER_VULKAN_LIST(APP_GFX_DEV_SHADER_SOURCE_ENTRY)
+    APP_SHADER_MANIFEST_SOURCE,
+    APP_SHADER_SOURCE_LIST(APP_GFX_DEV_SHADER_SOURCE_ENTRY)
 };
 #undef APP_GFX_DEV_SHADER_SOURCE_ENTRY
 #endif
@@ -67,10 +70,41 @@ struct AppGfxMaterialComputeData {
     U32 _padding2;
 };
 
+static_assert(sizeof(AppGfxDrawData) == 32u, "DrawData shader ABI mismatch");
+static_assert(sizeof(AppGfxMaterial) == 32u, "Material shader ABI mismatch");
+static_assert(sizeof(AppGfxMaterialComputeData) == 32u, "MaterialComputeData shader ABI mismatch");
+#define APP_SHADER_ABI_OFFSET(type, member, byteOffset) \
+    static_assert(offsetof(type, member) == (byteOffset), #type "." #member " shader ABI offset mismatch")
+APP_SHADER_ABI_OFFSET(AppGfxDrawData, offsetScale, 0u);
+APP_SHADER_ABI_OFFSET(AppGfxDrawData, materialIndex, 16u);
+APP_SHADER_ABI_OFFSET(AppGfxDrawData, objectId, 20u);
+APP_SHADER_ABI_OFFSET(AppGfxDrawData, flags, 24u);
+APP_SHADER_ABI_OFFSET(AppGfxDrawData, _padding, 28u);
+APP_SHADER_ABI_OFFSET(AppGfxMaterial, baseColor, 0u);
+APP_SHADER_ABI_OFFSET(AppGfxMaterial, albedoTexture, 16u);
+APP_SHADER_ABI_OFFSET(AppGfxMaterial, sampler, 20u);
+APP_SHADER_ABI_OFFSET(AppGfxMaterial, flags, 24u);
+APP_SHADER_ABI_OFFSET(AppGfxMaterial, _padding, 28u);
+APP_SHADER_ABI_OFFSET(AppGfxMaterialComputeData, materialCount, 0u);
+APP_SHADER_ABI_OFFSET(AppGfxMaterialComputeData, columns, 4u);
+APP_SHADER_ABI_OFFSET(AppGfxMaterialComputeData, rows, 8u);
+APP_SHADER_ABI_OFFSET(AppGfxMaterialComputeData, albedoTexture, 12u);
+APP_SHADER_ABI_OFFSET(AppGfxMaterialComputeData, sampler, 16u);
+APP_SHADER_ABI_OFFSET(AppGfxMaterialComputeData, _padding0, 20u);
+APP_SHADER_ABI_OFFSET(AppGfxMaterialComputeData, _padding1, 24u);
+APP_SHADER_ABI_OFFSET(AppGfxMaterialComputeData, _padding2, 28u);
+#undef APP_SHADER_ABI_OFFSET
+
 struct AppImageRGBA8 {
     U32 width;
     U32 height;
     U8* pixels;
+    U64 bytesPerRow;
+};
+
+struct AppDecodedImageHeader {
+    U32 width;
+    U32 height;
     U64 bytesPerRow;
 };
 
@@ -84,11 +118,6 @@ struct AppPPMCursor {
     const U8* end;
 };
 
-enum AppResourceType {
-    AppResourceType_Invalid = 0,
-    AppResourceType_RawFile = 1,
-};
-
 enum AppGfxDemoLoadLog {
     AppGfxDemoLoadLog_Started = (1u << 0u),
     AppGfxDemoLoadLog_GeometryCreated = (1u << 1u),
@@ -99,6 +128,12 @@ enum AppGfxDemoLoadLog {
     AppGfxDemoLoadLog_Ready = (1u << 6u),
 };
 
+enum AppArtifactTypeId {
+    AppArtifactTypeId_TrianglePipeline = 1u,
+    AppArtifactTypeId_ComputePipeline = 2u,
+    AppArtifactTypeId_DecodedTexture = 3u,
+};
+
 static const APP_StateDesc* app_state_desc(APP_StateKind kind);
 static void* app_state_require(APP_Context* ctx, APP_StateKind kind);
 static B32 app_context_from_call(AppHost* host, HOT_StateStore* store, APP_Context* outCtx);
@@ -107,19 +142,42 @@ static U32 app_select_worker_count(const AppHost* host);
 static B32 app_ensure_job_system(APP_Context* ctx);
 static B32 app_resource_cache_init(APP_Context* ctx);
 static void app_resource_cache_shutdown(APP_Context* ctx);
+static B32 app_bind_current_module(APP_Context* ctx);
+static B32 app_register_artifact_types(APP_Context* ctx);
+static void app_watch_demo_files(APP_Context* ctx);
 static B32 app_decode_ppm_rgba8(Arena* arena, const void* data, U64 size, AppImageRGBA8* outImage);
-#if defined(PLATFORM_BUILD_DEBUG) && defined(PLATFORM_OS_WINDOWS)
+static ArtifactKey app_artifact_key_from_label(const char* label);
+static ArtifactKey app_artifact_key_from_content(const char* label, ContentHash hash);
+static GfxPipeline app_gfx_pipeline_from_value(ArtifactValue value);
+static ArtifactValue app_gfx_pipeline_to_value(GfxDevice* device, GfxPipeline pipeline);
+static B32 app_build_triangle_pipeline_artifact(ArtifactBuildContext* artifactCtx, ArtifactValue* outValue, U64* outBytes);
+static B32 app_publish_triangle_pipeline_artifact(ArtifactPublishContext* artifactCtx,
+                                                 ArtifactValue buildValue,
+                                                 ArtifactValue* outValue,
+                                                 U64* outBytes);
+static B32 app_build_compute_pipeline_artifact(ArtifactBuildContext* artifactCtx, ArtifactValue* outValue, U64* outBytes);
+static B32 app_publish_compute_pipeline_artifact(ArtifactPublishContext* artifactCtx,
+                                                ArtifactValue buildValue,
+                                                ArtifactValue* outValue,
+                                                U64* outBytes);
+static void app_destroy_pipeline_artifact(void* userData, ArtifactValue value);
+static B32 app_build_decoded_texture_artifact(ArtifactBuildContext* artifactCtx, ArtifactValue* outValue, U64* outBytes);
+static B32 app_publish_decoded_texture_artifact(ArtifactPublishContext* artifactCtx,
+                                               ArtifactValue buildValue,
+                                               ArtifactValue* outValue,
+                                               U64* outBytes);
+static void app_destroy_decoded_texture_artifact(void* userData, ArtifactValue value);
+#if defined(PLATFORM_BUILD_DEBUG)
 static U64 app_gfx_newest_shader_source_timestamp(void);
 static void app_gfx_try_build_dev_shaders(APP_Context* ctx);
 #endif
 static B32 app_gfx_demo_init(APP_Context* ctx);
-static void app_gfx_acquire_demo_artifacts(APP_Context* ctx, ArtifactUseScope* scope);
 static void app_gfx_demo_log_once(AppCoreState* state, U32 bit, const char* message);
 static void app_gfx_try_create_demo_buffers(APP_Context* ctx);
 static void app_gfx_upload_demo_geometry(APP_Context* ctx, GfxFrame* frame);
-static void app_gfx_try_update_triangle_pipeline(APP_Context* ctx, ArtifactUseScope* scope);
-static void app_gfx_try_update_demo_compute_pipeline(APP_Context* ctx, ArtifactUseScope* scope);
-static void app_gfx_upload_demo_texture(APP_Context* ctx, GfxFrame* frame, ArtifactUseScope* scope);
+static void app_gfx_try_update_triangle_pipeline(APP_Context* ctx);
+static void app_gfx_try_update_demo_compute_pipeline(APP_Context* ctx);
+static void app_gfx_upload_demo_texture(APP_Context* ctx, GfxFrame* frame);
 static B32 app_gfx_dispatch_demo_materials(APP_Context* ctx, GfxCommandBuffer* commands, GfxFrame* frame);
 static void app_gfx_demo_shutdown(APP_Context* ctx);
 static void app_gfx_demo_frame(APP_Context* ctx);
@@ -135,16 +193,17 @@ static B32 app_boot(AppHost* host, HOT_StateStore* store) {
     if (!app_context_from_call(host, store, &ctx)) {
         return 0;
     }
+    if (!app_bind_current_module(&ctx)) {
+        return 0;
+    }
 
     ASSERT_ALWAYS(host->window.handle != 0);
     return 1;
 }
 
 static void app_before_reload(AppHost* host, HOT_StateStore* store) {
-    APP_Context ctx = {};
-    if (app_context_from_call(host, store, &ctx)) {
-        app_gfx_demo_shutdown(&ctx);
-    }
+    (void)host;
+    (void)store;
 }
 
 static B32 app_after_reload(AppHost* host, HOT_StateStore* store) {
@@ -152,9 +211,13 @@ static B32 app_after_reload(AppHost* host, HOT_StateStore* store) {
     ASSERT_ALWAYS(store != 0);
 
     log_init();
+    set_log_level(LogLevel_Info);
 
     APP_Context ctx = {};
     if (!app_context_from_call(host, store, &ctx)) {
+        return 0;
+    }
+    if (!app_bind_current_module(&ctx)) {
         return 0;
     }
 
@@ -215,7 +278,7 @@ static B32 app_resource_cache_init(APP_Context* ctx) {
     ASSERT_ALWAYS(ctx->core != 0);
 
     AppCoreState* state = ctx->core;
-    if (state->resourceCache != 0) {
+    if (state->contentStore != 0 && state->fileStream != 0 && state->artifactCache != 0) {
         return 1;
     }
 
@@ -223,7 +286,7 @@ static B32 app_resource_cache_init(APP_Context* ctx) {
         return 0;
     }
 
-    state->resourceArena = arena_alloc(.arenaSize = MB(4),
+    state->resourceArena = arena_alloc(.arenaSize = MB(16),
                                        .committedSize = KB(64),
                                        .flags = ArenaFlags_DoChain);
     if (state->resourceArena == 0) {
@@ -231,37 +294,50 @@ static B32 app_resource_cache_init(APP_Context* ctx) {
         return 0;
     }
 
-    ArtifactCacheDesc desc = {};
-    desc.structSize = sizeof(desc);
-    desc.apiVersion = ARTIFACT_CACHE_API_VERSION;
-    desc.arena = state->resourceArena;
-    desc.jobSystem = state->jobSystem;
-    desc.initialSlotCapacity = 64u;
-    desc.initialHashCapacity = 128u;
-    desc.budgetBytes = MB(16);
-    desc.maxTypeId = AppResourceType_RawFile;
-#if defined(PLATFORM_BUILD_DEBUG)
-    desc.reloadScannerEnabled = 1;
-    desc.reloadScannerSleepMs = 100u;
-    desc.reloadScannerBatchCount = 16u;
-    desc.reloadDirtyQueueCapacity = 256u;
-#endif
+    ContentStoreDesc contentDesc = {};
+    contentDesc.arena = state->resourceArena;
+    contentDesc.initialBlobCapacity = 128u;
+    contentDesc.initialKeyCapacity = 64u;
+    state->contentStore = content_store_alloc(&contentDesc);
+    if (state->contentStore == 0) {
+        LOG_ERROR("resource", "Failed to create content store");
+        app_resource_cache_shutdown(ctx);
+        return 0;
+    }
 
-    state->resourceCache = artifact_cache_alloc(&desc);
-    if (state->resourceCache == 0) {
+    FileStreamDesc fileDesc = {};
+    fileDesc.arena = state->resourceArena;
+    fileDesc.content = state->contentStore;
+    fileDesc.initialFileCapacity = 16u;
+    state->fileStream = file_stream_alloc(&fileDesc);
+    if (state->fileStream == 0) {
+        LOG_ERROR("resource", "Failed to create file stream");
+        app_resource_cache_shutdown(ctx);
+        return 0;
+    }
+
+    ArtifactCacheDesc artifactDesc = {};
+    artifactDesc.arena = state->resourceArena;
+    artifactDesc.jobSystem = state->jobSystem;
+    artifactDesc.content = state->contentStore;
+    artifactDesc.initialSlotCapacity = 128u;
+    artifactDesc.initialTableCapacity = 256u;
+    artifactDesc.initialTypeCapacity = 8u;
+    artifactDesc.requestDataSize = 128u;
+    state->artifactCache = artifact_cache_alloc(&artifactDesc);
+    if (state->artifactCache == 0) {
         LOG_ERROR("resource", "Failed to create artifact cache");
         app_resource_cache_shutdown(ctx);
         return 0;
     }
 
-    ArtifactTypeOps rawFileOps = {};
-    rawFileOps.kind = ArtifactTypeKind_RawFile;
-    if (!artifact_cache_register_type(state->resourceCache, AppResourceType_RawFile, &rawFileOps)) {
-        LOG_ERROR("resource", "Failed to register raw file artifact type");
+    if (!app_register_artifact_types(ctx)) {
+        LOG_ERROR("resource", "Failed to register artifact types");
         app_resource_cache_shutdown(ctx);
         return 0;
     }
 
+    app_watch_demo_files(ctx);
     return 1;
 }
 
@@ -270,22 +346,117 @@ static void app_resource_cache_shutdown(APP_Context* ctx) {
     ASSERT_ALWAYS(ctx->core != 0);
 
     AppCoreState* state = ctx->core;
-    if (state->resourceCache != 0) {
-        artifact_cache_destroy(state->resourceCache);
-        state->resourceCache = 0;
+    if (state->artifactCache != 0) {
+        artifact_cache_destroy(state->artifactCache);
+        state->artifactCache = 0;
+    }
+    if (state->fileStream != 0) {
+        file_stream_destroy(state->fileStream);
+        state->fileStream = 0;
+    }
+    if (state->contentStore != 0) {
+        content_store_destroy(state->contentStore);
+        state->contentStore = 0;
     }
     if (state->resourceArena != 0) {
         arena_release(state->resourceArena);
         state->resourceArena = 0;
     }
 
-    state->gfxTriangleVertexShader = ARTIFACT_HANDLE_INVALID;
-    state->gfxTriangleFragmentShader = ARTIFACT_HANDLE_INVALID;
-    state->gfxDemoComputeShader = ARTIFACT_HANDLE_INVALID;
-    state->gfxDemoTextureSource = ARTIFACT_HANDLE_INVALID;
+    state->gfxTriangleVertexShader = FILE_HANDLE_ZERO;
+    state->gfxTriangleFragmentShader = FILE_HANDLE_ZERO;
+    state->gfxDemoComputeShader = FILE_HANDLE_ZERO;
+    state->gfxDemoTextureSource = FILE_HANDLE_ZERO;
+    state->gfxTrianglePipelineArtifactKey = ARTIFACT_KEY_ZERO;
+    state->gfxDemoComputePipelineArtifactKey = ARTIFACT_KEY_ZERO;
+    state->gfxDemoTextureDecodeArtifactKey = ARTIFACT_KEY_ZERO;
+    state->gfxDemoDecodedTextureHash = CONTENT_HASH_ZERO;
 }
 
-#if defined(PLATFORM_BUILD_DEBUG) && defined(PLATFORM_OS_WINDOWS)
+static B32 app_bind_current_module(APP_Context* ctx) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    AppCoreState* state = ctx->core;
+    if (state->artifactCache && !app_register_artifact_types(ctx)) {
+        return 0;
+    }
+    if (state->fileStream) {
+        app_watch_demo_files(ctx);
+    }
+    return 1;
+}
+
+static B32 app_register_artifact_types(APP_Context* ctx) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    AppCoreState* state = ctx->core;
+    if (!state->artifactCache) {
+        return 0;
+    }
+
+    ArtifactTypeDesc triangleType = {};
+    triangleType.typeId = AppArtifactTypeId_TrianglePipeline;
+    triangleType.name = str8("triangle pipeline");
+    triangleType.buildProc = app_build_triangle_pipeline_artifact;
+    triangleType.publishProc = app_publish_triangle_pipeline_artifact;
+    triangleType.destroyProc = app_destroy_pipeline_artifact;
+    triangleType.evictionTargetCount = 16u;
+    triangleType.evictionMaxIdleFrames = 240u;
+
+    ArtifactTypeDesc computeType = {};
+    computeType.typeId = AppArtifactTypeId_ComputePipeline;
+    computeType.name = str8("demo compute pipeline");
+    computeType.buildProc = app_build_compute_pipeline_artifact;
+    computeType.publishProc = app_publish_compute_pipeline_artifact;
+    computeType.destroyProc = app_destroy_pipeline_artifact;
+    computeType.evictionTargetCount = 16u;
+    computeType.evictionMaxIdleFrames = 240u;
+
+    ArtifactTypeDesc decodedType = {};
+    decodedType.typeId = AppArtifactTypeId_DecodedTexture;
+    decodedType.name = str8("decoded demo texture");
+    decodedType.buildProc = app_build_decoded_texture_artifact;
+    decodedType.publishProc = app_publish_decoded_texture_artifact;
+    decodedType.destroyProc = app_destroy_decoded_texture_artifact;
+    decodedType.userData = state->contentStore;
+    decodedType.evictionTargetCount = 32u;
+    decodedType.evictionMaxIdleFrames = 240u;
+
+    return artifact_register_type(state->artifactCache, &triangleType) &&
+           artifact_register_type(state->artifactCache, &computeType) &&
+           artifact_register_type(state->artifactCache, &decodedType);
+}
+
+static void app_watch_demo_files(APP_Context* ctx) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    AppCoreState* state = ctx->core;
+    if (!state->fileStream) {
+        return;
+    }
+
+    Temp scratch = get_scratch(0, 0);
+    if (!scratch.arena) {
+        return;
+    }
+    DEFER_REF(temp_end(&scratch));
+
+    StringU8 exeDir = OS_get_executable_directory(scratch.arena);
+    StringU8 vertexShaderPath = str8_concat(scratch.arena, exeDir, str8("/../" APP_SHADER_TRIANGLE_VERTEX_RUNTIME_PATH));
+    StringU8 fragmentShaderPath = str8_concat(scratch.arena, exeDir, str8("/../" APP_SHADER_TRIANGLE_FRAGMENT_RUNTIME_PATH));
+    StringU8 computePath = str8_concat(scratch.arena, exeDir, str8("/../" APP_SHADER_DEMO_COMPUTE_RUNTIME_PATH));
+    StringU8 texturePath = str8_concat(scratch.arena, exeDir, str8("/../" APP_GFX_DEMO_TEXTURE_PATH));
+
+    state->gfxTriangleVertexShader = file_watch(state->fileStream, vertexShaderPath, 0u);
+    state->gfxTriangleFragmentShader = file_watch(state->fileStream, fragmentShaderPath, 0u);
+    state->gfxDemoComputeShader = file_watch(state->fileStream, computePath, 0u);
+    state->gfxDemoTextureSource = file_watch(state->fileStream, texturePath, 0u);
+}
+
+#if defined(PLATFORM_BUILD_DEBUG)
 static U64 app_gfx_newest_shader_source_timestamp(void) {
     U64 newestTimestamp = 0u;
     for (U32 index = 0; index < ARRAY_COUNT(APP_GFX_DEV_SHADER_SOURCES); ++index) {
@@ -311,8 +482,14 @@ static void app_gfx_try_build_dev_shaders(APP_Context* ctx) {
         return;
     }
 
-    LOG_INFO("gfx", "Building Vulkan shaders");
-    S32 buildResult = APP_OS_CALL(ctx->host, OS_execute, str8(".\\sob.exe shaders debug"));
+#if defined(PLATFORM_OS_WINDOWS)
+    StringU8 buildCommand = str8(".\\sob.exe shaders debug");
+#else
+    StringU8 buildCommand = str8("./sob shaders debug");
+#endif
+
+    LOG_INFO("gfx", "Building shaders");
+    S32 buildResult = APP_OS_CALL(ctx->host, OS_execute, buildCommand);
     state->gfxShaderBuildInitialized = 1;
     state->gfxShaderSourceTimestamp = sourceTimestamp;
     if (buildResult != 0) {
@@ -485,6 +662,313 @@ static B32 app_decode_ppm_rgba8(Arena* arena, const void* data, U64 size, AppIma
     return 1;
 }
 
+struct AppTrianglePipelineArtifactData {
+    GfxDevice* device;
+    ContentHash vertexHash;
+    ContentHash fragmentHash;
+};
+
+struct AppComputePipelineArtifactData {
+    GfxDevice* device;
+    ContentHash shaderHash;
+};
+
+struct AppDecodedTextureArtifactData {
+    ContentHash sourceHash;
+};
+
+static ArtifactKey app_artifact_key_from_label(const char* label) {
+    StringU8 labelStr = str8(label);
+    return artifact_key_from_bytes(labelStr.data, labelStr.size);
+}
+
+static ArtifactKey app_artifact_key_from_content(const char* label, ContentHash hash) {
+    ArtifactKey result = app_artifact_key_from_label(label);
+    ArtifactKey contentKey = {};
+    contentKey.hash[0] = hash.hash[0];
+    contentKey.hash[1] = hash.hash[1];
+    return artifact_key_mix(result, contentKey);
+}
+
+static ContentHash app_content_hash_from_value(ArtifactValue value) {
+    ContentHash result = {};
+    result.hash[0] = value.u64[0];
+    result.hash[1] = value.u64[1];
+    return result;
+}
+
+static ArtifactValue app_content_hash_to_value(ContentHash hash) {
+    ArtifactValue result = {};
+    result.u64[0] = hash.hash[0];
+    result.u64[1] = hash.hash[1];
+    return result;
+}
+
+static GfxPipeline app_gfx_pipeline_from_value(ArtifactValue value) {
+    GfxPipeline result = {};
+    result.index = (U32)(value.u64[0] & 0xFFFFFFFFu);
+    result.generation = (U32)(value.u64[0] >> 32u);
+    return result;
+}
+
+static ArtifactValue app_gfx_pipeline_to_value(GfxDevice* device, GfxPipeline pipeline) {
+    ArtifactValue result = {};
+    result.u64[0] = ((U64)pipeline.generation << 32u) | (U64)pipeline.index;
+    result.u64[1] = (U64)(uintptr_t)device;
+    return result;
+}
+
+static B32 app_build_triangle_pipeline_artifact(ArtifactBuildContext* artifactCtx, ArtifactValue* outValue, U64* outBytes) {
+    if (!artifactCtx || !artifactCtx->content || !outValue ||
+        artifactCtx->requestDataSize != sizeof(AppTrianglePipelineArtifactData)) {
+        return 0;
+    }
+
+    const AppTrianglePipelineArtifactData* data = (const AppTrianglePipelineArtifactData*)artifactCtx->requestData;
+    ContentView vertexView = content_view_hash(artifactCtx->content, data->vertexHash);
+    ContentView fragmentView = content_view_hash(artifactCtx->content, data->fragmentHash);
+    if (!vertexView.valid || vertexView.size == 0u || !fragmentView.valid || fragmentView.size == 0u) {
+        return 0;
+    }
+
+    outValue->u64[0] = data->vertexHash.hash[0];
+    outValue->u64[1] = data->vertexHash.hash[1];
+    outValue->u64[2] = data->fragmentHash.hash[0];
+    outValue->u64[3] = data->fragmentHash.hash[1];
+    if (outBytes) {
+        *outBytes = vertexView.size + fragmentView.size;
+    }
+    return 1;
+}
+
+static B32 app_publish_triangle_pipeline_artifact(ArtifactPublishContext* artifactCtx,
+                                                 ArtifactValue buildValue,
+                                                 ArtifactValue* outValue,
+                                                 U64* outBytes) {
+    if (!artifactCtx || !artifactCtx->content || !outValue ||
+        artifactCtx->requestDataSize != sizeof(AppTrianglePipelineArtifactData)) {
+        return 0;
+    }
+
+    const AppTrianglePipelineArtifactData* data = (const AppTrianglePipelineArtifactData*)artifactCtx->requestData;
+    if (!data->device) {
+        return 0;
+    }
+
+    ContentHash vertexHash = {{buildValue.u64[0], buildValue.u64[1]}};
+    ContentHash fragmentHash = {{buildValue.u64[2], buildValue.u64[3]}};
+    ContentView vertexView = content_view_hash(artifactCtx->content, vertexHash);
+    ContentView fragmentView = content_view_hash(artifactCtx->content, fragmentHash);
+    if (!vertexView.valid || vertexView.size == 0u ||
+        !fragmentView.valid || fragmentView.size == 0u) {
+        return 0;
+    }
+
+    GfxVertexAttribute attributes[2] = {};
+    attributes[0].location = 0u;
+    attributes[0].offset = 0u;
+    attributes[0].format = GfxVertexFormat_F32x2;
+    attributes[1].location = 1u;
+    attributes[1].offset = sizeof(F32) * 2u;
+    attributes[1].format = GfxVertexFormat_F32x4;
+
+    GfxFormat colorFormats[1] = {
+        GfxFormat_BGRA8_UNorm,
+    };
+
+    GfxGraphicsPipelineDesc pipelineDesc = {};
+    pipelineDesc.name = "triangle pipeline";
+#if defined(PLATFORM_OS_WINDOWS)
+    pipelineDesc.vertexShader.format = GfxShaderFormat_SPIRV;
+    pipelineDesc.vertexShader.entry = APP_SHADER_TRIANGLE_VERTEX_ENTRY;
+    pipelineDesc.fragmentShader.format = GfxShaderFormat_SPIRV;
+    pipelineDesc.fragmentShader.entry = APP_SHADER_TRIANGLE_FRAGMENT_ENTRY;
+#else
+    pipelineDesc.vertexShader.format = GfxShaderFormat_MSL_Source;
+    pipelineDesc.vertexShader.entry = APP_SHADER_TRIANGLE_VERTEX_ENTRY;
+    pipelineDesc.fragmentShader.format = GfxShaderFormat_MSL_Source;
+    pipelineDesc.fragmentShader.entry = APP_SHADER_TRIANGLE_FRAGMENT_ENTRY;
+#endif
+    pipelineDesc.vertexShader.data = vertexView.data;
+    pipelineDesc.vertexShader.size = vertexView.size;
+    pipelineDesc.fragmentShader.data = fragmentView.data;
+    pipelineDesc.fragmentShader.size = fragmentView.size;
+    pipelineDesc.attributes = attributes;
+    pipelineDesc.attributeCount = ARRAY_COUNT(attributes);
+    pipelineDesc.vertexBuffer.stride = sizeof(AppGfxVertex);
+    pipelineDesc.topology = GfxPrimitiveTopology_TriangleList;
+    pipelineDesc.raster.cullMode = GfxCullMode_None;
+    pipelineDesc.raster.frontFace = GfxFrontFace_CCW;
+    pipelineDesc.depth.compareOp = GfxCompareOp_Always;
+    pipelineDesc.colorFormats = colorFormats;
+    pipelineDesc.colorFormatCount = ARRAY_COUNT(colorFormats);
+    pipelineDesc.depthFormat = GfxFormat_Invalid;
+
+    GfxPipeline pipeline = gfx_create_graphics_pipeline(data->device, &pipelineDesc);
+    if (pipeline.generation == 0u) {
+        return 0;
+    }
+
+    *outValue = app_gfx_pipeline_to_value(data->device, pipeline);
+    if (outBytes) {
+        *outBytes = 1u;
+    }
+    return 1;
+}
+
+static B32 app_build_compute_pipeline_artifact(ArtifactBuildContext* artifactCtx, ArtifactValue* outValue, U64* outBytes) {
+    if (!artifactCtx || !artifactCtx->content || !outValue ||
+        artifactCtx->requestDataSize != sizeof(AppComputePipelineArtifactData)) {
+        return 0;
+    }
+
+    const AppComputePipelineArtifactData* data = (const AppComputePipelineArtifactData*)artifactCtx->requestData;
+    ContentView shaderView = content_view_hash(artifactCtx->content, data->shaderHash);
+    if (!shaderView.valid || shaderView.size == 0u) {
+        return 0;
+    }
+
+    *outValue = app_content_hash_to_value(data->shaderHash);
+    if (outBytes) {
+        *outBytes = shaderView.size;
+    }
+    return 1;
+}
+
+static B32 app_publish_compute_pipeline_artifact(ArtifactPublishContext* artifactCtx,
+                                                ArtifactValue buildValue,
+                                                ArtifactValue* outValue,
+                                                U64* outBytes) {
+    if (!artifactCtx || !artifactCtx->content || !outValue ||
+        artifactCtx->requestDataSize != sizeof(AppComputePipelineArtifactData)) {
+        return 0;
+    }
+
+    const AppComputePipelineArtifactData* data = (const AppComputePipelineArtifactData*)artifactCtx->requestData;
+    if (!data->device) {
+        return 0;
+    }
+
+    ContentHash shaderHash = app_content_hash_from_value(buildValue);
+    ContentView shaderView = content_view_hash(artifactCtx->content, shaderHash);
+    if (!shaderView.valid || shaderView.size == 0u) {
+        return 0;
+    }
+
+    GfxComputePipelineDesc pipelineDesc = {};
+    pipelineDesc.name = "demo material compute pipeline";
+#if defined(PLATFORM_OS_WINDOWS)
+    pipelineDesc.shader.format = GfxShaderFormat_SPIRV;
+    pipelineDesc.shader.entry = APP_SHADER_DEMO_COMPUTE_ENTRY;
+#else
+    pipelineDesc.shader.format = GfxShaderFormat_MSL_Source;
+    pipelineDesc.shader.entry = APP_SHADER_DEMO_COMPUTE_ENTRY;
+#endif
+    pipelineDesc.shader.data = shaderView.data;
+    pipelineDesc.shader.size = shaderView.size;
+    pipelineDesc.threadsPerThreadgroupX = APP_GFX_DEMO_COMPUTE_THREADS_PER_GROUP;
+    pipelineDesc.threadsPerThreadgroupY = 1u;
+    pipelineDesc.threadsPerThreadgroupZ = 1u;
+
+    GfxPipeline pipeline = gfx_create_compute_pipeline(data->device, &pipelineDesc);
+    if (pipeline.generation == 0u) {
+        return 0;
+    }
+
+    *outValue = app_gfx_pipeline_to_value(data->device, pipeline);
+    if (outBytes) {
+        *outBytes = 1u;
+    }
+    return 1;
+}
+
+static void app_destroy_pipeline_artifact(void* userData, ArtifactValue value) {
+    (void)userData;
+    GfxDevice* device = (GfxDevice*)(uintptr_t)value.u64[1];
+    GfxPipeline pipeline = app_gfx_pipeline_from_value(value);
+    if (device && pipeline.generation != 0u) {
+        gfx_destroy_pipeline(device, pipeline);
+    }
+}
+
+static B32 app_build_decoded_texture_artifact(ArtifactBuildContext* artifactCtx, ArtifactValue* outValue, U64* outBytes) {
+    if (!artifactCtx || !artifactCtx->content || !outValue ||
+        artifactCtx->requestDataSize != sizeof(AppDecodedTextureArtifactData)) {
+        return 0;
+    }
+
+    const AppDecodedTextureArtifactData* data = (const AppDecodedTextureArtifactData*)artifactCtx->requestData;
+    ContentView sourceView = content_view_hash(artifactCtx->content, data->sourceHash);
+    if (!sourceView.valid || sourceView.size == 0u) {
+        return 0;
+    }
+
+    Temp scratch = get_scratch(0, 0);
+    if (!scratch.arena) {
+        return 0;
+    }
+    DEFER_REF(temp_end(&scratch));
+
+    AppImageRGBA8 image = {};
+    if (!app_decode_ppm_rgba8(scratch.arena, sourceView.data, sourceView.size, &image)) {
+        return 0;
+    }
+
+    U64 pixelBytes = image.bytesPerRow * image.height;
+    U64 blobSize = sizeof(AppDecodedImageHeader) + pixelBytes;
+    U8* blob = ARENA_PUSH_ARRAY(scratch.arena, U8, blobSize);
+    if (!blob) {
+        return 0;
+    }
+
+    AppDecodedImageHeader header = {};
+    header.width = image.width;
+    header.height = image.height;
+    header.bytesPerRow = image.bytesPerRow;
+    MEMCPY(blob, &header, sizeof(header));
+    MEMCPY(blob + sizeof(header), image.pixels, pixelBytes);
+
+    ContentHash hash = content_submit_bytes(artifactCtx->content, CONTENT_KEY_ZERO, blob, blobSize, str8("decoded demo texture"));
+    if (content_hash_is_zero(hash)) {
+        return 0;
+    }
+
+    *outValue = app_content_hash_to_value(hash);
+    if (outBytes) {
+        *outBytes = blobSize;
+    }
+    return 1;
+}
+
+static B32 app_publish_decoded_texture_artifact(ArtifactPublishContext* artifactCtx,
+                                               ArtifactValue buildValue,
+                                               ArtifactValue* outValue,
+                                               U64* outBytes) {
+    if (!artifactCtx || !artifactCtx->content || !outValue) {
+        return 0;
+    }
+
+    ContentHash hash = app_content_hash_from_value(buildValue);
+    ContentView view = content_view_hash(artifactCtx->content, hash);
+    if (!view.valid || !content_retain_hash(artifactCtx->content, hash)) {
+        return 0;
+    }
+
+    *outValue = buildValue;
+    if (outBytes) {
+        *outBytes = view.size;
+    }
+    return 1;
+}
+
+static void app_destroy_decoded_texture_artifact(void* userData, ArtifactValue value) {
+    ContentStore* content = (ContentStore*)userData;
+    ContentHash hash = app_content_hash_from_value(value);
+    if (content && !content_hash_is_zero(hash)) {
+        content_release_hash(content, hash);
+    }
+}
+
 static B32 app_gfx_demo_init(APP_Context* ctx) {
     ASSERT_ALWAYS(ctx != 0);
     ASSERT_ALWAYS(ctx->host != 0);
@@ -507,49 +991,6 @@ static B32 app_gfx_demo_init(APP_Context* ctx) {
     state->gfxDemoInitialized = 1;
     app_gfx_demo_log_once(state, AppGfxDemoLoadLog_Started, "Demo resources requested");
     return 1;
-}
-
-static void app_gfx_acquire_demo_artifacts(APP_Context* ctx, ArtifactUseScope* scope) {
-    ASSERT_ALWAYS(ctx != 0);
-    ASSERT_ALWAYS(ctx->core != 0);
-
-    AppCoreState* state = ctx->core;
-    if (!scope || !state->resourceCache) {
-        return;
-    }
-
-    StringU8 exeDir = OS_get_executable_directory(scope->arena);
-    ArtifactReloadPolicy policy = {};
-    policy.checkIntervalNs = ARTIFACT_RELOAD_CHECK_INTERVAL_DEFAULT_NS;
-    U32 flags = ArtifactAcquireFlags_Async;
-#if defined(PLATFORM_BUILD_DEBUG)
-    flags |= ArtifactAcquireFlags_Reloadable;
-#endif
-
-    StringU8 vertexShaderPath = str8_concat(scope->arena, exeDir, str8("/../" APP_SHADER_TRIANGLE_VERTEX_RUNTIME_PATH));
-    state->gfxTriangleVertexShader = artifact_acquire_with_policy(scope,
-                                                                  AppResourceType_RawFile,
-                                                                  vertexShaderPath,
-                                                                  flags,
-                                                                  policy);
-    StringU8 fragmentShaderPath = str8_concat(scope->arena, exeDir, str8("/../" APP_SHADER_TRIANGLE_FRAGMENT_RUNTIME_PATH));
-    state->gfxTriangleFragmentShader = artifact_acquire_with_policy(scope,
-                                                                    AppResourceType_RawFile,
-                                                                    fragmentShaderPath,
-                                                                    flags,
-                                                                    policy);
-    StringU8 computePath = str8_concat(scope->arena, exeDir, str8("/../" APP_SHADER_DEMO_COMPUTE_RUNTIME_PATH));
-    state->gfxDemoComputeShader = artifact_acquire_with_policy(scope,
-                                                               AppResourceType_RawFile,
-                                                               computePath,
-                                                               flags,
-                                                               policy);
-    StringU8 texturePath = str8_concat(scope->arena, exeDir, str8("/../" APP_GFX_DEMO_TEXTURE_PATH));
-    state->gfxDemoTextureSource = artifact_acquire_with_policy(scope,
-                                                               AppResourceType_RawFile,
-                                                               texturePath,
-                                                               flags,
-                                                               policy);
 }
 
 static void app_gfx_demo_log_once(AppCoreState* state, U32 bit, const char* message) {
@@ -633,146 +1074,120 @@ static void app_gfx_upload_demo_geometry(APP_Context* ctx, GfxFrame* frame) {
     }
 }
 
-static void app_gfx_try_update_triangle_pipeline(APP_Context* ctx, ArtifactUseScope* scope) {
+static void app_gfx_try_update_triangle_pipeline(APP_Context* ctx) {
     ASSERT_ALWAYS(ctx != 0);
     ASSERT_ALWAYS(ctx->host != 0);
     ASSERT_ALWAYS(ctx->core != 0);
 
     AppCoreState* state = ctx->core;
-    if (state->resourceCache == 0 || ctx->host->gfxDevice == 0 || scope == 0) {
-        return;
-    }
-    ArtifactView vertexShaderView = artifact_resolve_view(scope, state->gfxTriangleVertexShader);
-    ArtifactView fragmentShaderView = artifact_resolve_view(scope, state->gfxTriangleFragmentShader);
-    B32 generationChanged =
-        vertexShaderView.generation != state->gfxTriangleVertexShaderGeneration ||
-        fragmentShaderView.generation != state->gfxTriangleFragmentShaderGeneration;
-    if (!generationChanged) {
-        return;
-    }
-    if (vertexShaderView.generation == state->gfxTriangleFailedVertexShaderGeneration &&
-        fragmentShaderView.generation == state->gfxTriangleFailedFragmentShaderGeneration) {
+    if (state->fileStream == 0 || state->artifactCache == 0 || ctx->host->gfxDevice == 0) {
         return;
     }
 
-    if (vertexShaderView.data != 0 && vertexShaderView.size != 0u &&
-        fragmentShaderView.data != 0 && fragmentShaderView.size != 0u) {
-        GfxVertexAttribute attributes[2] = {};
-        attributes[0].location = 0u;
-        attributes[0].offset = 0u;
-        attributes[0].format = GfxVertexFormat_F32x2;
-        attributes[1].location = 1u;
-        attributes[1].offset = sizeof(F32) * 2u;
-        attributes[1].format = GfxVertexFormat_F32x4;
+    FileView vertexShaderView = file_view(state->fileStream, state->gfxTriangleVertexShader);
+    FileView fragmentShaderView = file_view(state->fileStream, state->gfxTriangleFragmentShader);
+    if (vertexShaderView.status != FileStatus_Ready ||
+        fragmentShaderView.status != FileStatus_Ready ||
+        content_hash_is_zero(vertexShaderView.hash) ||
+        content_hash_is_zero(fragmentShaderView.hash)) {
+        return;
+    }
 
-        GfxFormat colorFormats[1] = {
-            GfxFormat_BGRA8_UNorm,
-        };
+    ArtifactKey key = app_artifact_key_from_content("triangle pipeline vertex", vertexShaderView.hash);
+    key = artifact_key_mix(key, app_artifact_key_from_content("triangle pipeline fragment", fragmentShaderView.hash));
+    if (artifact_key_equal(key, state->gfxTrianglePipelineArtifactKey) &&
+        state->gfxTrianglePipeline.generation != 0u) {
+        artifact_touch(state->artifactCache, AppArtifactTypeId_TrianglePipeline, key, state->frameCounter);
+        return;
+    }
 
-        GfxGraphicsPipelineDesc pipelineDesc = {};
-        pipelineDesc.name = "triangle pipeline";
-#if defined(PLATFORM_OS_WINDOWS)
-        pipelineDesc.vertexShader.format = GfxShaderFormat_SPIRV;
-        pipelineDesc.vertexShader.entry = "main";
-        pipelineDesc.fragmentShader.format = GfxShaderFormat_SPIRV;
-        pipelineDesc.fragmentShader.entry = "main";
-#else
-        pipelineDesc.vertexShader.format = GfxShaderFormat_MSL_Source;
-        pipelineDesc.vertexShader.entry = "vertex_main";
-        pipelineDesc.fragmentShader.format = GfxShaderFormat_MSL_Source;
-        pipelineDesc.fragmentShader.entry = "fragment_main";
-#endif
-        pipelineDesc.vertexShader.data = vertexShaderView.data;
-        pipelineDesc.vertexShader.size = vertexShaderView.size;
-        pipelineDesc.fragmentShader.data = fragmentShaderView.data;
-        pipelineDesc.fragmentShader.size = fragmentShaderView.size;
-        pipelineDesc.attributes = attributes;
-        pipelineDesc.attributeCount = ARRAY_COUNT(attributes);
-        pipelineDesc.vertexBuffer.stride = sizeof(AppGfxVertex);
-        pipelineDesc.topology = GfxPrimitiveTopology_TriangleList;
-        pipelineDesc.raster.cullMode = GfxCullMode_None;
-        pipelineDesc.raster.frontFace = GfxFrontFace_CCW;
-        pipelineDesc.depth.compareOp = GfxCompareOp_Always;
-        pipelineDesc.colorFormats = colorFormats;
-        pipelineDesc.colorFormatCount = ARRAY_COUNT(colorFormats);
-        pipelineDesc.depthFormat = GfxFormat_Invalid;
+    AppTrianglePipelineArtifactData artifactData = {};
+    artifactData.device = ctx->host->gfxDevice;
+    artifactData.vertexHash = vertexShaderView.hash;
+    artifactData.fragmentHash = fragmentShaderView.hash;
 
-        GfxPipeline newPipeline = gfx_create_graphics_pipeline(ctx->host->gfxDevice, &pipelineDesc);
-        if (newPipeline.generation != 0u) {
-            GfxPipeline oldPipeline = state->gfxTrianglePipeline;
-            state->gfxTrianglePipeline = newPipeline;
-            state->gfxTriangleVertexShaderGeneration = vertexShaderView.generation;
-            state->gfxTriangleFragmentShaderGeneration = fragmentShaderView.generation;
-            state->gfxTriangleFailedVertexShaderGeneration = 0u;
-            state->gfxTriangleFailedFragmentShaderGeneration = 0u;
-            gfx_destroy_pipeline(ctx->host->gfxDevice, oldPipeline);
-            app_gfx_demo_log_once(state, AppGfxDemoLoadLog_TrianglePipeline, "Demo triangle pipeline ready");
-        } else {
-            state->gfxTriangleFailedVertexShaderGeneration = vertexShaderView.generation;
-            state->gfxTriangleFailedFragmentShaderGeneration = fragmentShaderView.generation;
+    ArtifactResult artifact = artifact_get(state->artifactCache,
+                                           AppArtifactTypeId_TrianglePipeline,
+                                           key,
+                                           1u,
+                                           &artifactData,
+                                           sizeof(artifactData),
+                                           ArtifactGetFlags_HighPriority,
+                                           0u);
+    if (artifact.status == ArtifactStatus_Ready &&
+        !FLAGS_HAS(artifact.flags, ArtifactResultFlags_Stale) &&
+        artifact_retain(state->artifactCache, AppArtifactTypeId_TrianglePipeline, key)) {
+        if (!artifact_key_is_zero(state->gfxTrianglePipelineArtifactKey)) {
+            artifact_release(state->artifactCache,
+                             AppArtifactTypeId_TrianglePipeline,
+                             state->gfxTrianglePipelineArtifactKey);
         }
+        state->gfxTrianglePipeline = app_gfx_pipeline_from_value(artifact.value);
+        state->gfxTrianglePipelineArtifactKey = key;
+        app_gfx_demo_log_once(state, AppGfxDemoLoadLog_TrianglePipeline, "Demo triangle pipeline ready");
     }
 }
 
-static void app_gfx_try_update_demo_compute_pipeline(APP_Context* ctx, ArtifactUseScope* scope) {
+static void app_gfx_try_update_demo_compute_pipeline(APP_Context* ctx) {
     ASSERT_ALWAYS(ctx != 0);
     ASSERT_ALWAYS(ctx->host != 0);
     ASSERT_ALWAYS(ctx->core != 0);
 
     AppCoreState* state = ctx->core;
-    if (state->resourceCache == 0 || ctx->host->gfxDevice == 0 || scope == 0) {
+    if (state->fileStream == 0 || state->artifactCache == 0 || ctx->host->gfxDevice == 0) {
         return;
     }
 
-    ArtifactView shaderView = artifact_resolve_view(scope, state->gfxDemoComputeShader);
-    if (shaderView.generation == state->gfxDemoComputeShaderGeneration) {
-        return;
-    }
-    if (shaderView.generation == state->gfxDemoComputeFailedShaderGeneration) {
+    FileView shaderView = file_view(state->fileStream, state->gfxDemoComputeShader);
+    if (shaderView.status != FileStatus_Ready || content_hash_is_zero(shaderView.hash)) {
         return;
     }
 
-    if (shaderView.data != 0 && shaderView.size != 0u) {
-        GfxComputePipelineDesc pipelineDesc = {};
-        pipelineDesc.name = "demo material compute pipeline";
-#if defined(PLATFORM_OS_WINDOWS)
-        pipelineDesc.shader.format = GfxShaderFormat_SPIRV;
-        pipelineDesc.shader.entry = "main";
-#else
-        pipelineDesc.shader.format = GfxShaderFormat_MSL_Source;
-        pipelineDesc.shader.entry = "material_main";
-#endif
-        pipelineDesc.shader.data = shaderView.data;
-        pipelineDesc.shader.size = shaderView.size;
-        pipelineDesc.threadsPerThreadgroupX = APP_GFX_DEMO_COMPUTE_THREADS_PER_GROUP;
-        pipelineDesc.threadsPerThreadgroupY = 1u;
-        pipelineDesc.threadsPerThreadgroupZ = 1u;
+    ArtifactKey key = app_artifact_key_from_content("demo compute pipeline", shaderView.hash);
+    if (artifact_key_equal(key, state->gfxDemoComputePipelineArtifactKey) &&
+        state->gfxDemoComputePipeline.generation != 0u) {
+        artifact_touch(state->artifactCache, AppArtifactTypeId_ComputePipeline, key, state->frameCounter);
+        return;
+    }
 
-        GfxPipeline newPipeline = gfx_create_compute_pipeline(ctx->host->gfxDevice, &pipelineDesc);
-        if (newPipeline.generation != 0u) {
-            GfxPipeline oldPipeline = state->gfxDemoComputePipeline;
-            state->gfxDemoComputePipeline = newPipeline;
-            state->gfxDemoComputeShaderGeneration = shaderView.generation;
-            state->gfxDemoComputeFailedShaderGeneration = 0u;
-            state->gfxDemoMaterialDirty = 1;
-            gfx_destroy_pipeline(ctx->host->gfxDevice, oldPipeline);
-            app_gfx_demo_log_once(state, AppGfxDemoLoadLog_ComputePipeline, "Demo compute pipeline ready");
-        } else {
-            state->gfxDemoComputeFailedShaderGeneration = shaderView.generation;
+    AppComputePipelineArtifactData artifactData = {};
+    artifactData.device = ctx->host->gfxDevice;
+    artifactData.shaderHash = shaderView.hash;
+
+    ArtifactResult artifact = artifact_get(state->artifactCache,
+                                           AppArtifactTypeId_ComputePipeline,
+                                           key,
+                                           1u,
+                                           &artifactData,
+                                           sizeof(artifactData),
+                                           ArtifactGetFlags_HighPriority,
+                                           0u);
+    if (artifact.status == ArtifactStatus_Ready &&
+        !FLAGS_HAS(artifact.flags, ArtifactResultFlags_Stale) &&
+        artifact_retain(state->artifactCache, AppArtifactTypeId_ComputePipeline, key)) {
+        if (!artifact_key_is_zero(state->gfxDemoComputePipelineArtifactKey)) {
+            artifact_release(state->artifactCache,
+                             AppArtifactTypeId_ComputePipeline,
+                             state->gfxDemoComputePipelineArtifactKey);
         }
+        state->gfxDemoComputePipeline = app_gfx_pipeline_from_value(artifact.value);
+        state->gfxDemoComputePipelineArtifactKey = key;
+        state->gfxDemoMaterialDirty = 1;
+        app_gfx_demo_log_once(state, AppGfxDemoLoadLog_ComputePipeline, "Demo compute pipeline ready");
     }
 }
 
-static void app_gfx_upload_demo_texture(APP_Context* ctx, GfxFrame* frame, ArtifactUseScope* scope) {
+static void app_gfx_upload_demo_texture(APP_Context* ctx, GfxFrame* frame) {
     ASSERT_ALWAYS(ctx != 0);
     ASSERT_ALWAYS(ctx->host != 0);
     ASSERT_ALWAYS(ctx->core != 0);
 
     AppCoreState* state = ctx->core;
-    if (state->resourceCache == 0 ||
+    if (state->fileStream == 0 ||
+        state->artifactCache == 0 ||
+        state->contentStore == 0 ||
         ctx->host->gfxDevice == 0 ||
-        frame == 0 ||
-        scope == 0) {
+        frame == 0) {
         return;
     }
 
@@ -790,25 +1205,54 @@ static void app_gfx_upload_demo_texture(APP_Context* ctx, GfxFrame* frame, Artif
         return;
     }
 
-    ArtifactView textureView = artifact_resolve_view(scope, state->gfxDemoTextureSource);
-    if (textureView.generation == 0u ||
-        (state->gfxDemoTextureUploaded && textureView.generation == state->gfxDemoTextureGeneration)) {
-        return;
-    }
-    if (textureView.generation == state->gfxDemoTextureFailedGeneration) {
+    FileView textureView = file_view(state->fileStream, state->gfxDemoTextureSource);
+    if (textureView.status != FileStatus_Ready || content_hash_is_zero(textureView.hash)) {
         return;
     }
 
-    AppImageRGBA8 image = {};
-    if (!app_decode_ppm_rgba8(scope->arena, textureView.data, textureView.size, &image)) {
+    ArtifactKey key = app_artifact_key_from_content("decoded demo texture", textureView.hash);
+    if (artifact_key_equal(key, state->gfxDemoTextureDecodeArtifactKey) &&
+        state->gfxDemoTextureUploaded) {
+        artifact_touch(state->artifactCache, AppArtifactTypeId_DecodedTexture, key, state->frameCounter);
+        return;
+    }
+
+    AppDecodedTextureArtifactData artifactData = {};
+    artifactData.sourceHash = textureView.hash;
+    ArtifactResult artifact = artifact_get(state->artifactCache,
+                                           AppArtifactTypeId_DecodedTexture,
+                                           key,
+                                           1u,
+                                           &artifactData,
+                                           sizeof(artifactData),
+                                           ArtifactGetFlags_None,
+                                           0u);
+    if (artifact.status != ArtifactStatus_Ready) {
+        if (FLAGS_HAS(artifact.flags, ArtifactResultFlags_ErrorCached)) {
+            state->gfxDemoTextureFailedGeneration = textureView.generation;
+        }
+        return;
+    }
+
+    ContentHash decodedHash = app_content_hash_from_value(artifact.value);
+    ContentView decodedContent = content_view_hash(state->contentStore, decodedHash);
+    if (!decodedContent.valid || decodedContent.size < sizeof(AppDecodedImageHeader)) {
+        state->gfxDemoTextureFailedGeneration = textureView.generation;
+        return;
+    }
+
+    const AppDecodedImageHeader* image = (const AppDecodedImageHeader*)decodedContent.data;
+    const U8* pixels = decodedContent.data + sizeof(AppDecodedImageHeader);
+    U64 pixelBytes = image->bytesPerRow * image->height;
+    if (decodedContent.size < sizeof(AppDecodedImageHeader) + pixelBytes) {
         state->gfxDemoTextureFailedGeneration = textureView.generation;
         return;
     }
 
     GfxTextureDesc textureDesc = {};
     textureDesc.name = "demo texture";
-    textureDesc.width = image.width;
-    textureDesc.height = image.height;
+    textureDesc.width = image->width;
+    textureDesc.height = image->height;
     textureDesc.mipCount = 1u;
     textureDesc.format = GfxFormat_RGBA8_UNorm;
     textureDesc.usageFlags = GfxTextureUsageFlags_Sampled | GfxTextureUsageFlags_CopyDst;
@@ -822,13 +1266,13 @@ static void app_gfx_upload_demo_texture(APP_Context* ctx, GfxFrame* frame, Artif
 
     GfxTextureUploadRegion region = {};
     region.layerCount = 1u;
-    region.width = image.width;
-    region.height = image.height;
+    region.width = image->width;
+    region.height = image->height;
     region.depth = 1u;
-    region.bytesPerRow = image.bytesPerRow;
-    region.rowsPerImage = image.height;
+    region.bytesPerRow = image->bytesPerRow;
+    region.rowsPerImage = image->height;
 
-    B32 uploaded = gfx_upload_texture(frame, newTexture, &region, image.pixels);
+    B32 uploaded = gfx_upload_texture(frame, newTexture, &region, pixels);
     if (!uploaded) {
         gfx_destroy_texture(ctx->host->gfxDevice, newTexture);
         state->gfxDemoTextureFailedGeneration = textureView.generation;
@@ -840,8 +1284,11 @@ static void app_gfx_upload_demo_texture(APP_Context* ctx, GfxFrame* frame, Artif
     state->gfxDemoTextureId = newTextureId;
     state->gfxDemoTextureGeneration = textureView.generation;
     state->gfxDemoTextureFailedGeneration = 0u;
+    state->gfxDemoTextureDecodeArtifactKey = key;
+    state->gfxDemoDecodedTextureHash = decodedHash;
     state->gfxDemoTextureUploaded = 1;
     state->gfxDemoMaterialDirty = 1;
+    artifact_touch(state->artifactCache, AppArtifactTypeId_DecodedTexture, key, state->frameCounter);
     gfx_destroy_texture(ctx->host->gfxDevice, oldTexture);
     app_gfx_demo_log_once(state, AppGfxDemoLoadLog_TextureUploaded, "Demo texture upload recorded");
 }
@@ -883,8 +1330,14 @@ static B32 app_gfx_dispatch_demo_materials(APP_Context* ctx, GfxCommandBuffer* c
 
     GfxComputePassDesc pass = {};
     pass.name = "demo material compute pass";
-    pass.passData.buffer = state->gfxDemoMaterialBuffer;
-    pass.passData.size = sizeof(AppGfxMaterial) * state->gfxDemoMaterialCount;
+    GfxGpuSlice materialSlice = {};
+    materialSlice.buffer = state->gfxDemoMaterialBuffer;
+    materialSlice.size = sizeof(AppGfxMaterial) * state->gfxDemoMaterialCount;
+    GfxBufferBinding materialBinding = gfx_buffer_write(GFX_SHADER_SLOT_PASS_DATA,
+                                                        materialSlice,
+                                                        GfxStageFlags_Compute);
+    pass.bufferBindings = &materialBinding;
+    pass.bufferBindingCount = 1u;
 
     GfxDispatch dispatch = {};
     dispatch.pipeline = state->gfxDemoComputePipeline;
@@ -906,17 +1359,15 @@ static void app_gfx_demo_shutdown(APP_Context* ctx) {
 
     AppCoreState* state = ctx->core;
     GfxDevice* device = ctx->host ? ctx->host->gfxDevice : 0;
+    app_resource_cache_shutdown(ctx);
+
     if (device != 0) {
-        gfx_destroy_pipeline(device, state->gfxDemoComputePipeline);
-        gfx_destroy_pipeline(device, state->gfxTrianglePipeline);
         gfx_destroy_buffer(device, state->gfxTriangleIndexBuffer);
         gfx_destroy_buffer(device, state->gfxTriangleVertexBuffer);
         gfx_destroy_buffer(device, state->gfxDemoMaterialBuffer);
         gfx_destroy_sampler(device, state->gfxDemoSampler);
         gfx_destroy_texture(device, state->gfxDemoTexture);
     }
-
-    app_resource_cache_shutdown(ctx);
 
     state->gfxDemoComputePipeline = {};
     state->gfxTrianglePipeline = {};
@@ -931,12 +1382,10 @@ static void app_gfx_demo_shutdown(APP_Context* ctx) {
     state->gfxDemoTextureUploaded = 0;
     state->gfxDemoMaterialsReady = 0;
     state->gfxDemoMaterialDirty = 0;
-    state->gfxTriangleVertexShaderGeneration = 0u;
-    state->gfxTriangleFragmentShaderGeneration = 0u;
-    state->gfxTriangleFailedVertexShaderGeneration = 0u;
-    state->gfxTriangleFailedFragmentShaderGeneration = 0u;
-    state->gfxDemoComputeShaderGeneration = 0u;
-    state->gfxDemoComputeFailedShaderGeneration = 0u;
+    state->gfxTrianglePipelineArtifactKey = ARTIFACT_KEY_ZERO;
+    state->gfxDemoComputePipelineArtifactKey = ARTIFACT_KEY_ZERO;
+    state->gfxDemoTextureDecodeArtifactKey = ARTIFACT_KEY_ZERO;
+    state->gfxDemoDecodedTextureHash = CONTENT_HASH_ZERO;
     state->gfxDemoTextureGeneration = 0u;
     state->gfxDemoTextureFailedGeneration = 0u;
     state->gfxDemoGeometryCreated = 0;
@@ -962,31 +1411,23 @@ static void app_gfx_demo_frame(APP_Context* ctx) {
         return;
     }
 
-#if defined(PLATFORM_BUILD_DEBUG) && defined(PLATFORM_OS_WINDOWS)
+#if defined(PLATFORM_BUILD_DEBUG)
     app_gfx_try_build_dev_shaders(ctx);
 #endif
 
 #if defined(PLATFORM_BUILD_DEBUG)
-    if (ctx->core->resourceCache) {
-        artifact_cache_tick(ctx->core->resourceCache, OS_get_time_nanoseconds(), 16u, 4u);
+    if (ctx->core->fileStream) {
+        file_stream_tick(ctx->core->fileStream, OS_get_time_nanoseconds(), 16u);
     }
 #endif
+    if (ctx->core->artifactCache) {
+        artifact_cache_tick(ctx->core->artifactCache, ctx->core->frameCounter, 16u, 16u);
+    }
 
     Temp scratch = get_scratch(0, 0);
-    ArtifactUseScope scope = {};
-    B32 scopeOpen = 0;
-    if (scratch.arena != 0 && ctx->core->resourceCache != 0) {
-        scopeOpen = artifact_use_scope_open(ctx->core->resourceCache, scratch.arena, &scope);
-        if (scopeOpen) {
-            app_gfx_acquire_demo_artifacts(ctx, &scope);
-        }
-    }
 
     GfxFrame* frame = gfx_begin_frame(ctx->host->gfxDevice);
     if (!frame) {
-        if (scopeOpen) {
-            artifact_use_scope_close(&scope);
-        }
         if (scratch.arena != 0) {
             temp_end(&scratch);
         }
@@ -1002,10 +1443,13 @@ static void app_gfx_demo_frame(APP_Context* ctx) {
     if (ctx->core->gfxDemoGeometryCreated && !ctx->core->gfxDemoGeometryUploaded) {
         app_gfx_upload_demo_geometry(ctx, frame);
     }
-    if (ctx->core->gfxDemoGeometryUploaded && scopeOpen) {
-        app_gfx_try_update_triangle_pipeline(ctx, &scope);
-        app_gfx_try_update_demo_compute_pipeline(ctx, &scope);
-        app_gfx_upload_demo_texture(ctx, frame, &scope);
+    if (ctx->core->gfxDemoGeometryUploaded) {
+        app_gfx_try_update_triangle_pipeline(ctx);
+        app_gfx_try_update_demo_compute_pipeline(ctx);
+        app_gfx_upload_demo_texture(ctx, frame);
+        if (ctx->core->artifactCache) {
+            artifact_cache_tick(ctx->core->artifactCache, ctx->core->frameCounter, 16u, 16u);
+        }
     }
 
     B32 materialsReady = app_gfx_dispatch_demo_materials(ctx, commands, frame);
@@ -1086,9 +1530,16 @@ static void app_gfx_demo_frame(APP_Context* ctx) {
     pass.colorTargetCount = 1u;
     pass.width = ctx->host->windowWidth;
     pass.height = ctx->host->windowHeight;
+    GfxBufferBinding materialBinding = {};
     if (materialsReady) {
-        pass.passData.buffer = ctx->core->gfxDemoMaterialBuffer;
-        pass.passData.size = sizeof(AppGfxMaterial) * ctx->core->gfxDemoMaterialCount;
+        GfxGpuSlice materialSlice = {};
+        materialSlice.buffer = ctx->core->gfxDemoMaterialBuffer;
+        materialSlice.size = sizeof(AppGfxMaterial) * ctx->core->gfxDemoMaterialCount;
+        materialBinding = gfx_buffer_read(GFX_SHADER_SLOT_PASS_DATA,
+                                          materialSlice,
+                                          GfxStageFlags_Fragment);
+        pass.bufferBindings = &materialBinding;
+        pass.bufferBindingCount = 1u;
     }
 
     GfxDrawArea area = {};
@@ -1106,14 +1557,14 @@ static void app_gfx_demo_frame(APP_Context* ctx) {
     area.drawCount = drawCount;
 
     gfx_render_pass(commands, &pass, &area, 1u);
-    if (scopeOpen) {
-        artifact_use_scope_close(&scope);
-    }
     if (scratch.arena != 0) {
         temp_end(&scratch);
     }
     gfx_submit(commands);
     gfx_end_frame(frame);
+    if (ctx->core->artifactCache) {
+        artifact_cache_evict(ctx->core->artifactCache, ctx->core->frameCounter, 128u);
+    }
 }
 
 static const APP_StateDesc* app_state_desc(APP_StateKind kind) {

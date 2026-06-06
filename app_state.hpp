@@ -5,6 +5,8 @@
 #pragma once
 
 #include "app_interface.hpp"
+#include "nstl/content/content_include.hpp"
+#include "nstl/file_stream/file_stream_include.hpp"
 #include "nstl/artifact/artifact_include.hpp"
 
 #define APP_STATE_ID(a, b, c, d) ((((U64)(a)) << 56u) | (((U64)(b)) << 48u) | (((U64)(c)) << 40u) | (((U64)(d)) << 32u) | 0x53544154u)
@@ -37,13 +39,18 @@ struct AppCoreState {
     B32 gfxDemoReady;
     U32 gfxDemoLoadLogMask;
     Arena* resourceArena;
-    ArtifactCache* resourceCache;
+    ContentStore* contentStore;
+    FileStream* fileStream;
+    ArtifactCache* artifactCache;
     U64 gfxShaderSourceTimestamp;
     B32 gfxShaderBuildInitialized;
-    ArtifactHandle gfxTriangleVertexShader;
-    ArtifactHandle gfxTriangleFragmentShader;
-    ArtifactHandle gfxDemoComputeShader;
-    ArtifactHandle gfxDemoTextureSource;
+    FileHandle gfxTriangleVertexShader;
+    FileHandle gfxTriangleFragmentShader;
+    FileHandle gfxDemoComputeShader;
+    FileHandle gfxDemoTextureSource;
+    ArtifactKey gfxTrianglePipelineArtifactKey;
+    ArtifactKey gfxDemoComputePipelineArtifactKey;
+    ArtifactKey gfxDemoTextureDecodeArtifactKey;
     GfxBuffer gfxTriangleVertexBuffer;
     GfxBuffer gfxTriangleIndexBuffer;
     GfxPipeline gfxTrianglePipeline;
@@ -57,12 +64,7 @@ struct AppCoreState {
     B32 gfxDemoTextureUploaded;
     B32 gfxDemoMaterialsReady;
     B32 gfxDemoMaterialDirty;
-    U64 gfxTriangleVertexShaderGeneration;
-    U64 gfxTriangleFragmentShaderGeneration;
-    U64 gfxTriangleFailedVertexShaderGeneration;
-    U64 gfxTriangleFailedFragmentShaderGeneration;
-    U64 gfxDemoComputeShaderGeneration;
-    U64 gfxDemoComputeFailedShaderGeneration;
+    ContentHash gfxDemoDecodedTextureHash;
     U64 gfxDemoTextureGeneration;
     U64 gfxDemoTextureFailedGeneration;
 };

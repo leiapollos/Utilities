@@ -10,12 +10,12 @@
 #define GFX_VULKAN_RESOURCE_TABLE_CAPACITY 256u
 #define GFX_VULKAN_RESOURCE_BINDING_TEXTURES 0u
 #define GFX_VULKAN_RESOURCE_BINDING_SAMPLERS 1u
+#define GFX_VULKAN_RESOURCE_BINDING_BUFFERS 2u
 #define GFX_VULKAN_DESCRIPTOR_SET_RESOURCE_TABLE 0u
-#define GFX_VULKAN_DESCRIPTOR_SET_BUFFERS 1u
-#define GFX_VULKAN_RETIRED_BUFFER_CAPACITY 512u
-#define GFX_VULKAN_RETIRED_TEXTURE_CAPACITY 256u
-#define GFX_VULKAN_RETIRED_SAMPLER_CAPACITY 256u
-#define GFX_VULKAN_RETIRED_PIPELINE_CAPACITY 256u
+#define GFX_VULKAN_INITIAL_RETIRED_BUFFER_CAPACITY 512u
+#define GFX_VULKAN_INITIAL_RETIRED_TEXTURE_CAPACITY 256u
+#define GFX_VULKAN_INITIAL_RETIRED_SAMPLER_CAPACITY 256u
+#define GFX_VULKAN_INITIAL_RETIRED_PIPELINE_CAPACITY 256u
 
 enum GfxVulkanResourceKind {
     GfxVulkanResourceKind_Invalid = 0,
@@ -101,8 +101,8 @@ struct GfxVulkanRetiredPipeline {
 struct GfxVulkanPushConstants {
     U32 dataByteOffset;
     U32 passByteOffset;
-    U32 _padding0;
-    U32 _padding1;
+    U32 dataResource;
+    U32 passResource;
 };
 
 struct GfxCommandBuffer {
@@ -117,7 +117,6 @@ struct GfxFrame {
     VkFence fence;
     VkSemaphore imageAvailableSemaphore;
     VkSemaphore renderFinishedSemaphore;
-    VkDescriptorPool descriptorPool;
     GfxBuffer tempBuffer;
     void* tempCpu;
     U64 tempSize;
@@ -175,19 +174,24 @@ struct GfxDevice {
 
     GfxVulkanRetiredBuffer* retiredBuffers;
     U32 retiredBufferCount;
+    U32 retiredBufferCapacity;
     GfxVulkanRetiredTexture* retiredTextures;
     U32 retiredTextureCount;
+    U32 retiredTextureCapacity;
     GfxVulkanRetiredSampler* retiredSamplers;
     U32 retiredSamplerCount;
+    U32 retiredSamplerCapacity;
     GfxVulkanRetiredPipeline* retiredPipelines;
     U32 retiredPipelineCount;
+    U32 retiredPipelineCapacity;
 
     VkDescriptorSetLayout resourceSetLayout;
     VkDescriptorPool resourceDescriptorPool;
     VkDescriptorSet resourceSet;
-    VkDescriptorSetLayout bufferSetLayout;
     VkPipelineLayout pipelineLayout;
 
+    VkBuffer nilBuffer;
+    VkDeviceMemory nilBufferMemory;
     VkImage nilImage;
     VkDeviceMemory nilImageMemory;
     VkImageView nilImageView;
@@ -235,6 +239,10 @@ static void gfx_vulkan_retire_texture(GfxDevice* device, GfxVulkanTexture* item)
 static void gfx_vulkan_retire_sampler(GfxDevice* device, GfxVulkanSampler* item);
 static void gfx_vulkan_retire_pipeline(GfxDevice* device, GfxVulkanPipeline* item);
 static void gfx_vulkan_drain_retired(GfxDevice* device);
+static B32 gfx_vulkan_retired_buffers_reserve(GfxDevice* device, U32 neededCapacity);
+static B32 gfx_vulkan_retired_textures_reserve(GfxDevice* device, U32 neededCapacity);
+static B32 gfx_vulkan_retired_samplers_reserve(GfxDevice* device, U32 neededCapacity);
+static B32 gfx_vulkan_retired_pipelines_reserve(GfxDevice* device, U32 neededCapacity);
 static GfxBuffer gfx_vulkan_create_buffer_internal(GfxDevice* device, const GfxBufferDesc* desc, B32 internal);
 static B32 gfx_vulkan_copy_buffer_immediate(GfxDevice* device, VkBuffer src, VkBuffer dst, U64 dstOffset, U64 size);
 static B32 gfx_vulkan_create_nil_resources(GfxDevice* device);
@@ -242,13 +250,11 @@ static void gfx_vulkan_destroy_nil_resources(GfxDevice* device);
 static B32 gfx_vulkan_resource_table_init(GfxDevice* device);
 static void gfx_vulkan_resource_table_set_texture(GfxDevice* device, GfxResourceId resourceId, VkImageView view);
 static void gfx_vulkan_resource_table_set_sampler(GfxDevice* device, GfxResourceId resourceId, VkSampler sampler);
+static void gfx_vulkan_resource_table_set_buffer(GfxDevice* device, GfxResourceId resourceId, VkBuffer buffer, U64 size);
 static void gfx_vulkan_resource_table_clear(GfxDevice* device, GfxResourceId resourceId);
 static B32 gfx_vulkan_resource_entries_reserve(GfxDevice* device, U32 neededCapacity);
 static GfxResourceId gfx_vulkan_register_resource(GfxDevice* device, GfxVulkanResourceKind kind, U32 index, U32 generation);
-static B32 gfx_vulkan_create_buffer_set_layout(GfxDevice* device);
 static B32 gfx_vulkan_create_pipeline_layout(GfxDevice* device);
-static VkDescriptorSet gfx_vulkan_alloc_buffer_set(GfxFrame* frame, GfxBuffer dataBuffer, GfxBuffer passBuffer);
-static B32 gfx_vulkan_create_frame_descriptor_pool(GfxDevice* device, GfxFrame* frame);
 static B32 gfx_vulkan_create_temp_buffer(GfxDevice* device, GfxFrame* frame, U64 size);
 static void gfx_vulkan_destroy_swapchain(GfxDevice* device);
 static B32 gfx_vulkan_create_swapchain(GfxDevice* device, U32 width, U32 height);
@@ -686,6 +692,106 @@ static U64 gfx_vulkan_retire_serial(GfxDevice* device) {
     return device ? device->frameSerial : 0u;
 }
 
+static B32 gfx_vulkan_retired_buffers_reserve(GfxDevice* device, U32 neededCapacity) {
+    if (!device) {
+        return 0;
+    }
+    if (neededCapacity <= device->retiredBufferCapacity) {
+        return 1;
+    }
+
+    U32 newCapacity = device->retiredBufferCapacity ? device->retiredBufferCapacity * 2u : GFX_VULKAN_INITIAL_RETIRED_BUFFER_CAPACITY;
+    while (newCapacity < neededCapacity) {
+        newCapacity *= 2u;
+    }
+    GfxVulkanRetiredBuffer* newItems = ARENA_PUSH_ARRAY(device->arena, GfxVulkanRetiredBuffer, newCapacity);
+    if (!newItems) {
+        return 0;
+    }
+    MEMSET(newItems, 0, sizeof(GfxVulkanRetiredBuffer) * newCapacity);
+    if (device->retiredBuffers && device->retiredBufferCount != 0u) {
+        MEMCPY(newItems, device->retiredBuffers, sizeof(GfxVulkanRetiredBuffer) * device->retiredBufferCount);
+    }
+    device->retiredBuffers = newItems;
+    device->retiredBufferCapacity = newCapacity;
+    return 1;
+}
+
+static B32 gfx_vulkan_retired_textures_reserve(GfxDevice* device, U32 neededCapacity) {
+    if (!device) {
+        return 0;
+    }
+    if (neededCapacity <= device->retiredTextureCapacity) {
+        return 1;
+    }
+
+    U32 newCapacity = device->retiredTextureCapacity ? device->retiredTextureCapacity * 2u : GFX_VULKAN_INITIAL_RETIRED_TEXTURE_CAPACITY;
+    while (newCapacity < neededCapacity) {
+        newCapacity *= 2u;
+    }
+    GfxVulkanRetiredTexture* newItems = ARENA_PUSH_ARRAY(device->arena, GfxVulkanRetiredTexture, newCapacity);
+    if (!newItems) {
+        return 0;
+    }
+    MEMSET(newItems, 0, sizeof(GfxVulkanRetiredTexture) * newCapacity);
+    if (device->retiredTextures && device->retiredTextureCount != 0u) {
+        MEMCPY(newItems, device->retiredTextures, sizeof(GfxVulkanRetiredTexture) * device->retiredTextureCount);
+    }
+    device->retiredTextures = newItems;
+    device->retiredTextureCapacity = newCapacity;
+    return 1;
+}
+
+static B32 gfx_vulkan_retired_samplers_reserve(GfxDevice* device, U32 neededCapacity) {
+    if (!device) {
+        return 0;
+    }
+    if (neededCapacity <= device->retiredSamplerCapacity) {
+        return 1;
+    }
+
+    U32 newCapacity = device->retiredSamplerCapacity ? device->retiredSamplerCapacity * 2u : GFX_VULKAN_INITIAL_RETIRED_SAMPLER_CAPACITY;
+    while (newCapacity < neededCapacity) {
+        newCapacity *= 2u;
+    }
+    GfxVulkanRetiredSampler* newItems = ARENA_PUSH_ARRAY(device->arena, GfxVulkanRetiredSampler, newCapacity);
+    if (!newItems) {
+        return 0;
+    }
+    MEMSET(newItems, 0, sizeof(GfxVulkanRetiredSampler) * newCapacity);
+    if (device->retiredSamplers && device->retiredSamplerCount != 0u) {
+        MEMCPY(newItems, device->retiredSamplers, sizeof(GfxVulkanRetiredSampler) * device->retiredSamplerCount);
+    }
+    device->retiredSamplers = newItems;
+    device->retiredSamplerCapacity = newCapacity;
+    return 1;
+}
+
+static B32 gfx_vulkan_retired_pipelines_reserve(GfxDevice* device, U32 neededCapacity) {
+    if (!device) {
+        return 0;
+    }
+    if (neededCapacity <= device->retiredPipelineCapacity) {
+        return 1;
+    }
+
+    U32 newCapacity = device->retiredPipelineCapacity ? device->retiredPipelineCapacity * 2u : GFX_VULKAN_INITIAL_RETIRED_PIPELINE_CAPACITY;
+    while (newCapacity < neededCapacity) {
+        newCapacity *= 2u;
+    }
+    GfxVulkanRetiredPipeline* newItems = ARENA_PUSH_ARRAY(device->arena, GfxVulkanRetiredPipeline, newCapacity);
+    if (!newItems) {
+        return 0;
+    }
+    MEMSET(newItems, 0, sizeof(GfxVulkanRetiredPipeline) * newCapacity);
+    if (device->retiredPipelines && device->retiredPipelineCount != 0u) {
+        MEMCPY(newItems, device->retiredPipelines, sizeof(GfxVulkanRetiredPipeline) * device->retiredPipelineCount);
+    }
+    device->retiredPipelines = newItems;
+    device->retiredPipelineCapacity = newCapacity;
+    return 1;
+}
+
 static void gfx_vulkan_retire_buffer(GfxDevice* device, GfxVulkanBuffer* item) {
     if (!device || !item || !item->buffer) {
         return;
@@ -696,9 +802,8 @@ static void gfx_vulkan_retire_buffer(GfxDevice* device, GfxVulkanBuffer* item) {
         item->resourceId = {};
         return;
     }
-    ASSERT_DEBUG(device->retiredBufferCount < GFX_VULKAN_RETIRED_BUFFER_CAPACITY);
-    if (device->retiredBufferCount >= GFX_VULKAN_RETIRED_BUFFER_CAPACITY) {
-        LOG_WARNING("gfx", "Vulkan retired buffer queue full; buffer will stay alive until process exit");
+    if (!gfx_vulkan_retired_buffers_reserve(device, device->retiredBufferCount + 1u)) {
+        LOG_WARNING("gfx", "Vulkan retired buffer queue allocation failed; buffer will stay alive until process exit");
         item->buffer = 0;
         item->memory = 0;
         item->mapped = 0;
@@ -741,9 +846,8 @@ static void gfx_vulkan_retire_texture(GfxDevice* device, GfxVulkanTexture* item)
         item->resourceId = {};
         return;
     }
-    ASSERT_DEBUG(device->retiredTextureCount < GFX_VULKAN_RETIRED_TEXTURE_CAPACITY);
-    if (device->retiredTextureCount >= GFX_VULKAN_RETIRED_TEXTURE_CAPACITY) {
-        LOG_WARNING("gfx", "Vulkan retired texture queue full; texture will stay alive until process exit");
+    if (!gfx_vulkan_retired_textures_reserve(device, device->retiredTextureCount + 1u)) {
+        LOG_WARNING("gfx", "Vulkan retired texture queue allocation failed; texture will stay alive until process exit");
         item->image = 0;
         item->memory = 0;
         item->view = 0;
@@ -773,9 +877,8 @@ static void gfx_vulkan_retire_sampler(GfxDevice* device, GfxVulkanSampler* item)
         item->resourceId = {};
         return;
     }
-    ASSERT_DEBUG(device->retiredSamplerCount < GFX_VULKAN_RETIRED_SAMPLER_CAPACITY);
-    if (device->retiredSamplerCount >= GFX_VULKAN_RETIRED_SAMPLER_CAPACITY) {
-        LOG_WARNING("gfx", "Vulkan retired sampler queue full; sampler will stay alive until process exit");
+    if (!gfx_vulkan_retired_samplers_reserve(device, device->retiredSamplerCount + 1u)) {
+        LOG_WARNING("gfx", "Vulkan retired sampler queue allocation failed; sampler will stay alive until process exit");
         item->sampler = 0;
         return;
     }
@@ -797,9 +900,8 @@ static void gfx_vulkan_retire_pipeline(GfxDevice* device, GfxVulkanPipeline* ite
         item->pipeline = 0;
         return;
     }
-    ASSERT_DEBUG(device->retiredPipelineCount < GFX_VULKAN_RETIRED_PIPELINE_CAPACITY);
-    if (device->retiredPipelineCount >= GFX_VULKAN_RETIRED_PIPELINE_CAPACITY) {
-        LOG_WARNING("gfx", "Vulkan retired pipeline queue full; pipeline will stay alive until process exit");
+    if (!gfx_vulkan_retired_pipelines_reserve(device, device->retiredPipelineCount + 1u)) {
+        LOG_WARNING("gfx", "Vulkan retired pipeline queue allocation failed; pipeline will stay alive until process exit");
         item->pipeline = 0;
         return;
     }
@@ -962,6 +1064,16 @@ static B32 gfx_vulkan_create_nil_resources(GfxDevice* device) {
         return 0;
     }
 
+    if (!gfx_vulkan_create_buffer_raw(device,
+                                      16u,
+                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                      &device->nilBuffer,
+                                      &device->nilBufferMemory,
+                                      0)) {
+        return 0;
+    }
+
     VkImageCreateInfo imageInfo = {};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -1092,14 +1204,22 @@ static void gfx_vulkan_destroy_nil_resources(GfxDevice* device) {
         vkFreeMemory(device->device, device->nilImageMemory, 0);
         device->nilImageMemory = 0;
     }
+    if (device->nilBuffer) {
+        vkDestroyBuffer(device->device, device->nilBuffer, 0);
+        device->nilBuffer = 0;
+    }
+    if (device->nilBufferMemory) {
+        vkFreeMemory(device->device, device->nilBufferMemory, 0);
+        device->nilBufferMemory = 0;
+    }
 }
 
 static B32 gfx_vulkan_resource_table_init(GfxDevice* device) {
-    if (!device || !device->nilImageView || !device->nilSampler) {
+    if (!device || !device->nilImageView || !device->nilSampler || !device->nilBuffer) {
         return 0;
     }
 
-    VkDescriptorSetLayoutBinding bindings[2] = {};
+    VkDescriptorSetLayoutBinding bindings[3] = {};
     bindings[0].binding = GFX_VULKAN_RESOURCE_BINDING_TEXTURES;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
     bindings[0].descriptorCount = GFX_VULKAN_RESOURCE_TABLE_CAPACITY;
@@ -1108,8 +1228,13 @@ static B32 gfx_vulkan_resource_table_init(GfxDevice* device) {
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
     bindings[1].descriptorCount = GFX_VULKAN_RESOURCE_TABLE_CAPACITY;
     bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[2].binding = GFX_VULKAN_RESOURCE_BINDING_BUFFERS;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[2].descriptorCount = GFX_VULKAN_RESOURCE_TABLE_CAPACITY;
+    bindings[2].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 
-    VkDescriptorBindingFlags bindingFlags[2] = {
+    VkDescriptorBindingFlags bindingFlags[3] = {
+        VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT,
         VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT,
         VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT,
     };
@@ -1129,11 +1254,13 @@ static B32 gfx_vulkan_resource_table_init(GfxDevice* device) {
         return 0;
     }
 
-    VkDescriptorPoolSize poolSizes[2] = {};
+    VkDescriptorPoolSize poolSizes[3] = {};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
     poolSizes[0].descriptorCount = GFX_VULKAN_RESOURCE_TABLE_CAPACITY;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_SAMPLER;
     poolSizes[1].descriptorCount = GFX_VULKAN_RESOURCE_TABLE_CAPACITY;
+    poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    poolSizes[2].descriptorCount = GFX_VULKAN_RESOURCE_TABLE_CAPACITY;
 
     VkDescriptorPoolCreateInfo poolInfo = {};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1162,16 +1289,20 @@ static B32 gfx_vulkan_resource_table_init(GfxDevice* device) {
 
     VkDescriptorImageInfo* textureInfos = ARENA_PUSH_ARRAY(scratch.arena, VkDescriptorImageInfo, GFX_VULKAN_RESOURCE_TABLE_CAPACITY);
     VkDescriptorImageInfo* samplerInfos = ARENA_PUSH_ARRAY(scratch.arena, VkDescriptorImageInfo, GFX_VULKAN_RESOURCE_TABLE_CAPACITY);
-    if (!textureInfos || !samplerInfos) {
+    VkDescriptorBufferInfo* bufferInfos = ARENA_PUSH_ARRAY(scratch.arena, VkDescriptorBufferInfo, GFX_VULKAN_RESOURCE_TABLE_CAPACITY);
+    if (!textureInfos || !samplerInfos || !bufferInfos) {
         return 0;
     }
     for (U32 i = 0u; i < GFX_VULKAN_RESOURCE_TABLE_CAPACITY; ++i) {
         textureInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         textureInfos[i].imageView = device->nilImageView;
         samplerInfos[i].sampler = device->nilSampler;
+        bufferInfos[i].buffer = device->nilBuffer;
+        bufferInfos[i].offset = 0u;
+        bufferInfos[i].range = 16u;
     }
 
-    VkWriteDescriptorSet writes[2] = {};
+    VkWriteDescriptorSet writes[3] = {};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = device->resourceSet;
     writes[0].dstBinding = GFX_VULKAN_RESOURCE_BINDING_TEXTURES;
@@ -1184,6 +1315,12 @@ static B32 gfx_vulkan_resource_table_init(GfxDevice* device) {
     writes[1].descriptorCount = GFX_VULKAN_RESOURCE_TABLE_CAPACITY;
     writes[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
     writes[1].pImageInfo = samplerInfos;
+    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet = device->resourceSet;
+    writes[2].dstBinding = GFX_VULKAN_RESOURCE_BINDING_BUFFERS;
+    writes[2].descriptorCount = GFX_VULKAN_RESOURCE_TABLE_CAPACITY;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[2].pBufferInfo = bufferInfos;
     vkUpdateDescriptorSets(device->device, ARRAY_COUNT(writes), writes, 0u, 0);
 
     return 1;
@@ -1228,6 +1365,27 @@ static void gfx_vulkan_resource_table_set_sampler(GfxDevice* device, GfxResource
     vkUpdateDescriptorSets(device->device, 1u, &write, 0u, 0);
 }
 
+static void gfx_vulkan_resource_table_set_buffer(GfxDevice* device, GfxResourceId resourceId, VkBuffer buffer, U64 size) {
+    if (!device || !device->resourceSet || resourceId.index == 0u || resourceId.index >= GFX_VULKAN_RESOURCE_TABLE_CAPACITY) {
+        return;
+    }
+
+    VkDescriptorBufferInfo bufferInfo = {};
+    bufferInfo.buffer = buffer ? buffer : device->nilBuffer;
+    bufferInfo.offset = 0u;
+    bufferInfo.range = size ? size : 16u;
+
+    VkWriteDescriptorSet write = {};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = device->resourceSet;
+    write.dstBinding = GFX_VULKAN_RESOURCE_BINDING_BUFFERS;
+    write.dstArrayElement = resourceId.index;
+    write.descriptorCount = 1u;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    write.pBufferInfo = &bufferInfo;
+    vkUpdateDescriptorSets(device->device, 1u, &write, 0u, 0);
+}
+
 static void gfx_vulkan_resource_table_clear(GfxDevice* device, GfxResourceId resourceId) {
     if (!device || !device->resourceEntries ||
         resourceId.index == 0u ||
@@ -1244,6 +1402,8 @@ static void gfx_vulkan_resource_table_clear(GfxDevice* device, GfxResourceId res
         gfx_vulkan_resource_table_set_texture(device, resourceId, device->nilImageView);
     } else if (entry->kind == GfxVulkanResourceKind_Sampler) {
         gfx_vulkan_resource_table_set_sampler(device, resourceId, device->nilSampler);
+    } else if (entry->kind == GfxVulkanResourceKind_Buffer) {
+        gfx_vulkan_resource_table_set_buffer(device, resourceId, device->nilBuffer, 16u);
     }
 
     MEMSET(entry, 0, sizeof(*entry));
@@ -1323,28 +1483,9 @@ static GfxResourceId gfx_vulkan_register_resource(GfxDevice* device, GfxVulkanRe
     return result;
 }
 
-static B32 gfx_vulkan_create_buffer_set_layout(GfxDevice* device) {
-    VkDescriptorSetLayoutBinding bindings[2] = {};
-    bindings[0].binding = GFX_SHADER_SLOT_DRAW_DATA;
-    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    bindings[0].descriptorCount = 1u;
-    bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
-    bindings[1].binding = GFX_SHADER_SLOT_PASS_DATA;
-    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    bindings[1].descriptorCount = 1u;
-    bindings[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
-
-    VkDescriptorSetLayoutCreateInfo layoutInfo = {};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = ARRAY_COUNT(bindings);
-    layoutInfo.pBindings = bindings;
-    return vkCreateDescriptorSetLayout(device->device, &layoutInfo, 0, &device->bufferSetLayout) == VK_SUCCESS;
-}
-
 static B32 gfx_vulkan_create_pipeline_layout(GfxDevice* device) {
-    VkDescriptorSetLayout layouts[2] = {
+    VkDescriptorSetLayout layouts[1] = {
         device->resourceSetLayout,
-        device->bufferSetLayout,
     };
 
     VkPushConstantRange push = {};
@@ -1359,67 +1500,6 @@ static B32 gfx_vulkan_create_pipeline_layout(GfxDevice* device) {
     layoutInfo.pushConstantRangeCount = 1u;
     layoutInfo.pPushConstantRanges = &push;
     return vkCreatePipelineLayout(device->device, &layoutInfo, 0, &device->pipelineLayout) == VK_SUCCESS;
-}
-
-static B32 gfx_vulkan_create_frame_descriptor_pool(GfxDevice* device, GfxFrame* frame) {
-    VkDescriptorPoolSize poolSize = {};
-    poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSize.descriptorCount = 512u;
-
-    VkDescriptorPoolCreateInfo poolInfo = {};
-    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.maxSets = 256u;
-    poolInfo.poolSizeCount = 1u;
-    poolInfo.pPoolSizes = &poolSize;
-    return vkCreateDescriptorPool(device->device, &poolInfo, 0, &frame->descriptorPool) == VK_SUCCESS;
-}
-
-static VkDescriptorSet gfx_vulkan_alloc_buffer_set(GfxFrame* frame, GfxBuffer dataBuffer, GfxBuffer passBuffer) {
-    if (!frame || !frame->device || !frame->descriptorPool) {
-        return 0;
-    }
-
-    GfxDevice* device = frame->device;
-    GfxVulkanBuffer* data = gfx_vulkan_resolve_buffer(device, dataBuffer);
-    GfxVulkanBuffer* pass = gfx_vulkan_resolve_buffer(device, passBuffer);
-    if (!data->buffer || !pass->buffer) {
-        return 0;
-    }
-
-    VkDescriptorSet set = 0;
-    VkDescriptorSetAllocateInfo allocateInfo = {};
-    allocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    allocateInfo.descriptorPool = frame->descriptorPool;
-    allocateInfo.descriptorSetCount = 1u;
-    allocateInfo.pSetLayouts = &device->bufferSetLayout;
-    if (vkAllocateDescriptorSets(device->device, &allocateInfo, &set) != VK_SUCCESS) {
-        return 0;
-    }
-
-    VkDescriptorBufferInfo bufferInfos[2] = {};
-    bufferInfos[0].buffer = data->buffer;
-    bufferInfos[0].offset = 0u;
-    bufferInfos[0].range = data->size;
-    bufferInfos[1].buffer = pass->buffer;
-    bufferInfos[1].offset = 0u;
-    bufferInfos[1].range = pass->size;
-
-    VkWriteDescriptorSet writes[2] = {};
-    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = set;
-    writes[0].dstBinding = GFX_SHADER_SLOT_DRAW_DATA;
-    writes[0].descriptorCount = 1u;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[0].pBufferInfo = &bufferInfos[0];
-    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = set;
-    writes[1].dstBinding = GFX_SHADER_SLOT_PASS_DATA;
-    writes[1].descriptorCount = 1u;
-    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[1].pBufferInfo = &bufferInfos[1];
-    vkUpdateDescriptorSets(device->device, ARRAY_COUNT(writes), writes, 0u, 0);
-
-    return set;
 }
 
 static B32 gfx_vulkan_create_temp_buffer(GfxDevice* device, GfxFrame* frame, U64 size) {
@@ -1617,10 +1697,6 @@ static B32 gfx_vulkan_create_frame_objects(GfxDevice* device, GfxFrame* frame, U
         return 0;
     }
 
-    if (!gfx_vulkan_create_frame_descriptor_pool(device, frame)) {
-        return 0;
-    }
-
     return gfx_vulkan_create_temp_buffer(device, frame, tempSize);
 }
 
@@ -1630,9 +1706,6 @@ static void gfx_vulkan_destroy_frame_objects(GfxDevice* device, GfxFrame* frame)
     }
     frame->tempCpu = 0;
     frame->tempBuffer = {};
-    if (frame->descriptorPool) {
-        vkDestroyDescriptorPool(device->device, frame->descriptorPool, 0);
-    }
     if (frame->imageAvailableSemaphore) {
         vkDestroySemaphore(device->device, frame->imageAvailableSemaphore, 0);
     }
@@ -1789,6 +1862,7 @@ B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDe
         if (!vulkan13Features.dynamicRendering ||
             !vulkan13Features.synchronization2 ||
             !descriptorIndexingFeatures.descriptorBindingSampledImageUpdateAfterBind ||
+            !descriptorIndexingFeatures.descriptorBindingStorageBufferUpdateAfterBind ||
             !descriptorIndexingFeatures.descriptorBindingUpdateUnusedWhilePending) {
             continue;
         }
@@ -1835,6 +1909,7 @@ B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDe
     descriptorIndexingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
     descriptorIndexingFeatures.pNext = &vulkan13Features;
     descriptorIndexingFeatures.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+    descriptorIndexingFeatures.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
     descriptorIndexingFeatures.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
 
     VkDeviceCreateInfo deviceInfo = {};
@@ -1861,11 +1936,10 @@ B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDe
         gfx_device_destroy(device);
         return 0;
     }
-    device->retiredBuffers = ARENA_PUSH_ARRAY(arena, GfxVulkanRetiredBuffer, GFX_VULKAN_RETIRED_BUFFER_CAPACITY);
-    device->retiredTextures = ARENA_PUSH_ARRAY(arena, GfxVulkanRetiredTexture, GFX_VULKAN_RETIRED_TEXTURE_CAPACITY);
-    device->retiredSamplers = ARENA_PUSH_ARRAY(arena, GfxVulkanRetiredSampler, GFX_VULKAN_RETIRED_SAMPLER_CAPACITY);
-    device->retiredPipelines = ARENA_PUSH_ARRAY(arena, GfxVulkanRetiredPipeline, GFX_VULKAN_RETIRED_PIPELINE_CAPACITY);
-    if (!device->retiredBuffers || !device->retiredTextures || !device->retiredSamplers || !device->retiredPipelines) {
+    if (!gfx_vulkan_retired_buffers_reserve(device, GFX_VULKAN_INITIAL_RETIRED_BUFFER_CAPACITY) ||
+        !gfx_vulkan_retired_textures_reserve(device, GFX_VULKAN_INITIAL_RETIRED_TEXTURE_CAPACITY) ||
+        !gfx_vulkan_retired_samplers_reserve(device, GFX_VULKAN_INITIAL_RETIRED_SAMPLER_CAPACITY) ||
+        !gfx_vulkan_retired_pipelines_reserve(device, GFX_VULKAN_INITIAL_RETIRED_PIPELINE_CAPACITY)) {
         LOG_ERROR("gfx", "Failed to initialize Vulkan retired resource queues");
         gfx_device_destroy(device);
         return 0;
@@ -1880,7 +1954,7 @@ B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDe
         gfx_device_destroy(device);
         return 0;
     }
-    if (!gfx_vulkan_create_buffer_set_layout(device) || !gfx_vulkan_create_pipeline_layout(device)) {
+    if (!gfx_vulkan_create_pipeline_layout(device)) {
         LOG_ERROR("gfx", "Failed to initialize Vulkan descriptor layouts");
         gfx_device_destroy(device);
         return 0;
@@ -1995,10 +2069,6 @@ void gfx_device_destroy(GfxDevice* device) {
     if (device->pipelineLayout) {
         vkDestroyPipelineLayout(device->device, device->pipelineLayout, 0);
         device->pipelineLayout = 0;
-    }
-    if (device->bufferSetLayout) {
-        vkDestroyDescriptorSetLayout(device->device, device->bufferSetLayout, 0);
-        device->bufferSetLayout = 0;
     }
     if (device->resourceDescriptorPool) {
         vkDestroyDescriptorPool(device->device, device->resourceDescriptorPool, 0);
@@ -2234,6 +2304,13 @@ GfxPipeline gfx_create_graphics_pipeline(GfxDevice* device, const GfxGraphicsPip
         }
         return {};
     }
+    if (!desc->vertexShader.entry || desc->vertexShader.entry[0] == 0 ||
+        !desc->fragmentShader.entry || desc->fragmentShader.entry[0] == 0) {
+        if (gfx_vulkan_api_validation_enabled(device)) {
+            LOG_ERROR("gfx", "Vulkan graphics shader entry point missing");
+        }
+        return {};
+    }
 
     VkShaderModule vertexModule = gfx_vulkan_create_shader_module(device, desc->vertexShader);
     VkShaderModule fragmentModule = gfx_vulkan_create_shader_module(device, desc->fragmentShader);
@@ -2248,17 +2325,15 @@ GfxPipeline gfx_create_graphics_pipeline(GfxDevice* device, const GfxGraphicsPip
         return {};
     }
 
-    const char* vertexEntry = desc->vertexShader.entry ? desc->vertexShader.entry : "main";
-    const char* fragmentEntry = desc->fragmentShader.entry ? desc->fragmentShader.entry : "main";
     VkPipelineShaderStageCreateInfo stages[2] = {};
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
     stages[0].module = vertexModule;
-    stages[0].pName = vertexEntry;
+    stages[0].pName = desc->vertexShader.entry;
     stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     stages[1].module = fragmentModule;
-    stages[1].pName = fragmentEntry;
+    stages[1].pName = desc->fragmentShader.entry;
 
     Temp scratch = get_scratch(0, 0u);
     if (!scratch.arena) {
@@ -2394,6 +2469,8 @@ GfxPipeline gfx_create_graphics_pipeline(GfxDevice* device, const GfxGraphicsPip
 GfxPipeline gfx_create_compute_pipeline(GfxDevice* device, const GfxComputePipelineDesc* desc) {
     if (!device || !desc ||
         desc->shader.format != GfxShaderFormat_SPIRV ||
+        !desc->shader.entry ||
+        desc->shader.entry[0] == 0 ||
         desc->threadsPerThreadgroupX == 0u ||
         desc->threadsPerThreadgroupY == 0u ||
         desc->threadsPerThreadgroupZ == 0u) {
@@ -2413,7 +2490,7 @@ GfxPipeline gfx_create_compute_pipeline(GfxDevice* device, const GfxComputePipel
     stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     stage.module = module;
-    stage.pName = desc->shader.entry ? desc->shader.entry : "main";
+    stage.pName = desc->shader.entry;
 
     VkComputePipelineCreateInfo pipelineInfo = {};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
@@ -2543,6 +2620,7 @@ GfxResourceId gfx_register_buffer(GfxDevice* device, GfxBuffer buffer) {
         return item->resourceId;
     }
     item->resourceId = gfx_vulkan_register_resource(device, GfxVulkanResourceKind_Buffer, buffer.index, buffer.generation);
+    gfx_vulkan_resource_table_set_buffer(device, item->resourceId, item->buffer, item->size);
     return item->resourceId;
 }
 
@@ -2580,7 +2658,6 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
     }
 
     vkResetCommandPool(device->device, frame->commandPool, 0u);
-    vkResetDescriptorPool(device->device, frame->descriptorPool, 0u);
 
     VkCommandBufferBeginInfo beginInfo = {};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -2832,6 +2909,18 @@ B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRe
     return 1;
 }
 
+static GfxGpuSlice gfx_vulkan_find_buffer_binding_(const GfxBufferBinding* bindings, U32 bindingCount, U32 slot) {
+    GfxGpuSlice result = {};
+    for (U32 index = 0u; index < bindingCount; ++index) {
+        const GfxBufferBinding* binding = bindings + index;
+        if (binding->slot == slot) {
+            result = binding->slice;
+            break;
+        }
+    }
+    return result;
+}
+
 void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, const GfxDrawArea* areas, U32 areaCount) {
     if (!commands || !commands->frame || !desc || desc->colorTargetCount == 0u || !desc->colorTargets) {
         return;
@@ -2893,10 +2982,10 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
     vkCmdBeginRendering(frame->commandBuffer, &renderingInfo);
 
     GfxPipeline boundPipelineHandle = {};
-    GfxBuffer boundDataBuffer = {};
-    GfxBuffer boundPassBuffer = {};
-    VkDescriptorSet boundBufferSet = 0;
     B32 resourceSetBound = 0;
+    GfxGpuSlice passData = gfx_vulkan_find_buffer_binding_(desc->bufferBindings,
+                                                           desc->bufferBindingCount,
+                                                           GFX_SHADER_SLOT_PASS_DATA);
 
     for (U32 areaIndex = 0u; areaIndex < areaCount; ++areaIndex) {
         const GfxDrawArea* area = &areas[areaIndex];
@@ -2927,9 +3016,9 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
                 continue;
             }
             if (draw->drawData.offset > (U64)0xffffffffu ||
-                desc->passData.offset > (U64)0xffffffffu) {
+                passData.offset > (U64)0xffffffffu) {
                 gfx_vulkan_api_assert(device, draw->drawData.offset <= (U64)0xffffffffu);
-                gfx_vulkan_api_assert(device, desc->passData.offset <= (U64)0xffffffffu);
+                gfx_vulkan_api_assert(device, passData.offset <= (U64)0xffffffffu);
                 continue;
             }
 
@@ -2937,7 +3026,7 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
             GfxVulkanBuffer* vertexBuffer = gfx_vulkan_resolve_buffer(device, draw->vertexBuffer);
             GfxVulkanBuffer* indexBuffer = gfx_vulkan_resolve_buffer(device, draw->indexBuffer);
             GfxVulkanBuffer* drawDataBuffer = gfx_vulkan_resolve_buffer(device, draw->drawData.buffer);
-            GfxVulkanBuffer* passDataBuffer = gfx_vulkan_resolve_buffer(device, desc->passData.buffer);
+            GfxVulkanBuffer* passDataBuffer = gfx_vulkan_resolve_buffer(device, passData.buffer);
 
             gfx_vulkan_api_assert(device, pipeline->kind == GfxPipelineKind_Graphics);
             if (pipeline->kind != GfxPipelineKind_Graphics ||
@@ -2946,6 +3035,12 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
                 !indexBuffer->buffer ||
                 !drawDataBuffer->buffer ||
                 !passDataBuffer->buffer) {
+                continue;
+            }
+
+            GfxResourceId drawDataId = gfx_register_buffer(device, draw->drawData.buffer);
+            GfxResourceId passDataId = gfx_register_buffer(device, passData.buffer);
+            if (drawDataId.index == 0u || passDataId.index == 0u) {
                 continue;
             }
 
@@ -2968,27 +3063,6 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
                 device->stats.pipelineSwitchCount += 1u;
             }
 
-            if (boundBufferSet == 0 ||
-                boundDataBuffer.index != draw->drawData.buffer.index ||
-                boundDataBuffer.generation != draw->drawData.buffer.generation ||
-                boundPassBuffer.index != desc->passData.buffer.index ||
-                boundPassBuffer.generation != desc->passData.buffer.generation) {
-                boundBufferSet = gfx_vulkan_alloc_buffer_set(frame, draw->drawData.buffer, desc->passData.buffer);
-                if (!boundBufferSet) {
-                    continue;
-                }
-                boundDataBuffer = draw->drawData.buffer;
-                boundPassBuffer = desc->passData.buffer;
-                vkCmdBindDescriptorSets(frame->commandBuffer,
-                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                        device->pipelineLayout,
-                                        GFX_VULKAN_DESCRIPTOR_SET_BUFFERS,
-                                        1u,
-                                        &boundBufferSet,
-                                        0u,
-                                        0);
-            }
-
             VkDeviceSize vertexOffset = draw->vertexByteOffset;
             vkCmdBindVertexBuffers(frame->commandBuffer, 0u, 1u, &vertexBuffer->buffer, &vertexOffset);
 
@@ -3004,7 +3078,9 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
 
             GfxVulkanPushConstants push = {};
             push.dataByteOffset = (U32)draw->drawData.offset;
-            push.passByteOffset = (U32)desc->passData.offset;
+            push.passByteOffset = (U32)passData.offset;
+            push.dataResource = drawDataId.index;
+            push.passResource = passDataId.index;
             vkCmdPushConstants(frame->commandBuffer,
                                device->pipelineLayout,
                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT,
@@ -3057,15 +3133,15 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
         return;
     }
 
-    GfxVulkanBuffer* passDataBuffer = gfx_vulkan_resolve_buffer(device, desc->passData.buffer);
+    GfxGpuSlice passData = gfx_vulkan_find_buffer_binding_(desc->bufferBindings,
+                                                           desc->bufferBindingCount,
+                                                           GFX_SHADER_SLOT_PASS_DATA);
+    GfxVulkanBuffer* passDataBuffer = gfx_vulkan_resolve_buffer(device, passData.buffer);
     if (!passDataBuffer->buffer) {
         return;
     }
 
     GfxPipeline boundPipelineHandle = {};
-    GfxBuffer boundDataBuffer = {};
-    GfxBuffer boundPassBuffer = {};
-    VkDescriptorSet boundBufferSet = 0;
     B32 resourceSetBound = 0;
 
     B32 dispatched = 0;
@@ -3077,9 +3153,9 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
             continue;
         }
         if (dispatch->dispatchData.offset > (U64)0xffffffffu ||
-            desc->passData.offset > (U64)0xffffffffu) {
+            passData.offset > (U64)0xffffffffu) {
             gfx_vulkan_api_assert(device, dispatch->dispatchData.offset <= (U64)0xffffffffu);
-            gfx_vulkan_api_assert(device, desc->passData.offset <= (U64)0xffffffffu);
+            gfx_vulkan_api_assert(device, passData.offset <= (U64)0xffffffffu);
             continue;
         }
 
@@ -3090,6 +3166,12 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
         if (pipeline->kind != GfxPipelineKind_Compute ||
             !pipeline->pipeline ||
             !dispatchDataBuffer->buffer) {
+            continue;
+        }
+
+        GfxResourceId dispatchDataId = gfx_register_buffer(device, dispatch->dispatchData.buffer);
+        GfxResourceId passDataId = gfx_register_buffer(device, passData.buffer);
+        if (dispatchDataId.index == 0u || passDataId.index == 0u) {
             continue;
         }
 
@@ -3112,30 +3194,11 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
             device->stats.pipelineSwitchCount += 1u;
         }
 
-        if (boundBufferSet == 0 ||
-            boundDataBuffer.index != dispatch->dispatchData.buffer.index ||
-            boundDataBuffer.generation != dispatch->dispatchData.buffer.generation ||
-            boundPassBuffer.index != desc->passData.buffer.index ||
-            boundPassBuffer.generation != desc->passData.buffer.generation) {
-            boundBufferSet = gfx_vulkan_alloc_buffer_set(frame, dispatch->dispatchData.buffer, desc->passData.buffer);
-            if (!boundBufferSet) {
-                continue;
-            }
-            boundDataBuffer = dispatch->dispatchData.buffer;
-            boundPassBuffer = desc->passData.buffer;
-            vkCmdBindDescriptorSets(frame->commandBuffer,
-                                    VK_PIPELINE_BIND_POINT_COMPUTE,
-                                    device->pipelineLayout,
-                                    GFX_VULKAN_DESCRIPTOR_SET_BUFFERS,
-                                    1u,
-                                    &boundBufferSet,
-                                    0u,
-                                    0);
-        }
-
         GfxVulkanPushConstants push = {};
         push.dataByteOffset = (U32)dispatch->dispatchData.offset;
-        push.passByteOffset = (U32)desc->passData.offset;
+        push.passByteOffset = (U32)passData.offset;
+        push.dataResource = dispatchDataId.index;
+        push.passResource = passDataId.index;
         vkCmdPushConstants(frame->commandBuffer,
                            device->pipelineLayout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT,
@@ -3156,8 +3219,8 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
         barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
         barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
         barrier.buffer = passDataBuffer->buffer;
-        barrier.offset = desc->passData.offset;
-        barrier.size = desc->passData.size ? desc->passData.size : passDataBuffer->size;
+        barrier.offset = passData.offset;
+        barrier.size = passData.size ? passData.size : passDataBuffer->size;
 
         VkDependencyInfo dependency = {};
         dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
