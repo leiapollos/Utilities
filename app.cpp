@@ -2,7 +2,7 @@
 // Created by André Leite on 31/10/2025.
 //
 
-#define APP_CORE_STATE_VERSION 33u
+#define APP_CORE_STATE_VERSION 34u
 #define APP_GFX_DEMO_TEXTURE_PATH "app/textures/demo.ppm"
 #define APP_GFX_DEMO_DRAW_COLUMNS 12u
 #define APP_GFX_DEMO_DRAW_ROWS 8u
@@ -11,6 +11,11 @@
 #define APP_GFX_DEMO_COMPUTE_THREADS_PER_GROUP 64u
 #define APP_GFX_DEMO_MAX_FRAME_DELTA_SECONDS 0.05f
 #define APP_GFX_DEMO_DRAW_PHASE_STEP 0.071f
+#define APP_GFX_DEMO_OVERLAP_EXTENT_X 0.46f
+#define APP_GFX_DEMO_OVERLAP_EXTENT_Y 0.34f
+#define APP_GFX_DEMO_OVERLAP_SCALE 0.27f
+#define APP_GFX_DEMO_DEPTH_NEAR 0.10f
+#define APP_GFX_DEMO_DEPTH_RANGE 0.82f
 #define APP_IMAGE_RGBA8_BYTES_PER_PIXEL 4u
 
 struct AppGfxVertex {
@@ -120,6 +125,7 @@ enum AppGfxDemoLoadLog {
     AppGfxDemoLoadLog_ComputePipeline = (1u << 4u),
     AppGfxDemoLoadLog_TextureUploaded = (1u << 5u),
     AppGfxDemoLoadLog_Ready = (1u << 6u),
+    AppGfxDemoLoadLog_Targets = (1u << 7u),
 };
 
 enum AppArtifactTypeId {
@@ -173,6 +179,15 @@ static void app_gfx_try_update_triangle_pipeline(APP_Context* ctx);
 static void app_gfx_try_update_demo_compute_pipeline(APP_Context* ctx);
 static void app_gfx_upload_demo_texture(APP_Context* ctx, GfxFrame* frame);
 static B32 app_gfx_dispatch_demo_materials(APP_Context* ctx, GfxCommandBuffer* commands, GfxFrame* frame);
+static void app_gfx_destroy_demo_targets(APP_Context* ctx);
+static B32 app_gfx_ensure_demo_targets(APP_Context* ctx);
+static B32 app_gfx_build_demo_draws(APP_Context* ctx,
+                                    GfxFrame* frame,
+                                    Arena* arena,
+                                    B32 materialsReady,
+                                    GfxDraw** outDraws,
+                                    U32* outDrawCount);
+static GfxDrawArea app_gfx_demo_draw_area(U32 width, U32 height, const GfxDraw* draws, U32 drawCount);
 static void app_gfx_demo_shutdown(APP_Context* ctx);
 static void app_gfx_demo_frame(APP_Context* ctx);
 
@@ -801,10 +816,12 @@ static B32 app_publish_triangle_pipeline_artifact(ArtifactPublishContext* artifa
     pipelineDesc.topology = GfxPrimitiveTopology_TriangleList;
     pipelineDesc.raster.cullMode = GfxCullMode_None;
     pipelineDesc.raster.frontFace = GfxFrontFace_CCW;
-    pipelineDesc.depth.compareOp = GfxCompareOp_Always;
+    pipelineDesc.depth.depthTestEnabled = 1;
+    pipelineDesc.depth.depthWriteEnabled = 1;
+    pipelineDesc.depth.compareOp = GfxCompareOp_LessEqual;
     pipelineDesc.colorFormats = colorFormats;
     pipelineDesc.colorFormatCount = ARRAY_COUNT(colorFormats);
-    pipelineDesc.depthFormat = GfxFormat_Invalid;
+    pipelineDesc.depthFormat = GfxFormat_D32_Float;
 
     GfxPipeline pipeline = gfx_create_graphics_pipeline(data->device, &pipelineDesc);
     if (pipeline.generation == 0u) {
@@ -1352,6 +1369,176 @@ static B32 app_gfx_dispatch_demo_materials(APP_Context* ctx, GfxCommandBuffer* c
     return 1;
 }
 
+static void app_gfx_destroy_demo_targets(APP_Context* ctx) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    AppCoreState* state = ctx->core;
+    GfxDevice* device = ctx->host ? ctx->host->gfxDevice : 0;
+    if (device != 0) {
+        gfx_destroy_texture(device, state->gfxDemoDepth);
+        gfx_destroy_texture(device, state->gfxDemoOffscreenColor);
+    }
+
+    state->gfxDemoDepth = {};
+    state->gfxDemoOffscreenColor = {};
+    state->gfxDemoTargetWidth = 0u;
+    state->gfxDemoTargetHeight = 0u;
+}
+
+static B32 app_gfx_ensure_demo_targets(APP_Context* ctx) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->host != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    AppCoreState* state = ctx->core;
+    GfxDevice* device = ctx->host->gfxDevice;
+    U32 width = ctx->host->windowWidth;
+    U32 height = ctx->host->windowHeight;
+    if (device == 0 || width == 0u || height == 0u) {
+        return 0;
+    }
+
+    if (state->gfxDemoTargetWidth == width &&
+        state->gfxDemoTargetHeight == height &&
+        state->gfxDemoOffscreenColor.generation != 0u &&
+        state->gfxDemoDepth.generation != 0u) {
+        return 1;
+    }
+
+    GfxTextureDesc colorDesc = {};
+    colorDesc.name = "demo offscreen color";
+    colorDesc.width = width;
+    colorDesc.height = height;
+    colorDesc.mipCount = 1u;
+    colorDesc.format = GfxFormat_BGRA8_UNorm;
+    colorDesc.usageFlags = GfxTextureUsageFlags_ColorTarget;
+    GfxTexture color = gfx_create_texture(device, &colorDesc);
+
+    GfxTextureDesc depthDesc = {};
+    depthDesc.name = "demo depth";
+    depthDesc.width = width;
+    depthDesc.height = height;
+    depthDesc.mipCount = 1u;
+    depthDesc.format = GfxFormat_D32_Float;
+    depthDesc.usageFlags = GfxTextureUsageFlags_DepthTarget;
+    GfxTexture depth = gfx_create_texture(device, &depthDesc);
+
+    if (color.generation == 0u || depth.generation == 0u) {
+        gfx_destroy_texture(device, depth);
+        gfx_destroy_texture(device, color);
+        return 0;
+    }
+
+    GfxTexture oldColor = state->gfxDemoOffscreenColor;
+    GfxTexture oldDepth = state->gfxDemoDepth;
+    state->gfxDemoOffscreenColor = color;
+    state->gfxDemoDepth = depth;
+    state->gfxDemoTargetWidth = width;
+    state->gfxDemoTargetHeight = height;
+    gfx_destroy_texture(device, oldDepth);
+    gfx_destroy_texture(device, oldColor);
+    app_gfx_demo_log_once(state, AppGfxDemoLoadLog_Targets, "Demo offscreen targets ready");
+    return 1;
+}
+
+static B32 app_gfx_build_demo_draws(APP_Context* ctx,
+                                    GfxFrame* frame,
+                                    Arena* arena,
+                                    B32 materialsReady,
+                                    GfxDraw** outDraws,
+                                    U32* outDrawCount) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+    ASSERT_ALWAYS(outDraws != 0);
+    ASSERT_ALWAYS(outDrawCount != 0);
+
+    *outDraws = 0;
+    *outDrawCount = 0u;
+
+    AppCoreState* state = ctx->core;
+    if (frame == 0 ||
+        arena == 0 ||
+        !state->gfxDemoGeometryUploaded ||
+        !materialsReady ||
+        state->gfxTrianglePipeline.generation == 0u) {
+        return 0;
+    }
+
+    GfxTemp drawTemp = gfx_allocate_temp(frame, sizeof(AppGfxDrawData) * APP_GFX_DEMO_DRAW_COUNT, 16u);
+    AppGfxDrawData* drawDataBase = (AppGfxDrawData*)drawTemp.cpu;
+    if (drawDataBase == 0) {
+        return 0;
+    }
+
+    GfxDraw* draws = ARENA_PUSH_ARRAY(arena, GfxDraw, APP_GFX_DEMO_DRAW_COUNT);
+    if (draws == 0) {
+        return 0;
+    }
+
+    for (U32 row = 0u; row < APP_GFX_DEMO_DRAW_ROWS; ++row) {
+        for (U32 column = 0u; column < APP_GFX_DEMO_DRAW_COLUMNS; ++column) {
+            U32 drawIndex = row * APP_GFX_DEMO_DRAW_COLUMNS + column;
+            U64 drawDataOffset = sizeof(AppGfxDrawData) * drawIndex;
+            F32 columnT = (APP_GFX_DEMO_DRAW_COLUMNS > 1u) ?
+                          ((F32)column / (F32)(APP_GFX_DEMO_DRAW_COLUMNS - 1u)) :
+                          0.0f;
+            F32 rowT = (APP_GFX_DEMO_DRAW_ROWS > 1u) ?
+                       ((F32)row / (F32)(APP_GFX_DEMO_DRAW_ROWS - 1u)) :
+                       0.0f;
+            F32 centeredX = columnT * 2.0f - 1.0f;
+            F32 centeredY = rowT * 2.0f - 1.0f;
+            F32 radialDepth = MIN((centeredX * centeredX + centeredY * centeredY) * 0.5f, 1.0f);
+
+            AppGfxDrawData* drawData = drawDataBase + drawIndex;
+            drawData->offsetScale[0] = centeredX * APP_GFX_DEMO_OVERLAP_EXTENT_X;
+            drawData->offsetScale[1] = centeredY * APP_GFX_DEMO_OVERLAP_EXTENT_Y;
+            drawData->offsetScale[2] = APP_GFX_DEMO_OVERLAP_SCALE;
+            drawData->offsetScale[3] = APP_GFX_DEMO_DEPTH_NEAR + radialDepth * APP_GFX_DEMO_DEPTH_RANGE;
+            drawData->materialIndex = drawIndex;
+            drawData->objectId = drawIndex;
+            drawData->flags = 1u;
+            drawData->animationPhase = state->gfxDemoAnimationSeconds +
+                                       (F32)drawIndex * APP_GFX_DEMO_DRAW_PHASE_STEP;
+
+            GfxGpuSlice drawDataSlice = drawTemp.gpu;
+            drawDataSlice.offset += drawDataOffset;
+            drawDataSlice.size = sizeof(AppGfxDrawData);
+
+            GfxDraw* draw = draws + drawIndex;
+            *draw = {};
+            draw->pipeline = state->gfxTrianglePipeline;
+            draw->vertexBuffer = state->gfxTriangleVertexBuffer;
+            draw->indexBuffer = state->gfxTriangleIndexBuffer;
+            draw->indexCount = 3u;
+            draw->instanceCount = 1u;
+            draw->indexType = GfxIndexType_U16;
+            draw->drawData = drawDataSlice;
+        }
+    }
+
+    *outDraws = draws;
+    *outDrawCount = APP_GFX_DEMO_DRAW_COUNT;
+    return 1;
+}
+
+static GfxDrawArea app_gfx_demo_draw_area(U32 width, U32 height, const GfxDraw* draws, U32 drawCount) {
+    GfxDrawArea area = {};
+    area.viewport.x = 0.0f;
+    area.viewport.y = 0.0f;
+    area.viewport.width = (F32)width;
+    area.viewport.height = (F32)height;
+    area.viewport.minDepth = 0.0f;
+    area.viewport.maxDepth = 1.0f;
+    area.scissor.x = 0;
+    area.scissor.y = 0;
+    area.scissor.width = width;
+    area.scissor.height = height;
+    area.draws = draws;
+    area.drawCount = drawCount;
+    return area;
+}
+
 static void app_gfx_demo_shutdown(APP_Context* ctx) {
     ASSERT_ALWAYS(ctx != 0);
     ASSERT_ALWAYS(ctx->core != 0);
@@ -1361,6 +1548,7 @@ static void app_gfx_demo_shutdown(APP_Context* ctx) {
     app_resource_cache_shutdown(ctx);
 
     if (device != 0) {
+        app_gfx_destroy_demo_targets(ctx);
         gfx_destroy_buffer(device, state->gfxTriangleIndexBuffer);
         gfx_destroy_buffer(device, state->gfxTriangleVertexBuffer);
         gfx_destroy_buffer(device, state->gfxDemoMaterialBuffer);
@@ -1374,9 +1562,13 @@ static void app_gfx_demo_shutdown(APP_Context* ctx) {
     state->gfxTriangleVertexBuffer = {};
     state->gfxDemoMaterialBuffer = {};
     state->gfxDemoTexture = {};
+    state->gfxDemoOffscreenColor = {};
+    state->gfxDemoDepth = {};
     state->gfxDemoSampler = {};
     state->gfxDemoTextureId = {};
     state->gfxDemoSamplerId = {};
+    state->gfxDemoTargetWidth = 0u;
+    state->gfxDemoTargetHeight = 0u;
     state->gfxDemoMaterialCount = 0u;
     state->gfxDemoTextureUploaded = 0;
     state->gfxDemoMaterialsReady = 0;
@@ -1451,59 +1643,60 @@ static void app_gfx_demo_frame(APP_Context* ctx) {
         }
     }
 
+    B32 targetsReady = app_gfx_ensure_demo_targets(ctx);
     B32 materialsReady = app_gfx_dispatch_demo_materials(ctx, commands, frame);
-    B32 drawInputsReady = ctx->core->gfxDemoGeometryUploaded &&
-                          materialsReady &&
-                          ctx->core->gfxTrianglePipeline.generation != 0u;
 
     GfxDraw* draws = 0;
     U32 drawCount = 0u;
-    if (drawInputsReady && scratch.arena != 0) {
-        GfxTemp drawTemp = gfx_allocate_temp(frame, sizeof(AppGfxDrawData) * APP_GFX_DEMO_DRAW_COUNT, 16u);
-        AppGfxDrawData* drawDataBase = (AppGfxDrawData*)drawTemp.cpu;
-        if (drawDataBase != 0) {
-            draws = ARENA_PUSH_ARRAY(scratch.arena, GfxDraw, APP_GFX_DEMO_DRAW_COUNT);
-        }
+    if (targetsReady && scratch.arena != 0) {
+        app_gfx_build_demo_draws(ctx, frame, scratch.arena, materialsReady, &draws, &drawCount);
+    }
 
-        if (draws != 0) {
-            F32 cellWidth = 2.0f / (F32)APP_GFX_DEMO_DRAW_COLUMNS;
-            F32 cellHeight = 2.0f / (F32)APP_GFX_DEMO_DRAW_ROWS;
-            F32 scale = MIN(cellWidth, cellHeight) * 0.72f;
+    GfxBufferBinding materialBinding = {};
+    GfxBufferBinding* passBindings = 0;
+    U32 passBindingCount = 0u;
+    if (materialsReady) {
+        GfxGpuSlice materialSlice = {};
+        materialSlice.buffer = ctx->core->gfxDemoMaterialBuffer;
+        materialSlice.size = sizeof(AppGfxMaterial) * ctx->core->gfxDemoMaterialCount;
+        materialBinding = gfx_buffer_read(GFX_SHADER_SLOT_PASS_DATA,
+                                          materialSlice,
+                                          GfxStageFlags_Fragment);
+        passBindings = &materialBinding;
+        passBindingCount = 1u;
+    }
 
-            for (U32 row = 0u; row < APP_GFX_DEMO_DRAW_ROWS; ++row) {
-                for (U32 column = 0u; column < APP_GFX_DEMO_DRAW_COLUMNS; ++column) {
-                    U32 drawIndex = row * APP_GFX_DEMO_DRAW_COLUMNS + column;
-                    U64 drawDataOffset = sizeof(AppGfxDrawData) * drawIndex;
+    GfxDrawArea area = app_gfx_demo_draw_area(ctx->host->windowWidth,
+                                              ctx->host->windowHeight,
+                                              draws,
+                                              drawCount);
 
-                    AppGfxDrawData* drawData = drawDataBase + drawIndex;
-                    drawData->offsetScale[0] = -1.0f + ((F32)column + 0.5f) * cellWidth;
-                    drawData->offsetScale[1] = -1.0f + ((F32)row + 0.5f) * cellHeight;
-                    drawData->offsetScale[2] = scale;
-                    drawData->offsetScale[3] = 1.0f;
-                    drawData->materialIndex = drawIndex;
-                    drawData->objectId = drawIndex;
-                    drawData->flags = 1u;
-                    drawData->animationPhase = ctx->core->gfxDemoAnimationSeconds +
-                                               (F32)drawIndex * APP_GFX_DEMO_DRAW_PHASE_STEP;
+    GfxDepthTarget depthTarget = {};
+    if (targetsReady) {
+        depthTarget.texture = ctx->core->gfxDemoDepth;
+        depthTarget.loadOp = GfxLoadOp_Clear;
+        depthTarget.storeOp = GfxStoreOp_DontCare;
+        depthTarget.clearDepth = 1.0f;
 
-                    GfxGpuSlice drawDataSlice = drawTemp.gpu;
-                    drawDataSlice.offset += drawDataOffset;
-                    drawDataSlice.size = sizeof(AppGfxDrawData);
+        GfxColorTarget offscreenColorTarget = {};
+        offscreenColorTarget.texture = ctx->core->gfxDemoOffscreenColor;
+        offscreenColorTarget.loadOp = GfxLoadOp_Clear;
+        offscreenColorTarget.storeOp = GfxStoreOp_Store;
+        offscreenColorTarget.clearColor[0] = 0.02f;
+        offscreenColorTarget.clearColor[1] = 0.03f;
+        offscreenColorTarget.clearColor[2] = 0.04f;
+        offscreenColorTarget.clearColor[3] = 1.0f;
 
-                    GfxDraw* draw = draws + drawIndex;
-                    *draw = {};
-                    draw->pipeline = ctx->core->gfxTrianglePipeline;
-                    draw->vertexBuffer = ctx->core->gfxTriangleVertexBuffer;
-                    draw->indexBuffer = ctx->core->gfxTriangleIndexBuffer;
-                    draw->indexCount = 3u;
-                    draw->instanceCount = 1u;
-                    draw->indexType = GfxIndexType_U16;
-                    draw->drawData = drawDataSlice;
-                }
-            }
-
-            drawCount = APP_GFX_DEMO_DRAW_COUNT;
-        }
+        GfxRenderPassDesc offscreenPass = {};
+        offscreenPass.name = "demo offscreen pass";
+        offscreenPass.colorTargets = &offscreenColorTarget;
+        offscreenPass.colorTargetCount = 1u;
+        offscreenPass.depthTarget = &depthTarget;
+        offscreenPass.bufferBindings = passBindings;
+        offscreenPass.bufferBindingCount = passBindingCount;
+        offscreenPass.width = ctx->host->windowWidth;
+        offscreenPass.height = ctx->host->windowHeight;
+        gfx_render_pass(commands, &offscreenPass, &area, 1u);
     }
 
     GfxColorTarget colorTarget = {};
@@ -1516,37 +1709,14 @@ static void app_gfx_demo_frame(APP_Context* ctx) {
     colorTarget.clearColor[3] = 1.0f;
 
     GfxRenderPassDesc pass = {};
-    pass.name = "triangle pass";
+    pass.name = "demo visible pass";
     pass.colorTargets = &colorTarget;
     pass.colorTargetCount = 1u;
+    pass.depthTarget = targetsReady ? &depthTarget : 0;
+    pass.bufferBindings = passBindings;
+    pass.bufferBindingCount = passBindingCount;
     pass.width = ctx->host->windowWidth;
     pass.height = ctx->host->windowHeight;
-    GfxBufferBinding materialBinding = {};
-    if (materialsReady) {
-        GfxGpuSlice materialSlice = {};
-        materialSlice.buffer = ctx->core->gfxDemoMaterialBuffer;
-        materialSlice.size = sizeof(AppGfxMaterial) * ctx->core->gfxDemoMaterialCount;
-        materialBinding = gfx_buffer_read(GFX_SHADER_SLOT_PASS_DATA,
-                                          materialSlice,
-                                          GfxStageFlags_Fragment);
-        pass.bufferBindings = &materialBinding;
-        pass.bufferBindingCount = 1u;
-    }
-
-    GfxDrawArea area = {};
-    area.viewport.x = 0.0f;
-    area.viewport.y = 0.0f;
-    area.viewport.width = (F32)ctx->host->windowWidth;
-    area.viewport.height = (F32)ctx->host->windowHeight;
-    area.viewport.minDepth = 0.0f;
-    area.viewport.maxDepth = 1.0f;
-    area.scissor.x = 0;
-    area.scissor.y = 0;
-    area.scissor.width = ctx->host->windowWidth;
-    area.scissor.height = ctx->host->windowHeight;
-    area.draws = draws;
-    area.drawCount = drawCount;
-
     gfx_render_pass(commands, &pass, &area, 1u);
     if (drawCount != 0u && !ctx->core->gfxDemoReady) {
         ctx->core->gfxDemoReady = 1;

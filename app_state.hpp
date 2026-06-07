@@ -52,10 +52,14 @@ struct AppCoreState {
     GfxPipeline gfxTrianglePipeline;
     GfxPipeline gfxDemoComputePipeline;
     GfxTexture gfxDemoTexture;
+    GfxTexture gfxDemoOffscreenColor;
+    GfxTexture gfxDemoDepth;
     GfxSampler gfxDemoSampler;
     GfxBuffer gfxDemoMaterialBuffer;
     GfxResourceId gfxDemoTextureId;
     GfxResourceId gfxDemoSamplerId;
+    U32 gfxDemoTargetWidth;
+    U32 gfxDemoTargetHeight;
     U32 gfxDemoMaterialCount;
     B32 gfxDemoTextureUploaded;
     B32 gfxDemoMaterialsReady;

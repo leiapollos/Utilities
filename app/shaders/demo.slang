@@ -11,7 +11,7 @@ VertexOut triangle_vertex(VertexIn input) {
     float2 wobble = float2(sin(drawData.animationPhase * 1.7 + objectPhase),
                            cos(drawData.animationPhase * 1.3 + objectPhase)) * 0.014;
     float2 position = input.position * scale + drawData.offsetScale.xy + wobble;
-    output.position = float4(position, 0.0, 1.0);
+    output.position = float4(position, drawData.offsetScale.w, 1.0);
     output.color = input.color;
     output.uv = float2(input.position.x * (1.0 / 1.1) + 0.5, 1.0 - (input.position.y + 0.45));
     return output;
@@ -24,7 +24,16 @@ float4 triangle_fragment(VertexOut input) : SV_Target0 {
     float4 albedo = gfx_sample_albedo(material.albedoTexture, material.samplerIndex, input.uv);
     float brightness = 0.90 + 0.10 * sin(drawData.animationPhase * 3.0 + (float)drawData.objectId * 0.051);
     float4 color = input.color * material.baseColor * albedo;
-    color.rgb *= brightness;
+    float depthShade = 1.20 - drawData.offsetScale.w * 0.45;
+    color.rgb *= brightness * depthShade;
+
+    float leftEdge = input.uv.x - (0.5 - input.uv.y * 0.5);
+    float rightEdge = (0.5 + input.uv.y * 0.5) - input.uv.x;
+    float bottomEdge = 1.0 - input.uv.y;
+    float edgeDistance = min(bottomEdge, min(leftEdge, rightEdge));
+    float edgeWidth = max(fwidth(edgeDistance) * 1.8, 0.0015);
+    float outline = 1.0 - smoothstep(0.0, edgeWidth, edgeDistance);
+    color.rgb = lerp(color.rgb, float3(0.015, 0.018, 0.022), outline * 0.85);
     return color;
 }
 #endif

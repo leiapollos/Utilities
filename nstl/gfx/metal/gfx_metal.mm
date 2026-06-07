@@ -1948,9 +1948,11 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
     gfx_metal_api_assert(device, desc->colorTargetCount <= GFX_MAX_COLOR_TARGETS);
     gfx_metal_api_assert(device, desc->colorTargetCount == 0u || desc->colorTargets != 0);
     gfx_metal_api_assert(device, areaCount == 0u || areas != 0);
+    gfx_metal_api_assert(device, desc->bufferBindingCount == 0u || desc->bufferBindings != 0);
     if (desc->colorTargetCount == 0u ||
         desc->colorTargetCount > GFX_MAX_COLOR_TARGETS ||
         !desc->colorTargets ||
+        (desc->bufferBindingCount != 0u && !desc->bufferBindings) ||
         (areaCount != 0u && !areas)) {
         return;
     }
@@ -2156,7 +2158,9 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
     }
 
     gfx_metal_api_assert(device, dispatchCount == 0u || dispatches != 0);
-    if (dispatchCount != 0u && !dispatches) {
+    gfx_metal_api_assert(device, desc->bufferBindingCount == 0u || desc->bufferBindings != 0);
+    if ((dispatchCount != 0u && !dispatches) ||
+        (desc->bufferBindingCount != 0u && !desc->bufferBindings)) {
         return;
     }
 

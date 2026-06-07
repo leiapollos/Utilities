@@ -2971,6 +2971,9 @@ B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRe
 
 static GfxGpuSlice gfx_vulkan_find_buffer_binding_(const GfxBufferBinding* bindings, U32 bindingCount, U32 slot) {
     GfxGpuSlice result = {};
+    if (!bindings && bindingCount != 0u) {
+        return result;
+    }
     for (U32 index = 0u; index < bindingCount; ++index) {
         const GfxBufferBinding* binding = bindings + index;
         if (binding->slot == slot) {
@@ -3142,6 +3145,7 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
         !desc->colorTargets ||
         desc->width == 0u ||
         desc->height == 0u ||
+        (desc->bufferBindingCount != 0u && !desc->bufferBindings) ||
         (areaCount != 0u && !areas)) {
         return;
     }
@@ -3445,7 +3449,9 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
     }
 
     gfx_vulkan_api_assert(device, dispatchCount == 0u || dispatches != 0);
-    if (dispatchCount != 0u && !dispatches) {
+    gfx_vulkan_api_assert(device, desc->bufferBindingCount == 0u || desc->bufferBindings != 0);
+    if ((dispatchCount != 0u && !dispatches) ||
+        (desc->bufferBindingCount != 0u && !desc->bufferBindings)) {
         return;
     }
 
