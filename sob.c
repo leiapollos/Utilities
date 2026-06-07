@@ -1266,7 +1266,7 @@ static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
             return 1;
         }
 
-        sob_target_add_source(moduleTarget, "app.cpp");
+        sob_target_add_source(moduleTarget, "app_main.cpp");
         configure_common_includes(moduleTarget);
         sob_target_set_standard(moduleTarget, Sob_Standard_Cpp20);
         apply_cpp_runtime_flags(moduleTarget);
@@ -1324,7 +1324,7 @@ static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
             sob_arena_destroy(arena);
             return 1;
         }
-        sob_target_add_source(shipTarget, "app.cpp");
+        sob_target_add_source(shipTarget, "app_main.cpp");
         sob_target_define(shipTarget, "UTILITIES_STATIC_APP", .value = "1");
     }
 

@@ -396,7 +396,6 @@ UTILITIES_SHARED_API void gfx_destroy_pipeline(GfxDevice* device, GfxPipeline pi
 
 UTILITIES_SHARED_API GfxResourceId gfx_register_texture(GfxDevice* device, GfxTexture texture);
 UTILITIES_SHARED_API GfxResourceId gfx_register_sampler(GfxDevice* device, GfxSampler sampler);
-UTILITIES_SHARED_API GfxResourceId gfx_register_buffer(GfxDevice* device, GfxBuffer buffer);
 
 UTILITIES_SHARED_API GfxFrame* gfx_begin_frame(GfxDevice* device);
 UTILITIES_SHARED_API GfxCommandBuffer* gfx_get_command_buffer(GfxFrame* frame);

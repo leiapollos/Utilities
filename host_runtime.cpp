@@ -30,6 +30,9 @@
 #endif
 
 static const char* HOST_HOT_MODULE_INPUTS[] = {
+    "app_main.cpp",
+    "app_include.hpp",
+    "app_include.cpp",
     "app.cpp",
     "app_state.hpp",
     "nstl/content/content.hpp",
@@ -62,6 +65,7 @@ static const char* HOST_RESTART_REQUIRED_INPUTS[] = {
     "nstl/gfx/gfx_include.hpp",
     "nstl/gfx/gfx_include.cpp",
     "nstl/gfx/metal/gfx_metal.mm",
+    "nstl/gfx/vulkan/gfx_vulkan_include.hpp",
     "nstl/gfx/vulkan/gfx_vulkan.cpp",
 };
 

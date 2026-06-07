@@ -2,9 +2,6 @@
 // Created by André Leite on 05/06/2026.
 //
 
-#define VK_USE_PLATFORM_WIN32_KHR
-#include <vulkan/vulkan.h>
-
 #define GFX_VULKAN_DEFAULT_FRAMES_IN_FLIGHT 2u
 #define GFX_VULKAN_DEFAULT_TEMP_BUFFER_SIZE MB(8)
 #define GFX_VULKAN_RESOURCE_TABLE_CAPACITY 256u
@@ -16,13 +13,6 @@
 #define GFX_VULKAN_INITIAL_RETIRED_TEXTURE_CAPACITY 256u
 #define GFX_VULKAN_INITIAL_RETIRED_SAMPLER_CAPACITY 256u
 #define GFX_VULKAN_INITIAL_RETIRED_PIPELINE_CAPACITY 256u
-
-enum GfxVulkanResourceKind {
-    GfxVulkanResourceKind_Invalid = 0,
-    GfxVulkanResourceKind_Buffer,
-    GfxVulkanResourceKind_Texture,
-    GfxVulkanResourceKind_Sampler,
-};
 
 struct GfxVulkanBuffer {
     VkBuffer buffer;
@@ -62,13 +52,6 @@ struct GfxVulkanPipeline {
     U32 threadsPerThreadgroupX;
     U32 threadsPerThreadgroupY;
     U32 threadsPerThreadgroupZ;
-};
-
-struct GfxVulkanResourceEntry {
-    GfxVulkanResourceKind kind;
-    U32 index;
-    U32 generation;
-    U32 nextFree;
 };
 
 struct GfxVulkanRetiredBuffer {
@@ -145,6 +128,10 @@ struct GfxDevice {
     VkQueue presentQueue;
     U32 graphicsQueueFamily;
     U32 presentQueueFamily;
+    B32 debugUtilsEnabled;
+    PFN_vkSetDebugUtilsObjectNameEXT setDebugUtilsObjectName;
+    PFN_vkCmdBeginDebugUtilsLabelEXT cmdBeginDebugUtilsLabel;
+    PFN_vkCmdEndDebugUtilsLabelEXT cmdEndDebugUtilsLabel;
 
     VkSwapchainKHR swapchain;
     VkFormat swapchainFormat;
@@ -166,11 +153,7 @@ struct GfxDevice {
     SlotMap samplers;
     SlotMap pipelines;
 
-    GfxVulkanResourceEntry* resourceEntries;
-    U32 resourceCount;
-    U32 resourceLiveCount;
-    U32 resourceCapacity;
-    U32 resourceFreeHead;
+    GfxResourceTable resourceTable;
 
     GfxVulkanRetiredBuffer* retiredBuffers;
     U32 retiredBufferCount;
@@ -208,13 +191,17 @@ static GfxVulkanPipeline g_gfxVulkanNilPipeline = {};
 static B32 gfx_vulkan_validation_has(GfxDevice* device, GfxValidationFlags flags);
 static B32 gfx_vulkan_api_validation_enabled(GfxDevice* device);
 static B32 gfx_vulkan_backend_validation_enabled(GfxDevice* device);
+static B32 gfx_vulkan_gpu_markers_enabled(GfxDevice* device);
 static void gfx_vulkan_api_assert(GfxDevice* device, B32 condition);
+static void gfx_vulkan_set_object_name(GfxDevice* device, VkObjectType objectType, U64 objectHandle, const char* name);
+static B32 gfx_vulkan_cmd_begin_label(GfxDevice* device, VkCommandBuffer commandBuffer, const char* name);
+static void gfx_vulkan_cmd_end_label(GfxDevice* device, VkCommandBuffer commandBuffer, B32 pushedLabel);
 static B32 gfx_vulkan_window_from_handle(OS_WindowHandle window, HINSTANCE* outInstance, HWND* outWindow);
 static VKAPI_ATTR VkBool32 VKAPI_CALL gfx_vulkan_debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT type, const VkDebugUtilsMessengerCallbackDataEXT* callbackData, void* userData);
 static B32 gfx_vulkan_validation_layer_available();
+static B32 gfx_vulkan_instance_extension_available(const char* extensionName);
 static U32 gfx_vulkan_find_memory_type(GfxDevice* device, U32 typeBits, VkMemoryPropertyFlags properties);
 static VkFormat gfx_vulkan_format(GfxFormat format);
-static U32 gfx_vulkan_format_bytes_per_pixel(GfxFormat format);
 static VkBufferUsageFlags gfx_vulkan_buffer_usage(U32 usageFlags);
 static VkImageUsageFlags gfx_vulkan_texture_usage(U32 usageFlags);
 static VkImageAspectFlags gfx_vulkan_image_aspect(GfxFormat format);
@@ -252,8 +239,7 @@ static void gfx_vulkan_resource_table_set_texture(GfxDevice* device, GfxResource
 static void gfx_vulkan_resource_table_set_sampler(GfxDevice* device, GfxResourceId resourceId, VkSampler sampler);
 static void gfx_vulkan_resource_table_set_buffer(GfxDevice* device, GfxResourceId resourceId, VkBuffer buffer, U64 size);
 static void gfx_vulkan_resource_table_clear(GfxDevice* device, GfxResourceId resourceId);
-static B32 gfx_vulkan_resource_entries_reserve(GfxDevice* device, U32 neededCapacity);
-static GfxResourceId gfx_vulkan_register_resource(GfxDevice* device, GfxVulkanResourceKind kind, U32 index, U32 generation);
+static GfxResourceId gfx_vulkan_register_resource(GfxDevice* device, GfxResourceKind kind, U32 index, U32 generation);
 static B32 gfx_vulkan_create_pipeline_layout(GfxDevice* device);
 static B32 gfx_vulkan_create_temp_buffer(GfxDevice* device, GfxFrame* frame, U64 size);
 static void gfx_vulkan_destroy_swapchain(GfxDevice* device);
@@ -275,9 +261,60 @@ static B32 gfx_vulkan_backend_validation_enabled(GfxDevice* device) {
     return gfx_vulkan_validation_has(device, GfxValidationFlags_Backend);
 }
 
+static B32 gfx_vulkan_gpu_markers_enabled(GfxDevice* device) {
+    return (gfx_vulkan_validation_has(device, GfxValidationFlags_GpuMarkers) &&
+            device->debugUtilsEnabled) ? 1 : 0;
+}
+
 static void gfx_vulkan_api_assert(GfxDevice* device, B32 condition) {
     if (gfx_vulkan_api_validation_enabled(device)) {
         ASSERT_DEBUG(condition);
+    }
+}
+
+static void gfx_vulkan_set_object_name(GfxDevice* device, VkObjectType objectType, U64 objectHandle, const char* name) {
+    if (!gfx_vulkan_gpu_markers_enabled(device) ||
+        !device->setDebugUtilsObjectName ||
+        objectHandle == 0u ||
+        !name ||
+        name[0] == 0) {
+        return;
+    }
+
+    VkDebugUtilsObjectNameInfoEXT nameInfo = {};
+    nameInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+    nameInfo.objectType = objectType;
+    nameInfo.objectHandle = objectHandle;
+    nameInfo.pObjectName = name;
+    device->setDebugUtilsObjectName(device->device, &nameInfo);
+}
+
+static B32 gfx_vulkan_cmd_begin_label(GfxDevice* device, VkCommandBuffer commandBuffer, const char* name) {
+    if (!gfx_vulkan_gpu_markers_enabled(device) ||
+        !device->cmdBeginDebugUtilsLabel ||
+        !commandBuffer ||
+        !name ||
+        name[0] == 0) {
+        return 0;
+    }
+
+    VkDebugUtilsLabelEXT label = {};
+    label.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
+    label.pLabelName = name;
+    label.color[0] = 0.35f;
+    label.color[1] = 0.55f;
+    label.color[2] = 0.95f;
+    label.color[3] = 1.0f;
+    device->cmdBeginDebugUtilsLabel(commandBuffer, &label);
+    return 1;
+}
+
+static void gfx_vulkan_cmd_end_label(GfxDevice* device, VkCommandBuffer commandBuffer, B32 pushedLabel) {
+    if (pushedLabel &&
+        gfx_vulkan_gpu_markers_enabled(device) &&
+        device->cmdEndDebugUtilsLabel &&
+        commandBuffer) {
+        device->cmdEndDebugUtilsLabel(commandBuffer);
     }
 }
 
@@ -339,6 +376,39 @@ static B32 gfx_vulkan_validation_layer_available() {
     return 0;
 }
 
+static B32 gfx_vulkan_instance_extension_available(const char* extensionName) {
+    if (!extensionName || extensionName[0] == 0) {
+        return 0;
+    }
+
+    U32 extensionCount = 0u;
+    vkEnumerateInstanceExtensionProperties(0, &extensionCount, 0);
+    if (extensionCount == 0u) {
+        return 0;
+    }
+
+    Temp scratch = get_scratch(0, 0u);
+    if (!scratch.arena) {
+        return 0;
+    }
+    DEFER_REF(temp_end(&scratch));
+
+    VkExtensionProperties* extensions = ARENA_PUSH_ARRAY(scratch.arena, VkExtensionProperties, extensionCount);
+    if (!extensions) {
+        return 0;
+    }
+    if (vkEnumerateInstanceExtensionProperties(0, &extensionCount, extensions) != VK_SUCCESS) {
+        return 0;
+    }
+
+    for (U32 i = 0u; i < extensionCount; ++i) {
+        if (c_str_cmp(extensions[i].extensionName, extensionName) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static U32 gfx_vulkan_find_memory_type(GfxDevice* device, U32 typeBits, VkMemoryPropertyFlags properties) {
     VkPhysicalDeviceMemoryProperties memoryProperties = {};
     vkGetPhysicalDeviceMemoryProperties(device->physicalDevice, &memoryProperties);
@@ -358,16 +428,6 @@ static VkFormat gfx_vulkan_format(GfxFormat format) {
         case GfxFormat_RGBA16_Float: return VK_FORMAT_R16G16B16A16_SFLOAT;
         case GfxFormat_D32_Float: return VK_FORMAT_D32_SFLOAT;
         default: return VK_FORMAT_UNDEFINED;
-    }
-}
-
-static U32 gfx_vulkan_format_bytes_per_pixel(GfxFormat format) {
-    switch (format) {
-        case GfxFormat_BGRA8_UNorm:
-        case GfxFormat_RGBA8_UNorm: return 4u;
-        case GfxFormat_RGBA16_Float: return 8u;
-        case GfxFormat_D32_Float: return 4u;
-        default: return 0u;
     }
 }
 
@@ -463,23 +523,63 @@ static VkSamplerAddressMode gfx_vulkan_address_mode(GfxAddressMode mode) {
 }
 
 static GfxVulkanBuffer* gfx_vulkan_resolve_buffer(GfxDevice* device, GfxBuffer handle) {
-    GfxVulkanBuffer* item = device ? (GfxVulkanBuffer*)slot_map_get(&device->buffers, handle.index, handle.generation) : 0;
-    return item ? item : &g_gfxVulkanNilBuffer;
+    gfx_vulkan_api_assert(device, device != 0);
+    if (!device) {
+        return &g_gfxVulkanNilBuffer;
+    }
+    if (handle.generation == 0u) {
+        gfx_vulkan_api_assert(device, handle.index == 0u && "Malformed nil gfx buffer handle");
+        return &g_gfxVulkanNilBuffer;
+    }
+
+    GfxVulkanBuffer* result = (GfxVulkanBuffer*)slot_map_get(&device->buffers, handle.index, handle.generation);
+    gfx_vulkan_api_assert(device, result != 0 && "Stale gfx buffer handle");
+    return result ? result : &g_gfxVulkanNilBuffer;
 }
 
 static GfxVulkanTexture* gfx_vulkan_resolve_texture(GfxDevice* device, GfxTexture handle) {
-    GfxVulkanTexture* item = device ? (GfxVulkanTexture*)slot_map_get(&device->textures, handle.index, handle.generation) : 0;
-    return item ? item : &g_gfxVulkanNilTexture;
+    gfx_vulkan_api_assert(device, device != 0);
+    if (!device) {
+        return &g_gfxVulkanNilTexture;
+    }
+    if (handle.generation == 0u) {
+        gfx_vulkan_api_assert(device, handle.index == 0u && "Malformed nil gfx texture handle");
+        return &g_gfxVulkanNilTexture;
+    }
+
+    GfxVulkanTexture* result = (GfxVulkanTexture*)slot_map_get(&device->textures, handle.index, handle.generation);
+    gfx_vulkan_api_assert(device, result != 0 && "Stale gfx texture handle");
+    return result ? result : &g_gfxVulkanNilTexture;
 }
 
 static GfxVulkanSampler* gfx_vulkan_resolve_sampler(GfxDevice* device, GfxSampler handle) {
-    GfxVulkanSampler* item = device ? (GfxVulkanSampler*)slot_map_get(&device->samplers, handle.index, handle.generation) : 0;
-    return item ? item : &g_gfxVulkanNilSampler;
+    gfx_vulkan_api_assert(device, device != 0);
+    if (!device) {
+        return &g_gfxVulkanNilSampler;
+    }
+    if (handle.generation == 0u) {
+        gfx_vulkan_api_assert(device, handle.index == 0u && "Malformed nil gfx sampler handle");
+        return &g_gfxVulkanNilSampler;
+    }
+
+    GfxVulkanSampler* result = (GfxVulkanSampler*)slot_map_get(&device->samplers, handle.index, handle.generation);
+    gfx_vulkan_api_assert(device, result != 0 && "Stale gfx sampler handle");
+    return result ? result : &g_gfxVulkanNilSampler;
 }
 
 static GfxVulkanPipeline* gfx_vulkan_resolve_pipeline(GfxDevice* device, GfxPipeline handle) {
-    GfxVulkanPipeline* item = device ? (GfxVulkanPipeline*)slot_map_get(&device->pipelines, handle.index, handle.generation) : 0;
-    return item ? item : &g_gfxVulkanNilPipeline;
+    gfx_vulkan_api_assert(device, device != 0);
+    if (!device) {
+        return &g_gfxVulkanNilPipeline;
+    }
+    if (handle.generation == 0u) {
+        gfx_vulkan_api_assert(device, handle.index == 0u && "Malformed nil gfx pipeline handle");
+        return &g_gfxVulkanNilPipeline;
+    }
+
+    GfxVulkanPipeline* result = (GfxVulkanPipeline*)slot_map_get(&device->pipelines, handle.index, handle.generation);
+    gfx_vulkan_api_assert(device, result != 0 && "Stale gfx pipeline handle");
+    return result ? result : &g_gfxVulkanNilPipeline;
 }
 
 static B32 gfx_vulkan_begin_immediate(GfxDevice* device, VkCommandPool* outPool, VkCommandBuffer* outCommandBuffer) {
@@ -1004,11 +1104,9 @@ static GfxBuffer gfx_vulkan_create_buffer_internal(GfxDevice* device, const GfxB
     }
 
     VkBufferUsageFlags usage = gfx_vulkan_buffer_usage(desc->usageFlags);
+    usage |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
     if (desc->memoryKind == GfxMemoryKind_Upload) {
         usage |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-    }
-    if (usage == 0u) {
-        usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
     }
 
     VkMemoryPropertyFlags memoryProperties = (desc->memoryKind == GfxMemoryKind_Upload) ?
@@ -1052,10 +1150,18 @@ static GfxBuffer gfx_vulkan_create_buffer_internal(GfxDevice* device, const GfxB
     item->size = desc->size;
     item->usageFlags = desc->usageFlags;
     item->memoryKind = desc->memoryKind;
-    item->resourceId = {};
     item->internal = internal;
+    gfx_vulkan_set_object_name(device, VK_OBJECT_TYPE_BUFFER, (U64)(uintptr_t)buffer, desc->name);
 
     GfxBuffer result = {slotIndex, generation};
+    item->resourceId = gfx_vulkan_register_resource(device, GfxResourceKind_Buffer, result.index, result.generation);
+    if (item->resourceId.index == 0u) {
+        gfx_vulkan_destroy_buffer_item(device, item);
+        void* released = 0;
+        slot_map_release(&device->buffers, result.index, result.generation, &released);
+        return {};
+    }
+    gfx_vulkan_resource_table_set_buffer(device, item->resourceId, item->buffer, item->size);
     return result;
 }
 
@@ -1073,6 +1179,7 @@ static B32 gfx_vulkan_create_nil_resources(GfxDevice* device) {
                                       0)) {
         return 0;
     }
+    gfx_vulkan_set_object_name(device, VK_OBJECT_TYPE_BUFFER, (U64)(uintptr_t)device->nilBuffer, "gfx nil buffer");
 
     VkImageCreateInfo imageInfo = {};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -1089,6 +1196,7 @@ static B32 gfx_vulkan_create_nil_resources(GfxDevice* device) {
     if (vkCreateImage(device->device, &imageInfo, 0, &device->nilImage) != VK_SUCCESS) {
         return 0;
     }
+    gfx_vulkan_set_object_name(device, VK_OBJECT_TYPE_IMAGE, (U64)(uintptr_t)device->nilImage, "gfx nil image");
 
     VkMemoryRequirements requirements = {};
     vkGetImageMemoryRequirements(device->device, device->nilImage, &requirements);
@@ -1119,6 +1227,7 @@ static B32 gfx_vulkan_create_nil_resources(GfxDevice* device) {
     if (vkCreateImageView(device->device, &viewInfo, 0, &device->nilImageView) != VK_SUCCESS) {
         return 0;
     }
+    gfx_vulkan_set_object_name(device, VK_OBJECT_TYPE_IMAGE_VIEW, (U64)(uintptr_t)device->nilImageView, "gfx nil image view");
 
     VkSamplerCreateInfo samplerInfo = {};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -1132,6 +1241,7 @@ static B32 gfx_vulkan_create_nil_resources(GfxDevice* device) {
     if (vkCreateSampler(device->device, &samplerInfo, 0, &device->nilSampler) != VK_SUCCESS) {
         return 0;
     }
+    gfx_vulkan_set_object_name(device, VK_OBJECT_TYPE_SAMPLER, (U64)(uintptr_t)device->nilSampler, "gfx nil sampler");
 
     VkCommandPool commandPool = 0;
     VkCommandBuffer commandBuffer = 0;
@@ -1158,10 +1268,6 @@ static B32 gfx_vulkan_create_nil_resources(GfxDevice* device) {
     vkCmdPipelineBarrier2(commandBuffer, &dependency);
 
     VkClearColorValue clear = {};
-    clear.float32[0] = 1.0f;
-    clear.float32[1] = 1.0f;
-    clear.float32[2] = 1.0f;
-    clear.float32[3] = 1.0f;
     VkImageSubresourceRange range = {};
     range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     range.levelCount = 1u;
@@ -1218,6 +1324,9 @@ static B32 gfx_vulkan_resource_table_init(GfxDevice* device) {
     if (!device || !device->nilImageView || !device->nilSampler || !device->nilBuffer) {
         return 0;
     }
+    if (!gfx_resource_table_init(&device->resourceTable, device->arena, GFX_VULKAN_RESOURCE_TABLE_CAPACITY)) {
+        return 0;
+    }
 
     VkDescriptorSetLayoutBinding bindings[3] = {};
     bindings[0].binding = GFX_VULKAN_RESOURCE_BINDING_TEXTURES;
@@ -1253,6 +1362,10 @@ static B32 gfx_vulkan_resource_table_init(GfxDevice* device) {
     if (vkCreateDescriptorSetLayout(device->device, &layoutInfo, 0, &device->resourceSetLayout) != VK_SUCCESS) {
         return 0;
     }
+    gfx_vulkan_set_object_name(device,
+                               VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
+                               (U64)(uintptr_t)device->resourceSetLayout,
+                               "gfx resource set layout");
 
     VkDescriptorPoolSize poolSizes[3] = {};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
@@ -1271,6 +1384,10 @@ static B32 gfx_vulkan_resource_table_init(GfxDevice* device) {
     if (vkCreateDescriptorPool(device->device, &poolInfo, 0, &device->resourceDescriptorPool) != VK_SUCCESS) {
         return 0;
     }
+    gfx_vulkan_set_object_name(device,
+                               VK_OBJECT_TYPE_DESCRIPTOR_POOL,
+                               (U64)(uintptr_t)device->resourceDescriptorPool,
+                               "gfx resource descriptor pool");
 
     VkDescriptorSetAllocateInfo setInfo = {};
     setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -1280,6 +1397,10 @@ static B32 gfx_vulkan_resource_table_init(GfxDevice* device) {
     if (vkAllocateDescriptorSets(device->device, &setInfo, &device->resourceSet) != VK_SUCCESS) {
         return 0;
     }
+    gfx_vulkan_set_object_name(device,
+                               VK_OBJECT_TYPE_DESCRIPTOR_SET,
+                               (U64)(uintptr_t)device->resourceSet,
+                               "gfx resource set");
 
     Temp scratch = get_scratch(0, 0u);
     if (!scratch.arena) {
@@ -1387,99 +1508,32 @@ static void gfx_vulkan_resource_table_set_buffer(GfxDevice* device, GfxResourceI
 }
 
 static void gfx_vulkan_resource_table_clear(GfxDevice* device, GfxResourceId resourceId) {
-    if (!device || !device->resourceEntries ||
-        resourceId.index == 0u ||
-        resourceId.index >= device->resourceCount ||
-        resourceId.index >= GFX_VULKAN_RESOURCE_TABLE_CAPACITY) {
+    if (!device) {
         return;
     }
 
-    GfxVulkanResourceEntry* entry = &device->resourceEntries[resourceId.index];
-    if (entry->kind == GfxVulkanResourceKind_Invalid) {
+    GfxResourceTableEntry* entry = gfx_resource_table_get(&device->resourceTable, resourceId);
+    if (!entry) {
         return;
     }
-    if (entry->kind == GfxVulkanResourceKind_Texture) {
+    if (entry->kind == GfxResourceKind_Texture) {
         gfx_vulkan_resource_table_set_texture(device, resourceId, device->nilImageView);
-    } else if (entry->kind == GfxVulkanResourceKind_Sampler) {
+    } else if (entry->kind == GfxResourceKind_Sampler) {
         gfx_vulkan_resource_table_set_sampler(device, resourceId, device->nilSampler);
-    } else if (entry->kind == GfxVulkanResourceKind_Buffer) {
+    } else if (entry->kind == GfxResourceKind_Buffer) {
         gfx_vulkan_resource_table_set_buffer(device, resourceId, device->nilBuffer, 16u);
     }
 
-    MEMSET(entry, 0, sizeof(*entry));
-    entry->nextFree = device->resourceFreeHead;
-    device->resourceFreeHead = resourceId.index;
-    if (device->resourceLiveCount > 0u) {
-        device->resourceLiveCount -= 1u;
-    }
-    device->stats.resourceTableCount = device->resourceLiveCount;
+    gfx_resource_table_release(&device->resourceTable, resourceId);
+    device->stats.resourceTableCount = device->resourceTable.liveCount;
 }
 
-static B32 gfx_vulkan_resource_entries_reserve(GfxDevice* device, U32 neededCapacity) {
+static GfxResourceId gfx_vulkan_register_resource(GfxDevice* device, GfxResourceKind kind, U32 index, U32 generation) {
     if (!device) {
-        return 0;
-    }
-    if (neededCapacity <= device->resourceCapacity) {
-        return 1;
-    }
-    if (neededCapacity > GFX_VULKAN_RESOURCE_TABLE_CAPACITY) {
-        ASSERT_DEBUG(neededCapacity <= GFX_VULKAN_RESOURCE_TABLE_CAPACITY);
-        LOG_ERROR("gfx", "Vulkan resource table is full");
-        return 0;
-    }
-
-    U32 newCapacity = GFX_VULKAN_RESOURCE_TABLE_CAPACITY;
-    GfxVulkanResourceEntry* newEntries = ARENA_PUSH_ARRAY(device->arena, GfxVulkanResourceEntry, newCapacity);
-    if (!newEntries) {
-        return 0;
-    }
-    MEMSET(newEntries, 0, sizeof(GfxVulkanResourceEntry) * newCapacity);
-    if (device->resourceEntries && device->resourceCount > 0u) {
-        MEMCPY(newEntries, device->resourceEntries, sizeof(GfxVulkanResourceEntry) * device->resourceCount);
-    }
-
-    device->resourceEntries = newEntries;
-    device->resourceCapacity = newCapacity;
-    return 1;
-}
-
-static GfxResourceId gfx_vulkan_register_resource(GfxDevice* device, GfxVulkanResourceKind kind, U32 index, U32 generation) {
-    if (!device || generation == 0u) {
         return {};
     }
-    if (device->resourceCount == 0u) {
-        device->resourceCount = 1u;
-    }
-    U32 resourceIndex = 0u;
-    if (device->resourceFreeHead != 0u) {
-        resourceIndex = device->resourceFreeHead;
-        GfxVulkanResourceEntry* freeEntry = &device->resourceEntries[resourceIndex];
-        device->resourceFreeHead = freeEntry->nextFree;
-    } else {
-        if (device->resourceCount >= GFX_VULKAN_RESOURCE_TABLE_CAPACITY) {
-            ASSERT_DEBUG(device->resourceCount < GFX_VULKAN_RESOURCE_TABLE_CAPACITY);
-            LOG_ERROR("gfx", "Vulkan resource table is full");
-            return {};
-        }
-        resourceIndex = device->resourceCount;
-    }
-
-    if (!gfx_vulkan_resource_entries_reserve(device, resourceIndex + 1u)) {
-        return {};
-    }
-    if (resourceIndex == device->resourceCount) {
-        device->resourceCount += 1u;
-    }
-
-    GfxVulkanResourceEntry* entry = &device->resourceEntries[resourceIndex];
-    entry->kind = kind;
-    entry->index = index;
-    entry->generation = generation;
-    entry->nextFree = 0u;
-    device->resourceLiveCount += 1u;
-    device->stats.resourceTableCount = device->resourceLiveCount;
-
-    GfxResourceId result = {resourceIndex};
+    GfxResourceId result = gfx_resource_table_alloc(&device->resourceTable, kind, index, generation);
+    device->stats.resourceTableCount = device->resourceTable.liveCount;
     return result;
 }
 
@@ -1499,7 +1553,14 @@ static B32 gfx_vulkan_create_pipeline_layout(GfxDevice* device) {
     layoutInfo.pSetLayouts = layouts;
     layoutInfo.pushConstantRangeCount = 1u;
     layoutInfo.pPushConstantRanges = &push;
-    return vkCreatePipelineLayout(device->device, &layoutInfo, 0, &device->pipelineLayout) == VK_SUCCESS;
+    if (vkCreatePipelineLayout(device->device, &layoutInfo, 0, &device->pipelineLayout) != VK_SUCCESS) {
+        return 0;
+    }
+    gfx_vulkan_set_object_name(device,
+                               VK_OBJECT_TYPE_PIPELINE_LAYOUT,
+                               (U64)(uintptr_t)device->pipelineLayout,
+                               "gfx pipeline layout");
+    return 1;
 }
 
 static B32 gfx_vulkan_create_temp_buffer(GfxDevice* device, GfxFrame* frame, U64 size) {
@@ -1623,6 +1684,10 @@ static B32 gfx_vulkan_create_swapchain(GfxDevice* device, U32 width, U32 height)
     if (vkCreateSwapchainKHR(device->device, &swapchainInfo, 0, &device->swapchain) != VK_SUCCESS) {
         return 0;
     }
+    gfx_vulkan_set_object_name(device,
+                               VK_OBJECT_TYPE_SWAPCHAIN_KHR,
+                               (U64)(uintptr_t)device->swapchain,
+                               "gfx swapchain");
 
     vkGetSwapchainImagesKHR(device->device, device->swapchain, &device->swapchainImageCount, 0);
     device->swapchainImages = ARENA_PUSH_ARRAY(device->arena, VkImage, device->swapchainImageCount);
@@ -1647,6 +1712,10 @@ static B32 gfx_vulkan_create_swapchain(GfxDevice* device, U32 width, U32 height)
         if (vkCreateImageView(device->device, &viewInfo, 0, &device->swapchainImageViews[i]) != VK_SUCCESS) {
             return 0;
         }
+        gfx_vulkan_set_object_name(device,
+                                   VK_OBJECT_TYPE_IMAGE_VIEW,
+                                   (U64)(uintptr_t)device->swapchainImageViews[i],
+                                   "gfx backbuffer view");
     }
 
     device->swapchainFormat = chosenFormat.format;
@@ -1765,7 +1834,20 @@ B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDe
     device->framesInFlight = desc->framesInFlight ? desc->framesInFlight : GFX_VULKAN_DEFAULT_FRAMES_IN_FLIGHT;
 
     B32 backendValidation = FLAGS_HAS(desc->validationFlags, GfxValidationFlags_Backend) && gfx_vulkan_validation_layer_available();
-    const char* extensions[3] = {VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME, VK_EXT_DEBUG_UTILS_EXTENSION_NAME};
+    B32 gpuMarkersRequested = FLAGS_HAS(desc->validationFlags, GfxValidationFlags_GpuMarkers);
+    B32 debugUtilsAvailable = gfx_vulkan_instance_extension_available(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    B32 debugUtilsEnabled = (backendValidation || gpuMarkersRequested) && debugUtilsAvailable;
+    if (gpuMarkersRequested && !debugUtilsAvailable) {
+        LOG_WARNING("gfx", "Vulkan GPU markers requested, but VK_EXT_debug_utils is not available");
+    }
+
+    const char* extensions[3] = {};
+    U32 extensionCount = 0u;
+    extensions[extensionCount++] = VK_KHR_SURFACE_EXTENSION_NAME;
+    extensions[extensionCount++] = VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
+    if (debugUtilsEnabled) {
+        extensions[extensionCount++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+    }
     const char* layers[1] = {"VK_LAYER_KHRONOS_validation"};
 
     VkApplicationInfo appInfo = {};
@@ -1776,7 +1858,7 @@ B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDe
     VkInstanceCreateInfo instanceInfo = {};
     instanceInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     instanceInfo.pApplicationInfo = &appInfo;
-    instanceInfo.enabledExtensionCount = backendValidation ? 3u : 2u;
+    instanceInfo.enabledExtensionCount = extensionCount;
     instanceInfo.ppEnabledExtensionNames = extensions;
     if (backendValidation) {
         instanceInfo.enabledLayerCount = 1u;
@@ -1789,7 +1871,7 @@ B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDe
                   (S32)instanceResult);
         return 0;
     }
-    if (backendValidation) {
+    if (backendValidation && debugUtilsEnabled) {
         VkDebugUtilsMessengerCreateInfoEXT debugInfo = {};
         debugInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
         debugInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
@@ -1924,9 +2006,21 @@ B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDe
         gfx_device_destroy(device);
         return 0;
     }
+    if (debugUtilsEnabled) {
+        device->setDebugUtilsObjectName =
+            (PFN_vkSetDebugUtilsObjectNameEXT)vkGetDeviceProcAddr(device->device, "vkSetDebugUtilsObjectNameEXT");
+        device->cmdBeginDebugUtilsLabel =
+            (PFN_vkCmdBeginDebugUtilsLabelEXT)vkGetDeviceProcAddr(device->device, "vkCmdBeginDebugUtilsLabelEXT");
+        device->cmdEndDebugUtilsLabel =
+            (PFN_vkCmdEndDebugUtilsLabelEXT)vkGetDeviceProcAddr(device->device, "vkCmdEndDebugUtilsLabelEXT");
+        device->debugUtilsEnabled = (device->setDebugUtilsObjectName ||
+                                     (device->cmdBeginDebugUtilsLabel && device->cmdEndDebugUtilsLabel)) ? 1 : 0;
+        if (gpuMarkersRequested && !device->debugUtilsEnabled) {
+            LOG_WARNING("gfx", "Vulkan GPU markers requested, but debug-utils device functions are not available");
+        }
+    }
     vkGetDeviceQueue(device->device, device->graphicsQueueFamily, 0u, &device->graphicsQueue);
     device->presentQueue = device->graphicsQueue;
-    device->resourceCount = 1u;
 
     if (!slot_map_init(&device->buffers, arena, sizeof(GfxVulkanBuffer), 128u) ||
         !slot_map_init(&device->textures, arena, sizeof(GfxVulkanTexture), 128u) ||
@@ -2225,6 +2319,8 @@ GfxTexture gfx_create_texture(GfxDevice* device, const GfxTextureDesc* desc) {
     item->resourceId = {};
     item->ownsImage = 1;
     item->internal = 0;
+    gfx_vulkan_set_object_name(device, VK_OBJECT_TYPE_IMAGE, (U64)(uintptr_t)image, desc->name);
+    gfx_vulkan_set_object_name(device, VK_OBJECT_TYPE_IMAGE_VIEW, (U64)(uintptr_t)view, desc->name);
 
     GfxTexture result = {slotIndex, generation};
     return result;
@@ -2261,6 +2357,7 @@ GfxSampler gfx_create_sampler(GfxDevice* device, const GfxSamplerDesc* desc) {
     GfxVulkanSampler* item = (GfxVulkanSampler*)slotItem;
     item->sampler = sampler;
     item->resourceId = {};
+    gfx_vulkan_set_object_name(device, VK_OBJECT_TYPE_SAMPLER, (U64)(uintptr_t)sampler, desc->name);
 
     GfxSampler result = {slotIndex, generation};
     return result;
@@ -2461,6 +2558,7 @@ GfxPipeline gfx_create_graphics_pipeline(GfxDevice* device, const GfxGraphicsPip
     item->kind = GfxPipelineKind_Graphics;
     item->pipeline = pipeline;
     item->raster = desc->raster;
+    gfx_vulkan_set_object_name(device, VK_OBJECT_TYPE_PIPELINE, (U64)(uintptr_t)pipeline, desc->name);
 
     GfxPipeline handle = {slotIndex, generation};
     return handle;
@@ -2519,6 +2617,7 @@ GfxPipeline gfx_create_compute_pipeline(GfxDevice* device, const GfxComputePipel
     item->threadsPerThreadgroupX = desc->threadsPerThreadgroupX;
     item->threadsPerThreadgroupY = desc->threadsPerThreadgroupY;
     item->threadsPerThreadgroupZ = desc->threadsPerThreadgroupZ;
+    gfx_vulkan_set_object_name(device, VK_OBJECT_TYPE_PIPELINE, (U64)(uintptr_t)pipeline, desc->name);
 
     GfxPipeline handle = {slotIndex, generation};
     return handle;
@@ -2587,7 +2686,7 @@ GfxResourceId gfx_register_texture(GfxDevice* device, GfxTexture texture) {
     if (item->resourceId.index != 0u) {
         return item->resourceId;
     }
-    item->resourceId = gfx_vulkan_register_resource(device, GfxVulkanResourceKind_Texture, texture.index, texture.generation);
+    item->resourceId = gfx_vulkan_register_resource(device, GfxResourceKind_Texture, texture.index, texture.generation);
     gfx_vulkan_resource_table_set_texture(device, item->resourceId, item->view);
     return item->resourceId;
 }
@@ -2603,24 +2702,8 @@ GfxResourceId gfx_register_sampler(GfxDevice* device, GfxSampler sampler) {
     if (item->resourceId.index != 0u) {
         return item->resourceId;
     }
-    item->resourceId = gfx_vulkan_register_resource(device, GfxVulkanResourceKind_Sampler, sampler.index, sampler.generation);
+    item->resourceId = gfx_vulkan_register_resource(device, GfxResourceKind_Sampler, sampler.index, sampler.generation);
     gfx_vulkan_resource_table_set_sampler(device, item->resourceId, item->sampler);
-    return item->resourceId;
-}
-
-GfxResourceId gfx_register_buffer(GfxDevice* device, GfxBuffer buffer) {
-    if (!device) {
-        return {};
-    }
-    GfxVulkanBuffer* item = gfx_vulkan_resolve_buffer(device, buffer);
-    if (!item->buffer) {
-        return {};
-    }
-    if (item->resourceId.index != 0u) {
-        return item->resourceId;
-    }
-    item->resourceId = gfx_vulkan_register_resource(device, GfxVulkanResourceKind_Buffer, buffer.index, buffer.generation);
-    gfx_vulkan_resource_table_set_buffer(device, item->resourceId, item->buffer, item->size);
     return item->resourceId;
 }
 
@@ -2676,7 +2759,7 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
     device->stats.pipelineSwitchCount = 0u;
     device->stats.tempOverflowCount = 0u;
     device->stats.tempBytesUsed = 0u;
-    device->stats.resourceTableCount = device->resourceLiveCount;
+    device->stats.resourceTableCount = device->resourceTable.liveCount;
     device->stats.frameIndex = device->frameSerial;
     return frame;
 }
@@ -2794,48 +2877,25 @@ B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRe
         return 0;
     }
 
-    U32 bytesPerPixel = gfx_vulkan_format_bytes_per_pixel(texture->format);
-    U32 mipWidth = texture->width;
-    U32 mipHeight = texture->height;
-    for (U32 mipIndex = 0u; mipIndex < region->mip; ++mipIndex) {
-        mipWidth = (mipWidth > 1u) ? (mipWidth >> 1u) : 1u;
-        mipHeight = (mipHeight > 1u) ? (mipHeight >> 1u) : 1u;
-    }
-
-    B32 supported = bytesPerPixel != 0u &&
-                    region->layer == 0u &&
-                    region->layerCount == 1u &&
-                    region->z == 0u &&
-                    region->depth == 1u;
-    B32 inBounds = region->mip < texture->mipCount &&
-                   region->width != 0u &&
-                   region->height != 0u &&
-                   region->x <= mipWidth &&
-                   region->y <= mipHeight &&
-                   region->width <= (mipWidth - region->x) &&
-                   region->height <= (mipHeight - region->y);
-    U64 rowBytes = (U64)region->width * bytesPerPixel;
-    B32 rowLayout = region->bytesPerRow >= rowBytes &&
-                    (region->bytesPerRow % GFX_TEXTURE_UPLOAD_BYTES_PER_ROW_ALIGNMENT) == 0u &&
-                    region->rowsPerImage >= region->height;
-
-    gfx_vulkan_api_assert(device, supported);
-    gfx_vulkan_api_assert(device, inBounds);
-    gfx_vulkan_api_assert(device, rowLayout);
-    if (!supported || !inBounds || !rowLayout) {
+    GfxTextureUploadValidation validation = {};
+    B32 validRegion = gfx_validate_texture_upload_region(texture->format,
+                                                          texture->width,
+                                                          texture->height,
+                                                          texture->mipCount,
+                                                          region,
+                                                          &validation);
+    gfx_vulkan_api_assert(device, validation.supported);
+    gfx_vulkan_api_assert(device, validation.inBounds);
+    gfx_vulkan_api_assert(device, validation.rowLayout);
+    gfx_vulkan_api_assert(device, validation.sizeValid);
+    if (!validRegion) {
         if (gfx_vulkan_api_validation_enabled(device)) {
             LOG_ERROR("gfx", "gfx_upload_texture invalid upload region");
         }
         return 0;
     }
 
-    U64 sourceBytesPerImage = region->bytesPerRow * region->rowsPerImage;
-    if (sourceBytesPerImage == 0u || sourceBytesPerImage / region->rowsPerImage != region->bytesPerRow) {
-        if (gfx_vulkan_api_validation_enabled(device)) {
-            LOG_ERROR("gfx", "gfx_upload_texture upload size overflow");
-        }
-        return 0;
-    }
+    U64 sourceBytesPerImage = validation.sourceBytesPerImage;
 
     GfxTemp temp = gfx_allocate_temp(frame, sourceBytesPerImage, GFX_TEXTURE_UPLOAD_BYTES_PER_ROW_ALIGNMENT);
     ASSERT_DEBUG(temp.cpu != 0 && "gfx_upload_texture ran out of frame upload memory");
@@ -2877,7 +2937,7 @@ B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRe
 
     VkBufferImageCopy copy = {};
     copy.bufferOffset = temp.gpu.offset;
-    copy.bufferRowLength = (U32)(region->bytesPerRow / bytesPerPixel);
+    copy.bufferRowLength = (U32)(region->bytesPerRow / validation.bytesPerPixel);
     copy.bufferImageHeight = region->rowsPerImage;
     copy.imageSubresource.aspectMask = aspect;
     copy.imageSubresource.mipLevel = region->mip;
@@ -2921,64 +2981,312 @@ static GfxGpuSlice gfx_vulkan_find_buffer_binding_(const GfxBufferBinding* bindi
     return result;
 }
 
-void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, const GfxDrawArea* areas, U32 areaCount) {
-    if (!commands || !commands->frame || !desc || desc->colorTargetCount == 0u || !desc->colorTargets) {
+static VkPipelineStageFlags2 gfx_vulkan_shader_stage_flags_(U32 stages) {
+    VkPipelineStageFlags2 result = 0u;
+    if (FLAGS_HAS(stages, GfxStageFlags_Vertex)) {
+        result |= VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+    }
+    if (FLAGS_HAS(stages, GfxStageFlags_Fragment)) {
+        result |= VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    }
+    if (FLAGS_HAS(stages, GfxStageFlags_Compute)) {
+        result |= VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    }
+    return result;
+}
+
+static VkPipelineStageFlags2 gfx_vulkan_layout_stage_(VkImageLayout layout) {
+    switch (layout) {
+        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL: {
+            return VK_PIPELINE_STAGE_2_COPY_BIT;
+        }
+        case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: {
+            return VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        }
+        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL: {
+            return VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        }
+        case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL: {
+            return VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                   VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        }
+        default: {
+            return VK_PIPELINE_STAGE_2_NONE;
+        }
+    }
+}
+
+static VkAccessFlags2 gfx_vulkan_layout_access_(VkImageLayout layout) {
+    switch (layout) {
+        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL: {
+            return VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        }
+        case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: {
+            return VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        }
+        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL: {
+            return VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                   VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        }
+        case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL: {
+            return VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        }
+        default: {
+            return 0u;
+        }
+    }
+}
+
+static void gfx_vulkan_push_image_barrier_(GfxDevice* device,
+                                           VkImageMemoryBarrier2* barriers,
+                                           U32* barrierCount,
+                                           U32 barrierCapacity,
+                                           VkImage image,
+                                           GfxFormat format,
+                                           VkImageLayout oldLayout,
+                                           VkImageLayout newLayout,
+                                           VkPipelineStageFlags2 dstStage,
+                                           VkAccessFlags2 dstAccess) {
+    if (!barriers || !barrierCount || !image || oldLayout == newLayout) {
         return;
     }
-    if (areaCount != 0u && !areas) {
+    if (*barrierCount >= barrierCapacity) {
+        gfx_vulkan_api_assert(device, *barrierCount < barrierCapacity);
+        return;
+    }
+
+    VkImageMemoryBarrier2* barrier = barriers + *barrierCount;
+    *barrier = {};
+    barrier->sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    barrier->srcStageMask = gfx_vulkan_layout_stage_(oldLayout);
+    barrier->srcAccessMask = gfx_vulkan_layout_access_(oldLayout);
+    barrier->dstStageMask = dstStage;
+    barrier->dstAccessMask = dstAccess;
+    barrier->oldLayout = oldLayout;
+    barrier->newLayout = newLayout;
+    barrier->image = image;
+    barrier->subresourceRange.aspectMask = gfx_vulkan_image_aspect(format);
+    barrier->subresourceRange.levelCount = 1u;
+    barrier->subresourceRange.layerCount = 1u;
+    *barrierCount += 1u;
+}
+
+static VkImageLayout gfx_vulkan_color_target_final_layout_(GfxVulkanTexture* texture, B32 isBackbuffer) {
+    if (isBackbuffer) {
+        return VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    }
+    if (texture && FLAGS_HAS(texture->usageFlags, GfxTextureUsageFlags_Sampled)) {
+        return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
+    return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+}
+
+static VkImageLayout gfx_vulkan_depth_target_final_layout_(GfxVulkanTexture* texture) {
+    if (texture && FLAGS_HAS(texture->usageFlags, GfxTextureUsageFlags_Sampled)) {
+        return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
+    return VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+}
+
+static void gfx_vulkan_barrier_written_binding_(GfxDevice* device,
+                                                VkCommandBuffer commandBuffer,
+                                                const GfxBufferBinding* binding) {
+    if (!device || !commandBuffer || !binding || !FLAGS_HAS(binding->access, GfxAccessFlags_Write)) {
+        return;
+    }
+
+    VkPipelineStageFlags2 srcStage = gfx_vulkan_shader_stage_flags_(binding->stages);
+    if (srcStage == 0u) {
+        return;
+    }
+
+    GfxVulkanBuffer* buffer = gfx_vulkan_resolve_buffer(device, binding->slice.buffer);
+    if (!buffer->buffer) {
+        return;
+    }
+
+    U64 barrierSize = binding->slice.size;
+    if (barrierSize == 0u && binding->slice.offset < buffer->size) {
+        barrierSize = buffer->size - binding->slice.offset;
+    }
+    if (barrierSize == 0u) {
+        return;
+    }
+
+    VkBufferMemoryBarrier2 barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+    barrier.srcStageMask = srcStage;
+    barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                           VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    barrier.buffer = buffer->buffer;
+    barrier.offset = binding->slice.offset;
+    barrier.size = barrierSize;
+
+    VkDependencyInfo dependency = {};
+    dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dependency.bufferMemoryBarrierCount = 1u;
+    dependency.pBufferMemoryBarriers = &barrier;
+    vkCmdPipelineBarrier2(commandBuffer, &dependency);
+}
+
+void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, const GfxDrawArea* areas, U32 areaCount) {
+    if (!commands || !commands->frame || !desc) {
+        return;
+    }
+    if (desc->colorTargetCount == 0u ||
+        desc->colorTargetCount > GFX_MAX_COLOR_TARGETS ||
+        !desc->colorTargets ||
+        desc->width == 0u ||
+        desc->height == 0u ||
+        (areaCount != 0u && !areas)) {
         return;
     }
 
     GfxFrame* frame = commands->frame;
     GfxDevice* device = frame->device;
-    if (!frame->active || frame->imageIndex >= device->swapchainImageCount) {
+    if (!frame->active) {
         return;
     }
 
-    const GfxColorTarget* target = &desc->colorTargets[0];
-    if (target->texture.index != device->backbuffer.index ||
-        target->texture.generation != device->backbuffer.generation) {
-        return;
+    GfxVulkanTexture* colorTextures[GFX_MAX_COLOR_TARGETS] = {};
+    B32 colorIsBackbuffer[GFX_MAX_COLOR_TARGETS] = {};
+    VkRenderingAttachmentInfo colorAttachments[GFX_MAX_COLOR_TARGETS] = {};
+    VkImageMemoryBarrier2 preBarriers[GFX_MAX_COLOR_TARGETS + 1u] = {};
+    VkImageMemoryBarrier2 postBarriers[GFX_MAX_COLOR_TARGETS + 1u] = {};
+    U32 preBarrierCount = 0u;
+    U32 postBarrierCount = 0u;
+
+    for (U32 targetIndex = 0u; targetIndex < desc->colorTargetCount; ++targetIndex) {
+        const GfxColorTarget* target = desc->colorTargets + targetIndex;
+        GfxVulkanTexture* texture = gfx_vulkan_resolve_texture(device, target->texture);
+        B32 isBackbuffer = gfx_texture_handle_equal(target->texture, device->backbuffer);
+        VkImage image = texture->image;
+        VkImageView view = texture->view;
+        if (isBackbuffer) {
+            if (frame->imageIndex >= device->swapchainImageCount) {
+                return;
+            }
+            image = device->swapchainImages[frame->imageIndex];
+            view = device->swapchainImageViews[frame->imageIndex];
+        }
+        if (!image ||
+            !view ||
+            texture->width != desc->width ||
+            texture->height != desc->height ||
+            !FLAGS_HAS(texture->usageFlags, GfxTextureUsageFlags_ColorTarget)) {
+            return;
+        }
+
+        VkImageLayout oldLayout = (target->loadOp == GfxLoadOp_Load) ? texture->layout : VK_IMAGE_LAYOUT_UNDEFINED;
+        gfx_vulkan_push_image_barrier_(device,
+                                       preBarriers,
+                                       &preBarrierCount,
+                                       ARRAY_COUNT(preBarriers),
+                                       image,
+                                       texture->format,
+                                       oldLayout,
+                                       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                       VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                       VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+
+        VkImageLayout finalLayout = gfx_vulkan_color_target_final_layout_(texture, isBackbuffer);
+        gfx_vulkan_push_image_barrier_(device,
+                                       postBarriers,
+                                       &postBarrierCount,
+                                       ARRAY_COUNT(postBarriers),
+                                       image,
+                                       texture->format,
+                                       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                       finalLayout,
+                                       gfx_vulkan_layout_stage_(finalLayout),
+                                       gfx_vulkan_layout_access_(finalLayout));
+
+        VkRenderingAttachmentInfo* attachment = colorAttachments + targetIndex;
+        attachment->sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        attachment->imageView = view;
+        attachment->imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        attachment->loadOp = gfx_vulkan_load_op(target->loadOp);
+        attachment->storeOp = gfx_vulkan_store_op(target->storeOp);
+        attachment->clearValue.color.float32[0] = target->clearColor[0];
+        attachment->clearValue.color.float32[1] = target->clearColor[1];
+        attachment->clearValue.color.float32[2] = target->clearColor[2];
+        attachment->clearValue.color.float32[3] = target->clearColor[3];
+
+        colorTextures[targetIndex] = texture;
+        colorIsBackbuffer[targetIndex] = isBackbuffer;
     }
 
-    VkImage image = device->swapchainImages[frame->imageIndex];
-    VkImageMemoryBarrier2 toColor = {};
-    toColor.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    toColor.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
-    toColor.srcAccessMask = 0u;
-    toColor.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    toColor.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-    toColor.oldLayout = (target->loadOp == GfxLoadOp_Load) ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR : VK_IMAGE_LAYOUT_UNDEFINED;
-    toColor.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    toColor.image = image;
-    toColor.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    toColor.subresourceRange.levelCount = 1u;
-    toColor.subresourceRange.layerCount = 1u;
+    GfxVulkanTexture* depthTexture = 0;
+    VkRenderingAttachmentInfo depthAttachment = {};
+    if (desc->depthTarget) {
+        depthTexture = gfx_vulkan_resolve_texture(device, desc->depthTarget->texture);
+        if (!depthTexture->image ||
+            !depthTexture->view ||
+            depthTexture->width != desc->width ||
+            depthTexture->height != desc->height ||
+            !FLAGS_HAS(depthTexture->usageFlags, GfxTextureUsageFlags_DepthTarget)) {
+            return;
+        }
 
-    VkDependencyInfo dependency = {};
-    dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    dependency.imageMemoryBarrierCount = 1u;
-    dependency.pImageMemoryBarriers = &toColor;
-    vkCmdPipelineBarrier2(frame->commandBuffer, &dependency);
+        VkImageLayout oldLayout = (desc->depthTarget->loadOp == GfxLoadOp_Load) ?
+                                  depthTexture->layout :
+                                  VK_IMAGE_LAYOUT_UNDEFINED;
+        gfx_vulkan_push_image_barrier_(device,
+                                       preBarriers,
+                                       &preBarrierCount,
+                                       ARRAY_COUNT(preBarriers),
+                                       depthTexture->image,
+                                       depthTexture->format,
+                                       oldLayout,
+                                       VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                                       VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                       VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                                       VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                       VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
 
-    VkRenderingAttachmentInfo colorAttachment = {};
-    colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    colorAttachment.imageView = device->swapchainImageViews[frame->imageIndex];
-    colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    colorAttachment.loadOp = gfx_vulkan_load_op(target->loadOp);
-    colorAttachment.storeOp = gfx_vulkan_store_op(target->storeOp);
-    colorAttachment.clearValue.color.float32[0] = target->clearColor[0];
-    colorAttachment.clearValue.color.float32[1] = target->clearColor[1];
-    colorAttachment.clearValue.color.float32[2] = target->clearColor[2];
-    colorAttachment.clearValue.color.float32[3] = target->clearColor[3];
+        VkImageLayout finalLayout = gfx_vulkan_depth_target_final_layout_(depthTexture);
+        gfx_vulkan_push_image_barrier_(device,
+                                       postBarriers,
+                                       &postBarrierCount,
+                                       ARRAY_COUNT(postBarriers),
+                                       depthTexture->image,
+                                       depthTexture->format,
+                                       VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                                       finalLayout,
+                                       gfx_vulkan_layout_stage_(finalLayout),
+                                       gfx_vulkan_layout_access_(finalLayout));
+
+        depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        depthAttachment.imageView = depthTexture->view;
+        depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        depthAttachment.loadOp = gfx_vulkan_load_op(desc->depthTarget->loadOp);
+        depthAttachment.storeOp = gfx_vulkan_store_op(desc->depthTarget->storeOp);
+        depthAttachment.clearValue.depthStencil.depth = desc->depthTarget->clearDepth;
+    }
+
+    if (preBarrierCount != 0u) {
+        VkDependencyInfo dependency = {};
+        dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dependency.imageMemoryBarrierCount = preBarrierCount;
+        dependency.pImageMemoryBarriers = preBarriers;
+        vkCmdPipelineBarrier2(frame->commandBuffer, &dependency);
+    }
 
     VkRenderingInfo renderingInfo = {};
     renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
     renderingInfo.renderArea.offset = {0, 0};
-    renderingInfo.renderArea.extent = device->swapchainExtent;
+    renderingInfo.renderArea.extent.width = desc->width;
+    renderingInfo.renderArea.extent.height = desc->height;
     renderingInfo.layerCount = 1u;
-    renderingInfo.colorAttachmentCount = 1u;
-    renderingInfo.pColorAttachments = &colorAttachment;
+    renderingInfo.colorAttachmentCount = desc->colorTargetCount;
+    renderingInfo.pColorAttachments = colorAttachments;
+    renderingInfo.pDepthAttachment = (depthTexture) ? &depthAttachment : 0;
+
+    B32 pushedLabel = gfx_vulkan_cmd_begin_label(device, frame->commandBuffer, desc->name);
     vkCmdBeginRendering(frame->commandBuffer, &renderingInfo);
 
     GfxPipeline boundPipelineHandle = {};
@@ -3015,9 +3323,12 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
             if (draw->indexCount == 0u) {
                 continue;
             }
-            if (draw->drawData.offset > (U64)0xffffffffu ||
-                passData.offset > (U64)0xffffffffu) {
+            if (draw->drawData.offset > (U64)0xffffffffu) {
                 gfx_vulkan_api_assert(device, draw->drawData.offset <= (U64)0xffffffffu);
+                continue;
+            }
+            if (passData.buffer.generation != 0u &&
+                passData.offset > (U64)0xffffffffu) {
                 gfx_vulkan_api_assert(device, passData.offset <= (U64)0xffffffffu);
                 continue;
             }
@@ -3028,20 +3339,25 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
             GfxVulkanBuffer* drawDataBuffer = gfx_vulkan_resolve_buffer(device, draw->drawData.buffer);
             GfxVulkanBuffer* passDataBuffer = gfx_vulkan_resolve_buffer(device, passData.buffer);
 
-            gfx_vulkan_api_assert(device, pipeline->kind == GfxPipelineKind_Graphics);
+            gfx_vulkan_api_assert(device, pipeline->kind == GfxPipelineKind_Graphics || pipeline->pipeline == 0);
             if (pipeline->kind != GfxPipelineKind_Graphics ||
                 !pipeline->pipeline ||
                 !vertexBuffer->buffer ||
                 !indexBuffer->buffer ||
-                !drawDataBuffer->buffer ||
-                !passDataBuffer->buffer) {
+                !drawDataBuffer->buffer) {
                 continue;
             }
 
-            GfxResourceId drawDataId = gfx_register_buffer(device, draw->drawData.buffer);
-            GfxResourceId passDataId = gfx_register_buffer(device, passData.buffer);
-            if (drawDataId.index == 0u || passDataId.index == 0u) {
+            GfxResourceId drawDataId = drawDataBuffer->resourceId;
+            if (drawDataId.index == 0u) {
                 continue;
+            }
+            GfxResourceId passDataId = {};
+            if (passDataBuffer->buffer) {
+                passDataId = passDataBuffer->resourceId;
+                if (passDataId.index == 0u) {
+                    continue;
+                }
             }
 
             if (!resourceSetBound) {
@@ -3056,8 +3372,7 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
                 resourceSetBound = 1;
             }
 
-            if (boundPipelineHandle.index != draw->pipeline.index ||
-                boundPipelineHandle.generation != draw->pipeline.generation) {
+            if (!gfx_pipeline_handle_equal(boundPipelineHandle, draw->pipeline)) {
                 vkCmdBindPipeline(frame->commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pipeline);
                 boundPipelineHandle = draw->pipeline;
                 device->stats.pipelineSwitchCount += 1u;
@@ -3101,20 +3416,21 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
 
     vkCmdEndRendering(frame->commandBuffer);
 
-    VkImageMemoryBarrier2 toPresent = {};
-    toPresent.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    toPresent.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    toPresent.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-    toPresent.dstStageMask = VK_PIPELINE_STAGE_2_NONE;
-    toPresent.dstAccessMask = 0u;
-    toPresent.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    toPresent.image = image;
-    toPresent.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    toPresent.subresourceRange.levelCount = 1u;
-    toPresent.subresourceRange.layerCount = 1u;
-    dependency.pImageMemoryBarriers = &toPresent;
-    vkCmdPipelineBarrier2(frame->commandBuffer, &dependency);
+    if (postBarrierCount != 0u) {
+        VkDependencyInfo dependency = {};
+        dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dependency.imageMemoryBarrierCount = postBarrierCount;
+        dependency.pImageMemoryBarriers = postBarriers;
+        vkCmdPipelineBarrier2(frame->commandBuffer, &dependency);
+    }
+    for (U32 targetIndex = 0u; targetIndex < desc->colorTargetCount; ++targetIndex) {
+        colorTextures[targetIndex]->layout = gfx_vulkan_color_target_final_layout_(colorTextures[targetIndex],
+                                                                                   colorIsBackbuffer[targetIndex]);
+    }
+    if (depthTexture) {
+        depthTexture->layout = gfx_vulkan_depth_target_final_layout_(depthTexture);
+    }
+    gfx_vulkan_cmd_end_label(device, frame->commandBuffer, pushedLabel);
 }
 
 void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc, const GfxDispatch* dispatches, U32 dispatchCount) {
@@ -3140,7 +3456,12 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
     if (!passDataBuffer->buffer) {
         return;
     }
+    GfxResourceId passDataId = passDataBuffer->resourceId;
+    if (passDataId.index == 0u) {
+        return;
+    }
 
+    B32 pushedLabel = gfx_vulkan_cmd_begin_label(device, frame->commandBuffer, desc->name);
     GfxPipeline boundPipelineHandle = {};
     B32 resourceSetBound = 0;
 
@@ -3162,16 +3483,15 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
         GfxVulkanPipeline* pipeline = gfx_vulkan_resolve_pipeline(device, dispatch->pipeline);
         GfxVulkanBuffer* dispatchDataBuffer = gfx_vulkan_resolve_buffer(device, dispatch->dispatchData.buffer);
 
-        gfx_vulkan_api_assert(device, pipeline->kind == GfxPipelineKind_Compute);
+        gfx_vulkan_api_assert(device, pipeline->kind == GfxPipelineKind_Compute || pipeline->pipeline == 0);
         if (pipeline->kind != GfxPipelineKind_Compute ||
             !pipeline->pipeline ||
             !dispatchDataBuffer->buffer) {
             continue;
         }
 
-        GfxResourceId dispatchDataId = gfx_register_buffer(device, dispatch->dispatchData.buffer);
-        GfxResourceId passDataId = gfx_register_buffer(device, passData.buffer);
-        if (dispatchDataId.index == 0u || passDataId.index == 0u) {
+        GfxResourceId dispatchDataId = dispatchDataBuffer->resourceId;
+        if (dispatchDataId.index == 0u) {
             continue;
         }
 
@@ -3187,8 +3507,7 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
             resourceSetBound = 1;
         }
 
-        if (boundPipelineHandle.index != dispatch->pipeline.index ||
-            boundPipelineHandle.generation != dispatch->pipeline.generation) {
+        if (!gfx_pipeline_handle_equal(boundPipelineHandle, dispatch->pipeline)) {
             vkCmdBindPipeline(frame->commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->pipeline);
             boundPipelineHandle = dispatch->pipeline;
             device->stats.pipelineSwitchCount += 1u;
@@ -3212,22 +3531,13 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
     }
 
     if (dispatched) {
-        VkBufferMemoryBarrier2 barrier = {};
-        barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-        barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-        barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-        barrier.buffer = passDataBuffer->buffer;
-        barrier.offset = passData.offset;
-        barrier.size = passData.size ? passData.size : passDataBuffer->size;
-
-        VkDependencyInfo dependency = {};
-        dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        dependency.bufferMemoryBarrierCount = 1u;
-        dependency.pBufferMemoryBarriers = &barrier;
-        vkCmdPipelineBarrier2(frame->commandBuffer, &dependency);
+        for (U32 bindingIndex = 0u; bindingIndex < desc->bufferBindingCount; ++bindingIndex) {
+            gfx_vulkan_barrier_written_binding_(device,
+                                                frame->commandBuffer,
+                                                desc->bufferBindings + bindingIndex);
+        }
     }
+    gfx_vulkan_cmd_end_label(device, frame->commandBuffer, pushedLabel);
 }
 
 void gfx_submit(GfxCommandBuffer* commands) {

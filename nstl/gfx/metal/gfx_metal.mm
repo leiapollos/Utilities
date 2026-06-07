@@ -13,13 +13,6 @@
 #define GFX_METAL_INITIAL_RETIRED_SAMPLER_CAPACITY 256u
 #define GFX_METAL_INITIAL_RETIRED_PIPELINE_CAPACITY 256u
 
-enum GfxMetalResourceKind {
-    GfxMetalResourceKind_Invalid = 0,
-    GfxMetalResourceKind_Buffer,
-    GfxMetalResourceKind_Texture,
-    GfxMetalResourceKind_Sampler,
-};
-
 struct GfxMetalBuffer {
     id<MTLBuffer> buffer;
     U64 size;
@@ -55,13 +48,6 @@ struct GfxMetalPipeline {
     U32 threadsPerThreadgroupX;
     U32 threadsPerThreadgroupY;
     U32 threadsPerThreadgroupZ;
-};
-
-struct GfxMetalResourceEntry {
-    GfxMetalResourceKind kind;
-    U32 index;
-    U32 generation;
-    U32 nextFree;
 };
 
 struct GfxMetalRetiredBuffer {
@@ -133,11 +119,7 @@ struct GfxDevice {
     SlotMap samplers;
     SlotMap pipelines;
 
-    GfxMetalResourceEntry* resourceEntries;
-    U32 resourceCount;
-    U32 resourceLiveCount;
-    U32 resourceCapacity;
-    U32 resourceFreeHead;
+    GfxResourceTable resourceTable;
     id<MTLArgumentEncoder> resourceArgumentEncoder;
     id<MTLBuffer> resourceArgumentBuffer;
 
@@ -169,7 +151,6 @@ static GfxMetalPipeline g_gfxMetalNilPipeline = {GfxPipelineKind_Graphics, 0, 0,
 static NSString* gfx_nsstring_from_cstr(const char* str);
 static NSString* gfx_nsstring_from_bytes(const void* data, U64 size);
 static MTLPixelFormat gfx_metal_pixel_format(GfxFormat format);
-static U32 gfx_metal_color_format_bytes_per_pixel(GfxFormat format);
 static MTLLoadAction gfx_metal_load_action(GfxLoadOp op);
 static MTLStoreAction gfx_metal_store_action(GfxStoreOp op);
 static MTLIndexType gfx_metal_index_type(GfxIndexType type);
@@ -204,8 +185,7 @@ static B32 gfx_metal_resource_table_init(GfxDevice* device);
 static void gfx_metal_resource_table_set_texture(GfxDevice* device, GfxResourceId resourceId, id<MTLTexture> texture);
 static void gfx_metal_resource_table_set_sampler(GfxDevice* device, GfxResourceId resourceId, id<MTLSamplerState> sampler);
 static void gfx_metal_resource_table_clear(GfxDevice* device, GfxResourceId resourceId);
-static B32 gfx_metal_resource_entries_reserve(GfxDevice* device, U32 neededCapacity);
-static GfxResourceId gfx_metal_register_resource(GfxDevice* device, GfxMetalResourceKind kind, U32 index, U32 generation);
+static GfxResourceId gfx_metal_register_resource(GfxDevice* device, GfxResourceKind kind, U32 index, U32 generation);
 static void gfx_metal_release_frame_objects(GfxFrame* frame);
 
 static NSString* gfx_nsstring_from_cstr(const char* str) {
@@ -238,21 +218,6 @@ static MTLPixelFormat gfx_metal_pixel_format(GfxFormat format) {
         }
         default: {
             return MTLPixelFormatInvalid;
-        }
-    }
-}
-
-static U32 gfx_metal_color_format_bytes_per_pixel(GfxFormat format) {
-    switch (format) {
-        case GfxFormat_BGRA8_UNorm:
-        case GfxFormat_RGBA8_UNorm: {
-            return 4u;
-        }
-        case GfxFormat_RGBA16_Float: {
-            return 8u;
-        }
-        default: {
-            return 0u;
         }
     }
 }
@@ -580,6 +545,9 @@ static B32 gfx_metal_resource_table_init(GfxDevice* device) {
     if (!device || !device->metalDevice) {
         return 0;
     }
+    if (!gfx_resource_table_init(&device->resourceTable, device->arena, GFX_METAL_RESOURCE_TABLE_CAPACITY)) {
+        return 0;
+    }
 
     MTLArgumentDescriptor* textureArg = [MTLArgumentDescriptor argumentDescriptor];
     MTLArgumentDescriptor* samplerArg = [MTLArgumentDescriptor argumentDescriptor];
@@ -644,98 +612,30 @@ static void gfx_metal_resource_table_set_sampler(GfxDevice* device, GfxResourceI
 }
 
 static void gfx_metal_resource_table_clear(GfxDevice* device, GfxResourceId resourceId) {
-    if (!device || !device->resourceEntries ||
-        resourceId.index == 0u ||
-        resourceId.index >= device->resourceCount ||
-        resourceId.index >= GFX_METAL_RESOURCE_TABLE_CAPACITY) {
+    if (!device) {
         return;
     }
 
-    GfxMetalResourceEntry* entry = &device->resourceEntries[resourceId.index];
-    if (entry->kind == GfxMetalResourceKind_Invalid) {
+    GfxResourceTableEntry* entry = gfx_resource_table_get(&device->resourceTable, resourceId);
+    if (!entry) {
         return;
     }
-    if (entry->kind == GfxMetalResourceKind_Texture) {
+    if (entry->kind == GfxResourceKind_Texture) {
         gfx_metal_resource_table_set_texture(device, resourceId, nil);
-    } else if (entry->kind == GfxMetalResourceKind_Sampler) {
+    } else if (entry->kind == GfxResourceKind_Sampler) {
         gfx_metal_resource_table_set_sampler(device, resourceId, nil);
     }
 
-    MEMSET(entry, 0, sizeof(*entry));
-    entry->nextFree = device->resourceFreeHead;
-    device->resourceFreeHead = resourceId.index;
-    if (device->resourceLiveCount > 0u) {
-        device->resourceLiveCount -= 1u;
-    }
-    device->stats.resourceTableCount = device->resourceLiveCount;
+    gfx_resource_table_release(&device->resourceTable, resourceId);
+    device->stats.resourceTableCount = device->resourceTable.liveCount;
 }
 
-static B32 gfx_metal_resource_entries_reserve(GfxDevice* device, U32 neededCapacity) {
+static GfxResourceId gfx_metal_register_resource(GfxDevice* device, GfxResourceKind kind, U32 index, U32 generation) {
     if (!device) {
-        return 0;
-    }
-    if (neededCapacity <= device->resourceCapacity) {
-        return 1;
-    }
-    if (neededCapacity > GFX_METAL_RESOURCE_TABLE_CAPACITY) {
-        ASSERT_DEBUG(neededCapacity <= GFX_METAL_RESOURCE_TABLE_CAPACITY);
-        LOG_ERROR("gfx", "Metal resource table is full");
-        return 0;
-    }
-
-    U32 newCapacity = GFX_METAL_RESOURCE_TABLE_CAPACITY;
-    GfxMetalResourceEntry* newEntries = ARENA_PUSH_ARRAY(device->arena, GfxMetalResourceEntry, newCapacity);
-    if (!newEntries) {
-        return 0;
-    }
-    MEMSET(newEntries, 0, sizeof(GfxMetalResourceEntry) * newCapacity);
-
-    if (device->resourceEntries && device->resourceCount > 0u) {
-        MEMCPY(newEntries, device->resourceEntries, sizeof(GfxMetalResourceEntry) * device->resourceCount);
-    }
-
-    device->resourceEntries = newEntries;
-    device->resourceCapacity = newCapacity;
-    return 1;
-}
-
-static GfxResourceId gfx_metal_register_resource(GfxDevice* device, GfxMetalResourceKind kind, U32 index, U32 generation) {
-    if (!device || generation == 0u) {
         return {};
     }
-    if (device->resourceCount == 0u) {
-        device->resourceCount = 1u;
-    }
-    U32 resourceIndex = 0u;
-    if (device->resourceFreeHead != 0u) {
-        resourceIndex = device->resourceFreeHead;
-        GfxMetalResourceEntry* freeEntry = &device->resourceEntries[resourceIndex];
-        device->resourceFreeHead = freeEntry->nextFree;
-    } else {
-        if (device->resourceCount >= GFX_METAL_RESOURCE_TABLE_CAPACITY) {
-            ASSERT_DEBUG(device->resourceCount < GFX_METAL_RESOURCE_TABLE_CAPACITY);
-            LOG_ERROR("gfx", "Metal resource table is full");
-            return {};
-        }
-        resourceIndex = device->resourceCount;
-    }
-
-    if (!gfx_metal_resource_entries_reserve(device, resourceIndex + 1u)) {
-        return {};
-    }
-    if (resourceIndex == device->resourceCount) {
-        device->resourceCount += 1u;
-    }
-
-    GfxMetalResourceEntry* entry = &device->resourceEntries[resourceIndex];
-    entry->kind = kind;
-    entry->index = index;
-    entry->generation = generation;
-    entry->nextFree = 0u;
-    device->resourceLiveCount += 1u;
-    device->stats.resourceTableCount = device->resourceLiveCount;
-
-    GfxResourceId result = {resourceIndex};
+    GfxResourceId result = gfx_resource_table_alloc(&device->resourceTable, kind, index, generation);
+    device->stats.resourceTableCount = device->resourceTable.liveCount;
     return result;
 }
 
@@ -1133,7 +1033,6 @@ B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDe
     device->commandQueue = commandQueue;
     device->framesInFlight = desc->framesInFlight ? desc->framesInFlight : GFX_DEFAULT_FRAMES_IN_FLIGHT;
     device->frameSemaphore = dispatch_semaphore_create((long)device->framesInFlight);
-    device->resourceCount = 1u;
 
     if (device->framesInFlight == 0u) {
         device->framesInFlight = GFX_DEFAULT_FRAMES_IN_FLIGHT;
@@ -1762,7 +1661,7 @@ GfxResourceId gfx_register_texture(GfxDevice* device, GfxTexture texture) {
     if (item->resourceId.index != 0u) {
         return item->resourceId;
     }
-    item->resourceId = gfx_metal_register_resource(device, GfxMetalResourceKind_Texture, texture.index, texture.generation);
+    item->resourceId = gfx_metal_register_resource(device, GfxResourceKind_Texture, texture.index, texture.generation);
     gfx_metal_resource_table_set_texture(device, item->resourceId, item->texture);
     return item->resourceId;
 }
@@ -1778,23 +1677,8 @@ GfxResourceId gfx_register_sampler(GfxDevice* device, GfxSampler sampler) {
     if (item->resourceId.index != 0u) {
         return item->resourceId;
     }
-    item->resourceId = gfx_metal_register_resource(device, GfxMetalResourceKind_Sampler, sampler.index, sampler.generation);
+    item->resourceId = gfx_metal_register_resource(device, GfxResourceKind_Sampler, sampler.index, sampler.generation);
     gfx_metal_resource_table_set_sampler(device, item->resourceId, item->sampler);
-    return item->resourceId;
-}
-
-GfxResourceId gfx_register_buffer(GfxDevice* device, GfxBuffer buffer) {
-    if (!device) {
-        return {};
-    }
-    GfxMetalBuffer* item = gfx_metal_resolve_buffer(device, buffer);
-    if (!item->buffer) {
-        return {};
-    }
-    if (item->resourceId.index != 0u) {
-        return item->resourceId;
-    }
-    item->resourceId = gfx_metal_register_resource(device, GfxMetalResourceKind_Buffer, buffer.index, buffer.generation);
     return item->resourceId;
 }
 
@@ -1858,7 +1742,7 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
     device->stats.pipelineSwitchCount = 0u;
     device->stats.tempOverflowCount = 0u;
     device->stats.tempBytesUsed = 0u;
-    device->stats.resourceTableCount = device->resourceLiveCount;
+    device->stats.resourceTableCount = device->resourceTable.liveCount;
     device->stats.frameIndex = device->frameSerial;
 
     return frame;
@@ -1984,49 +1868,25 @@ B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRe
         return 0;
     }
 
-    U32 bytesPerPixel = gfx_metal_color_format_bytes_per_pixel(texture->format);
-    U32 mipWidth = texture->width;
-    U32 mipHeight = texture->height;
-    for (U32 mipIndex = 0u; mipIndex < region->mip; ++mipIndex) {
-        mipWidth = (mipWidth > 1u) ? (mipWidth >> 1u) : 1u;
-        mipHeight = (mipHeight > 1u) ? (mipHeight >> 1u) : 1u;
-    }
-
-    B32 supported = bytesPerPixel != 0u &&
-                    region->layer == 0u &&
-                    region->layerCount == 1u &&
-                    region->z == 0u &&
-                    region->depth == 1u;
-    B32 inBounds = region->mip < texture->mipCount &&
-                   region->width != 0u &&
-                   region->height != 0u &&
-                   region->x <= mipWidth &&
-                   region->y <= mipHeight &&
-                   region->width <= (mipWidth - region->x) &&
-                   region->height <= (mipHeight - region->y);
-    U64 rowBytes = (U64)region->width * bytesPerPixel;
-    B32 rowLayout = region->bytesPerRow >= rowBytes &&
-                    (region->bytesPerRow % GFX_TEXTURE_UPLOAD_BYTES_PER_ROW_ALIGNMENT) == 0u &&
-                    region->rowsPerImage >= region->height;
-
-    gfx_metal_api_assert(frame->device, supported);
-    gfx_metal_api_assert(frame->device, inBounds);
-    gfx_metal_api_assert(frame->device, rowLayout);
-    if (!supported || !inBounds || !rowLayout) {
+    GfxTextureUploadValidation validation = {};
+    B32 validRegion = gfx_validate_texture_upload_region(texture->format,
+                                                         texture->width,
+                                                         texture->height,
+                                                         texture->mipCount,
+                                                         region,
+                                                         &validation);
+    gfx_metal_api_assert(frame->device, validation.supported);
+    gfx_metal_api_assert(frame->device, validation.inBounds);
+    gfx_metal_api_assert(frame->device, validation.rowLayout);
+    gfx_metal_api_assert(frame->device, validation.sizeValid);
+    if (!validRegion) {
         if (gfx_metal_api_validation_enabled(frame->device)) {
             LOG_ERROR("gfx", "gfx_upload_texture invalid upload region");
         }
         return 0;
     }
 
-    U64 sourceBytesPerImage = region->bytesPerRow * region->rowsPerImage;
-    gfx_metal_api_assert(frame->device, sourceBytesPerImage / region->rowsPerImage == region->bytesPerRow);
-    if (sourceBytesPerImage == 0u || sourceBytesPerImage / region->rowsPerImage != region->bytesPerRow) {
-        if (gfx_metal_api_validation_enabled(frame->device)) {
-            LOG_ERROR("gfx", "gfx_upload_texture upload size overflow");
-        }
-        return 0;
-    }
+    U64 sourceBytesPerImage = validation.sourceBytesPerImage;
 
     ASSERT_DEBUG(frame->commandBuffer != 0);
     if (!frame->commandBuffer) {
@@ -2184,9 +2044,9 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
                              offset:0u
                             atIndex:GFX_SHADER_SLOT_RESOURCE_TABLE];
 
-        for (U32 resourceIndex = 1u; resourceIndex < device->resourceCount; ++resourceIndex) {
-            GfxMetalResourceEntry* entry = device->resourceEntries ? &device->resourceEntries[resourceIndex] : 0;
-            if (!entry || entry->kind != GfxMetalResourceKind_Texture) {
+        for (U32 resourceIndex = 1u; resourceIndex < device->resourceTable.count; ++resourceIndex) {
+            GfxResourceTableEntry* entry = device->resourceTable.entries ? &device->resourceTable.entries[resourceIndex] : 0;
+            if (!entry || entry->kind != GfxResourceKind_Texture) {
                 continue;
             }
 
@@ -2236,7 +2096,7 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
             GfxMetalBuffer* indexBuffer = gfx_metal_resolve_buffer(device, draw->indexBuffer);
             GfxMetalBuffer* drawDataBuffer = gfx_metal_resolve_buffer(device, draw->drawData.buffer);
 
-            gfx_metal_api_assert(device, pipeline->kind == GfxPipelineKind_Graphics);
+            gfx_metal_api_assert(device, pipeline->kind == GfxPipelineKind_Graphics || pipeline->graphicsPipeline == 0);
             if (pipeline->kind != GfxPipelineKind_Graphics ||
                 !pipeline->graphicsPipeline ||
                 !vertexBuffer->buffer ||
@@ -2245,7 +2105,7 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
                 continue;
             }
 
-            if (boundPipeline.index != draw->pipeline.index || boundPipeline.generation != draw->pipeline.generation) {
+            if (!gfx_pipeline_handle_equal(boundPipeline, draw->pipeline)) {
                 [encoder setRenderPipelineState:pipeline->graphicsPipeline];
                 [encoder setCullMode:gfx_metal_cull_mode(pipeline->raster.cullMode)];
                 [encoder setFrontFacingWinding:gfx_metal_front_face(pipeline->raster.frontFace)];
@@ -2297,6 +2157,21 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
 
     gfx_metal_api_assert(device, dispatchCount == 0u || dispatches != 0);
     if (dispatchCount != 0u && !dispatches) {
+        return;
+    }
+
+    GfxGpuSlice passData = {};
+    for (U32 bindingIndex = 0u; bindingIndex < desc->bufferBindingCount; ++bindingIndex) {
+        const GfxBufferBinding* binding = desc->bufferBindings + bindingIndex;
+        if (binding->slot == GFX_SHADER_SLOT_PASS_DATA &&
+            FLAGS_HAS(binding->stages, GfxStageFlags_Compute)) {
+            passData = binding->slice;
+            break;
+        }
+    }
+
+    GfxMetalBuffer* passDataBuffer = gfx_metal_resolve_buffer(device, passData.buffer);
+    if (!passDataBuffer->buffer) {
         return;
     }
 

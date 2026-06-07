@@ -30,7 +30,7 @@ struct DrawData {
     uint materialIndex;
     uint objectId;
     uint flags;
-    uint _padding;
+    float animationPhase;
 };
 
 struct Material {
@@ -47,7 +47,7 @@ struct MaterialComputeData {
     uint rows;
     uint albedoTexture;
     uint samplerIndex;
-    uint _padding0;
+    float animationPhase;
     uint _padding1;
     uint _padding2;
 };
@@ -102,7 +102,7 @@ DrawData gfx_load_draw_data() {
     result.materialIndex = gfxBuffers[resourceIndex][base + 4u];
     result.objectId = gfxBuffers[resourceIndex][base + 5u];
     result.flags = gfxBuffers[resourceIndex][base + 6u];
-    result._padding = gfxBuffers[resourceIndex][base + 7u];
+    result.animationPhase = asfloat(gfxBuffers[resourceIndex][base + 7u]);
     return result;
 }
 
@@ -116,7 +116,7 @@ MaterialComputeData gfx_load_compute_data() {
     result.rows = gfxBuffers[resourceIndex][base + 2u];
     result.albedoTexture = gfxBuffers[resourceIndex][base + 3u];
     result.samplerIndex = gfxBuffers[resourceIndex][base + 4u];
-    result._padding0 = gfxBuffers[resourceIndex][base + 5u];
+    result.animationPhase = asfloat(gfxBuffers[resourceIndex][base + 5u]);
     result._padding1 = gfxBuffers[resourceIndex][base + 6u];
     result._padding2 = gfxBuffers[resourceIndex][base + 7u];
     return result;

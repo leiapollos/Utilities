@@ -4,11 +4,6 @@
 
 #pragma once
 
-#include "app_interface.hpp"
-#include "nstl/content/content_include.hpp"
-#include "nstl/file_stream/file_stream_include.hpp"
-#include "nstl/artifact/artifact_include.hpp"
-
 #define APP_STATE_ID(a, b, c, d) ((((U64)(a)) << 56u) | (((U64)(b)) << 48u) | (((U64)(c)) << 40u) | (((U64)(d)) << 32u) | 0x53544154u)
 
 enum APP_StateKind {
@@ -29,6 +24,7 @@ struct AppCoreState {
     U32 windowHeight;
     U64 frameCounter;
     U32 reloadCount;
+    F32 gfxDemoAnimationSeconds;
 
     JobSystem* jobSystem;
     U32 workerCount;
