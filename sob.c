@@ -61,6 +61,19 @@
 #define SLANG_VENDOR_PATH "third_party/slang/bin/linux/slangc"
 #endif
 
+static U64 newest_sob_input_mtime(void) {
+    U64 result = sob_fs_mtime("sob.c");
+    U64 sobHeaderTime = sob_fs_mtime("third_party/sob/sob.h");
+    if (sobHeaderTime > result) {
+        result = sobHeaderTime;
+    }
+    U64 shaderManifestTime = sob_fs_mtime(APP_SHADER_MANIFEST_SOURCE);
+    if (shaderManifestTime > result) {
+        result = shaderManifestTime;
+    }
+    return result;
+}
+
 typedef enum BuildMode {
     BuildMode_Debug,
     BuildMode_Asan,
@@ -430,19 +443,6 @@ static int windows_bootstrap_msvc_environment_if_needed(int argc, char** argv, S
     return 1;
 }
 
-static U64 newest_sob_input_mtime(void) {
-    U64 result = sob_fs_mtime("sob.c");
-    U64 sobHeaderTime = sob_fs_mtime("third_party/sob/sob.h");
-    if (sobHeaderTime > result) {
-        result = sobHeaderTime;
-    }
-    U64 shaderManifestTime = sob_fs_mtime(APP_SHADER_MANIFEST_SOURCE);
-    if (shaderManifestTime > result) {
-        result = shaderManifestTime;
-    }
-    return result;
-}
-
 static int windows_write_replace_batch(const char* exePath) {
     char fullExePath[2048];
     const char* targetPath = exePath;
@@ -580,6 +580,78 @@ static int windows_self_rebuild_if_needed(int argc, char** argv, S32* outExitCod
 
     windows_schedule_sob_replacement(exePath);
     *outExitCode = runResult;
+    return 1;
+}
+#endif
+
+#if !SOB_WINDOWS
+#define SOB_REBUILT_EXE_PATH BUILD_TOOLS_DIR "/sob_rebuilt"
+static int nonwindows_self_rebuild_if_needed(int argc, char** argv, S32* outExitCode) {
+    if (getenv("SOB_SKIP_SELF_REBUILD")) {
+        return 0;
+    }
+
+    const char* exePath = argv[0];
+    U64 exeTime = sob_fs_mtime(exePath);
+    U64 inputTime = newest_sob_input_mtime();
+    if (inputTime == 0u || exeTime == 0u || inputTime <= exeTime) {
+        return 0;
+    }
+
+    if (sob_fs_mkdir_p(BUILD_TOOLS_DIR) != 0 && !sob_fs_is_dir(BUILD_TOOLS_DIR)) {
+        fprintf(stderr, "Error: failed to create '%s'\n", BUILD_TOOLS_DIR);
+        *outExitCode = 1;
+        return 1;
+    }
+
+    printf("[SOB] Rebuilding %s...\n", exePath);
+    Sob_Arena* arena = sob_arena_create();
+    if (!arena) {
+        *outExitCode = 1;
+        return 1;
+    }
+
+    Sob_Cmd* buildCmd = sob_cmd_create(arena);
+    if (!buildCmd) {
+        sob_arena_destroy(arena);
+        *outExitCode = 1;
+        return 1;
+    }
+
+    const char* compiler = getenv("CC");
+    if (!compiler || compiler[0] == 0) {
+        compiler = "cc";
+    }
+
+    sob_fs_remove(SOB_REBUILT_EXE_PATH);
+    sob_cmd_append(buildCmd, compiler);
+    sob_cmd_append(buildCmd, "sob.c");
+    sob_cmd_append(buildCmd, "-o");
+    sob_cmd_append(buildCmd, SOB_REBUILT_EXE_PATH);
+
+    S32 buildResult = sob_cmd_run(buildCmd);
+    if (buildResult != 0) {
+        sob_arena_destroy(arena);
+        fprintf(stderr, "[SOB] Rebuild failed.\n");
+        *outExitCode = buildResult;
+        return 1;
+    }
+
+    if (rename(SOB_REBUILT_EXE_PATH, exePath) != 0) {
+        sob_arena_destroy(arena);
+        fprintf(stderr, "[SOB] Failed to replace '%s'.\n", exePath);
+        *outExitCode = 1;
+        return 1;
+    }
+
+    setenv("SOB_SKIP_SELF_REBUILD", "1", 1);
+    printf("[SOB] Re-executing...\n");
+    fflush(stdout);
+    execvp(exePath, argv);
+
+    sob_arena_destroy(arena);
+    fprintf(stderr, "[SOB] Failed to re-execute '%s'.\n", exePath);
+    *outExitCode = 1;
     return 1;
 }
 #endif
@@ -1460,7 +1532,10 @@ int main(int argc, char** argv) {
         return bootstrapExitCode;
     }
 #else
-    SOB_GO_REBUILD_URSELF(argc, argv);
+    S32 bootstrapExitCode = 0;
+    if (nonwindows_self_rebuild_if_needed(argc, argv, &bootstrapExitCode)) {
+        return bootstrapExitCode;
+    }
 #endif
 
     BuildTarget target = BuildTarget_Run;

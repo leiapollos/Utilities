@@ -200,10 +200,12 @@ static VkImageUsageFlags gfx_vulkan_texture_usage(U32 usageFlags, GfxTextureStor
 static VkImageAspectFlags gfx_vulkan_image_aspect(GfxFormat format);
 static VkIndexType gfx_vulkan_index_type(GfxIndexType type);
 static VkPrimitiveTopology gfx_vulkan_topology(GfxPrimitiveTopology topology);
-static VkFormat gfx_vulkan_vertex_format(GfxVertexFormat format);
 static VkCullModeFlags gfx_vulkan_cull_mode(GfxCullMode mode);
 static VkFrontFace gfx_vulkan_front_face(GfxFrontFace face);
 static VkCompareOp gfx_vulkan_compare_op(GfxCompareOp op);
+static VkBlendFactor gfx_vulkan_blend_factor(GfxBlendFactor factor);
+static VkBlendOp gfx_vulkan_blend_op(GfxBlendOp op);
+static VkColorComponentFlags gfx_vulkan_color_write_mask(U32 writeFlags);
 static VkFilter gfx_vulkan_filter(GfxFilter filter);
 static VkSamplerAddressMode gfx_vulkan_address_mode(GfxAddressMode mode);
 static GfxVulkanBuffer* gfx_vulkan_resolve_buffer(GfxDevice* device, GfxBuffer handle);
@@ -426,9 +428,6 @@ static VkFormat gfx_vulkan_format(GfxFormat format) {
 
 static VkBufferUsageFlags gfx_vulkan_buffer_usage(U32 usageFlags) {
     VkBufferUsageFlags usage = 0u;
-    if (FLAGS_HAS(usageFlags, GfxBufferUsageFlags_Vertex)) {
-        usage |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    }
     if (FLAGS_HAS(usageFlags, GfxBufferUsageFlags_Index)) {
         usage |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
     }
@@ -440,6 +439,9 @@ static VkBufferUsageFlags gfx_vulkan_buffer_usage(U32 usageFlags) {
     }
     if (FLAGS_HAS(usageFlags, GfxBufferUsageFlags_CopyDst)) {
         usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    }
+    if (FLAGS_HAS(usageFlags, GfxBufferUsageFlags_Indirect)) {
+        usage |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
     }
     return usage;
 }
@@ -480,16 +482,6 @@ static VkPrimitiveTopology gfx_vulkan_topology(GfxPrimitiveTopology topology) {
     return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 }
 
-static VkFormat gfx_vulkan_vertex_format(GfxVertexFormat format) {
-    switch (format) {
-        case GfxVertexFormat_F32x2: return VK_FORMAT_R32G32_SFLOAT;
-        case GfxVertexFormat_F32x3: return VK_FORMAT_R32G32B32_SFLOAT;
-        case GfxVertexFormat_F32x4: return VK_FORMAT_R32G32B32A32_SFLOAT;
-        case GfxVertexFormat_U8x4_UNorm: return VK_FORMAT_R8G8B8A8_UNORM;
-        default: return VK_FORMAT_UNDEFINED;
-    }
-}
-
 static VkCullModeFlags gfx_vulkan_cull_mode(GfxCullMode mode) {
     switch (mode) {
         case GfxCullMode_Front: return VK_CULL_MODE_FRONT_BIT;
@@ -508,6 +500,37 @@ static VkCompareOp gfx_vulkan_compare_op(GfxCompareOp op) {
         case GfxCompareOp_LessEqual: return VK_COMPARE_OP_LESS_OR_EQUAL;
         default: return VK_COMPARE_OP_ALWAYS;
     }
+}
+
+static VkBlendFactor gfx_vulkan_blend_factor(GfxBlendFactor factor) {
+    switch (factor) {
+        case GfxBlendFactor_Zero: return VK_BLEND_FACTOR_ZERO;
+        case GfxBlendFactor_SrcAlpha: return VK_BLEND_FACTOR_SRC_ALPHA;
+        case GfxBlendFactor_OneMinusSrcAlpha: return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        default: return VK_BLEND_FACTOR_ONE;
+    }
+}
+
+static VkBlendOp gfx_vulkan_blend_op(GfxBlendOp op) {
+    (void)op;
+    return VK_BLEND_OP_ADD;
+}
+
+static VkColorComponentFlags gfx_vulkan_color_write_mask(U32 writeFlags) {
+    VkColorComponentFlags result = 0u;
+    if (FLAGS_HAS(writeFlags, GfxColorWriteFlags_R)) {
+        result |= VK_COLOR_COMPONENT_R_BIT;
+    }
+    if (FLAGS_HAS(writeFlags, GfxColorWriteFlags_G)) {
+        result |= VK_COLOR_COMPONENT_G_BIT;
+    }
+    if (FLAGS_HAS(writeFlags, GfxColorWriteFlags_B)) {
+        result |= VK_COLOR_COMPONENT_B_BIT;
+    }
+    if (FLAGS_HAS(writeFlags, GfxColorWriteFlags_A)) {
+        result |= VK_COLOR_COMPONENT_A_BIT;
+    }
+    return result;
 }
 
 static VkFilter gfx_vulkan_filter(GfxFilter filter) {
@@ -1151,7 +1174,7 @@ static GfxBuffer gfx_vulkan_create_buffer_internal(GfxDevice* device, const GfxB
 
     GfxBuffer result = {slotIndex, generation};
     U32 shaderVisibleFlags = GfxBufferUsageFlags_Uniform | GfxBufferUsageFlags_Storage;
-    if ((desc->usageFlags & shaderVisibleFlags) != 0u) {
+    if (internal && (desc->usageFlags & shaderVisibleFlags) != 0u) {
         item->resourceId = gfx_vulkan_register_resource(device, GfxResourceKind_Buffer, result.index, result.generation);
         if (item->resourceId.index == 0u) {
             gfx_vulkan_destroy_buffer_item(device, item);
@@ -2411,9 +2434,13 @@ GfxPipeline gfx_create_graphics_pipeline(GfxDevice* device, const GfxGraphicsPip
         }
         return {};
     }
-    if (!desc->colorFormats || desc->colorFormatCount == 0u || desc->colorFormatCount > GFX_MAX_COLOR_TARGETS) {
+    if (!desc->colorFormats ||
+        !desc->blendStates ||
+        desc->colorFormatCount == 0u ||
+        desc->colorFormatCount > GFX_MAX_COLOR_TARGETS ||
+        desc->blendStateCount != desc->colorFormatCount) {
         if (gfx_vulkan_api_validation_enabled(device)) {
-            LOG_ERROR("gfx", "Invalid graphics pipeline color formats");
+            LOG_ERROR("gfx", "Invalid graphics pipeline color/blend formats");
         }
         return {};
     }
@@ -2456,41 +2483,29 @@ GfxPipeline gfx_create_graphics_pipeline(GfxDevice* device, const GfxGraphicsPip
     }
     DEFER_REF(temp_end(&scratch));
 
-    VkVertexInputAttributeDescription* attributes = ARENA_PUSH_ARRAY(scratch.arena, VkVertexInputAttributeDescription, desc->attributeCount);
     VkFormat* colorFormats = ARENA_PUSH_ARRAY(scratch.arena, VkFormat, desc->colorFormatCount);
     VkPipelineColorBlendAttachmentState* blendAttachments = ARENA_PUSH_ARRAY(scratch.arena, VkPipelineColorBlendAttachmentState, desc->colorFormatCount);
-    if ((desc->attributeCount != 0u && !attributes) || !colorFormats || !blendAttachments) {
+    if (!colorFormats || !blendAttachments) {
         vkDestroyShaderModule(device->device, fragmentModule, 0);
         vkDestroyShaderModule(device->device, vertexModule, 0);
         return {};
     }
 
-    for (U32 i = 0u; i < desc->attributeCount; ++i) {
-        attributes[i].location = desc->attributes[i].location;
-        attributes[i].binding = 0u;
-        attributes[i].format = gfx_vulkan_vertex_format(desc->attributes[i].format);
-        attributes[i].offset = desc->attributes[i].offset;
-    }
     for (U32 i = 0u; i < desc->colorFormatCount; ++i) {
+        const GfxColorBlendState* blendState = desc->blendStates + i;
         colorFormats[i] = gfx_vulkan_format(desc->colorFormats[i]);
-        blendAttachments[i].blendEnable = VK_FALSE;
-        blendAttachments[i].colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
-                                             VK_COLOR_COMPONENT_G_BIT |
-                                             VK_COLOR_COMPONENT_B_BIT |
-                                             VK_COLOR_COMPONENT_A_BIT;
+        blendAttachments[i].blendEnable = blendState->blendEnabled ? VK_TRUE : VK_FALSE;
+        blendAttachments[i].srcColorBlendFactor = gfx_vulkan_blend_factor(blendState->srcColorFactor);
+        blendAttachments[i].dstColorBlendFactor = gfx_vulkan_blend_factor(blendState->dstColorFactor);
+        blendAttachments[i].colorBlendOp = gfx_vulkan_blend_op(blendState->colorOp);
+        blendAttachments[i].srcAlphaBlendFactor = gfx_vulkan_blend_factor(blendState->srcAlphaFactor);
+        blendAttachments[i].dstAlphaBlendFactor = gfx_vulkan_blend_factor(blendState->dstAlphaFactor);
+        blendAttachments[i].alphaBlendOp = gfx_vulkan_blend_op(blendState->alphaOp);
+        blendAttachments[i].colorWriteMask = gfx_vulkan_color_write_mask(blendState->writeFlags);
     }
-
-    VkVertexInputBindingDescription binding = {};
-    binding.binding = 0u;
-    binding.stride = desc->vertexBuffer.stride;
-    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
     VkPipelineVertexInputStateCreateInfo vertexInput = {};
     vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInput.vertexBindingDescriptionCount = 1u;
-    vertexInput.pVertexBindingDescriptions = &binding;
-    vertexInput.vertexAttributeDescriptionCount = desc->attributeCount;
-    vertexInput.pVertexAttributeDescriptions = attributes;
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly = {};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -3146,8 +3161,11 @@ static void gfx_vulkan_barrier_compute_write_(GfxDevice* device,
     barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
     barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
                            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
-                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                           VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+    barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                            VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
     barrier.buffer = buffer->buffer;
     barrier.offset = write->slice.offset;
     barrier.size = barrierSize;
@@ -3169,7 +3187,8 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
     if (desc->colorTargetCount == 0u ||
         desc->colorTargetCount > GFX_MAX_COLOR_TARGETS ||
         !desc->colorTargets ||
-        (areaCount != 0u && !areas)) {
+        (areaCount != 0u && !areas) ||
+        (desc->resourceUseCount != 0u && !desc->resourceUses)) {
         if (gfx_vulkan_api_validation_enabled(device)) {
             LOG_ERROR("gfx", "Invalid render pass descriptor");
         }
@@ -3377,7 +3396,18 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
 
         for (U32 drawIndex = 0u; drawIndex < area->drawCount; ++drawIndex) {
             const GfxDraw* draw = &area->draws[drawIndex];
-            if (draw->indexCount == 0u) {
+            if (draw->kind != GfxDrawKind_DirectIndexed &&
+                draw->kind != GfxDrawKind_IndirectIndexed) {
+                gfx_vulkan_api_assert(device, 0 && "Invalid gfx draw kind");
+                continue;
+            }
+            if (draw->kind == GfxDrawKind_DirectIndexed &&
+                (draw->indexCount == 0u || draw->instanceCount == 0u)) {
+                continue;
+            }
+            if (draw->kind == GfxDrawKind_IndirectIndexed &&
+                draw->indirectArgs.size < sizeof(GfxDrawIndexedIndirectArgs)) {
+                gfx_vulkan_api_assert(device, draw->indirectArgs.size >= sizeof(GfxDrawIndexedIndirectArgs));
                 continue;
             }
             if (draw->rootData.offset > (U64)0xffffffffu) {
@@ -3386,17 +3416,34 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
             }
 
             GfxVulkanPipeline* pipeline = gfx_vulkan_resolve_pipeline(device, draw->pipeline);
-            GfxVulkanBuffer* vertexBuffer = gfx_vulkan_resolve_buffer(device, draw->vertexBuffer);
             GfxVulkanBuffer* indexBuffer = gfx_vulkan_resolve_buffer(device, draw->indexBuffer);
             GfxVulkanBuffer* rootDataBuffer = gfx_vulkan_resolve_buffer(device, draw->rootData.buffer);
+            GfxVulkanBuffer* indirectBuffer = (draw->kind == GfxDrawKind_IndirectIndexed) ?
+                                              gfx_vulkan_resolve_buffer(device, draw->indirectArgs.buffer) :
+                                              &g_gfxVulkanNilBuffer;
 
             gfx_vulkan_api_assert(device, pipeline->kind == GfxPipelineKind_Graphics || pipeline->pipeline == 0);
             if (pipeline->kind != GfxPipelineKind_Graphics ||
                 !pipeline->pipeline ||
-                !vertexBuffer->buffer ||
                 !indexBuffer->buffer ||
-                !rootDataBuffer->buffer) {
+                !rootDataBuffer->buffer ||
+                (draw->kind == GfxDrawKind_IndirectIndexed && !indirectBuffer->buffer)) {
                 continue;
+            }
+            if (draw->kind == GfxDrawKind_IndirectIndexed &&
+                !FLAGS_HAS(indirectBuffer->usageFlags, GfxBufferUsageFlags_Indirect)) {
+                gfx_vulkan_api_assert(device, FLAGS_HAS(indirectBuffer->usageFlags, GfxBufferUsageFlags_Indirect));
+                continue;
+            }
+            if (draw->kind == GfxDrawKind_IndirectIndexed) {
+                U64 indirectRemaining = (draw->indirectArgs.offset < indirectBuffer->size) ?
+                                        (indirectBuffer->size - draw->indirectArgs.offset) :
+                                        0u;
+                if (indirectRemaining < sizeof(GfxDrawIndexedIndirectArgs)) {
+                    gfx_vulkan_api_assert(device, draw->indirectArgs.offset < indirectBuffer->size);
+                    gfx_vulkan_api_assert(device, indirectRemaining >= sizeof(GfxDrawIndexedIndirectArgs));
+                    continue;
+                }
             }
 
             GfxResourceId rootDataId = rootDataBuffer->resourceId;
@@ -3422,9 +3469,6 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
                 device->stats.pipelineSwitchCount += 1u;
             }
 
-            VkDeviceSize vertexOffset = draw->vertexByteOffset;
-            vkCmdBindVertexBuffers(frame->commandBuffer, 0u, 1u, &vertexBuffer->buffer, &vertexOffset);
-
             U32 indexSize = (draw->indexType == GfxIndexType_U16) ? 2u : 4u;
             if ((draw->indexByteOffset % indexSize) != 0u) {
                 gfx_vulkan_api_assert(device, (draw->indexByteOffset % indexSize) == 0u);
@@ -3445,13 +3489,20 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
                                sizeof(push),
                                &push);
 
-            U32 instanceCount = draw->instanceCount ? draw->instanceCount : 1u;
-            vkCmdDrawIndexed(frame->commandBuffer,
-                             draw->indexCount,
-                             instanceCount,
-                             0u,
-                             draw->baseVertex,
-                             draw->firstInstance);
+            if (draw->kind == GfxDrawKind_IndirectIndexed) {
+                vkCmdDrawIndexedIndirect(frame->commandBuffer,
+                                         indirectBuffer->buffer,
+                                         draw->indirectArgs.offset,
+                                         1u,
+                                         sizeof(GfxDrawIndexedIndirectArgs));
+            } else {
+                vkCmdDrawIndexed(frame->commandBuffer,
+                                 draw->indexCount,
+                                 draw->instanceCount,
+                                 0u,
+                                 draw->baseVertex,
+                                 draw->firstInstance);
+            }
             device->stats.drawCount += 1u;
         }
     }
@@ -3488,8 +3539,10 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
 
     gfx_vulkan_api_assert(device, dispatchCount == 0u || dispatches != 0);
     gfx_vulkan_api_assert(device, desc->writeCount == 0u || desc->writes != 0);
+    gfx_vulkan_api_assert(device, desc->resourceUseCount == 0u || desc->resourceUses != 0);
     if ((dispatchCount != 0u && !dispatches) ||
-        (desc->writeCount != 0u && !desc->writes)) {
+        (desc->writeCount != 0u && !desc->writes) ||
+        (desc->resourceUseCount != 0u && !desc->resourceUses)) {
         return;
     }
 

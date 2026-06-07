@@ -154,12 +154,16 @@ static MTLPixelFormat gfx_metal_pixel_format(GfxFormat format);
 static MTLLoadAction gfx_metal_load_action(GfxLoadOp op);
 static MTLStoreAction gfx_metal_store_action(GfxStoreOp op);
 static MTLIndexType gfx_metal_index_type(GfxIndexType type);
-static MTLVertexFormat gfx_metal_vertex_format(GfxVertexFormat format);
 static MTLSamplerMinMagFilter gfx_metal_filter(GfxFilter filter);
 static MTLSamplerAddressMode gfx_metal_address_mode(GfxAddressMode mode);
 static MTLCompareFunction gfx_metal_compare_op(GfxCompareOp op);
 static MTLCullMode gfx_metal_cull_mode(GfxCullMode mode);
 static MTLWinding gfx_metal_front_face(GfxFrontFace face);
+static MTLBlendFactor gfx_metal_blend_factor(GfxBlendFactor factor);
+static MTLBlendOperation gfx_metal_blend_op(GfxBlendOp op);
+static MTLColorWriteMask gfx_metal_color_write_mask(U32 writeFlags);
+static MTLResourceUsage gfx_metal_resource_usage(U32 accessFlags);
+static MTLRenderStages gfx_metal_render_stages(U32 shaderStages, U32 accessFlags);
 static B32 gfx_metal_validation_has(GfxDevice* device, GfxValidationFlags flags);
 static B32 gfx_metal_api_validation_enabled(GfxDevice* device);
 static B32 gfx_metal_backend_validation_enabled(GfxDevice* device);
@@ -188,6 +192,8 @@ static void gfx_metal_resource_table_set_buffer(GfxDevice* device, GfxResourceId
 static void gfx_metal_resource_table_clear(GfxDevice* device, GfxResourceId resourceId);
 static GfxResourceId gfx_metal_register_resource(GfxDevice* device, GfxResourceKind kind, U32 index, U32 generation);
 static void gfx_metal_release_frame_objects(GfxFrame* frame);
+static void gfx_metal_render_use_resource(GfxDevice* device, id<MTLRenderCommandEncoder> encoder, const GfxResourceUse* use);
+static void gfx_metal_compute_use_resource(GfxDevice* device, id<MTLComputeCommandEncoder> encoder, const GfxResourceUse* use);
 
 static NSString* gfx_nsstring_from_cstr(const char* str) {
     if (!str) {
@@ -258,26 +264,6 @@ static MTLIndexType gfx_metal_index_type(GfxIndexType type) {
     return (type == GfxIndexType_U16) ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32;
 }
 
-static MTLVertexFormat gfx_metal_vertex_format(GfxVertexFormat format) {
-    switch (format) {
-        case GfxVertexFormat_F32x2: {
-            return MTLVertexFormatFloat2;
-        }
-        case GfxVertexFormat_F32x3: {
-            return MTLVertexFormatFloat3;
-        }
-        case GfxVertexFormat_F32x4: {
-            return MTLVertexFormatFloat4;
-        }
-        case GfxVertexFormat_U8x4_UNorm: {
-            return MTLVertexFormatUChar4Normalized;
-        }
-        default: {
-            return MTLVertexFormatInvalid;
-        }
-    }
-}
-
 static MTLSamplerMinMagFilter gfx_metal_filter(GfxFilter filter) {
     return (filter == GfxFilter_Nearest) ? MTLSamplerMinMagFilterNearest : MTLSamplerMinMagFilterLinear;
 }
@@ -318,6 +304,78 @@ static MTLCullMode gfx_metal_cull_mode(GfxCullMode mode) {
 
 static MTLWinding gfx_metal_front_face(GfxFrontFace face) {
     return (face == GfxFrontFace_CW) ? MTLWindingClockwise : MTLWindingCounterClockwise;
+}
+
+static MTLBlendFactor gfx_metal_blend_factor(GfxBlendFactor factor) {
+    switch (factor) {
+        case GfxBlendFactor_Zero: {
+            return MTLBlendFactorZero;
+        }
+        case GfxBlendFactor_SrcAlpha: {
+            return MTLBlendFactorSourceAlpha;
+        }
+        case GfxBlendFactor_OneMinusSrcAlpha: {
+            return MTLBlendFactorOneMinusSourceAlpha;
+        }
+        case GfxBlendFactor_One:
+        default: {
+            return MTLBlendFactorOne;
+        }
+    }
+}
+
+static MTLBlendOperation gfx_metal_blend_op(GfxBlendOp op) {
+    (void)op;
+    return MTLBlendOperationAdd;
+}
+
+static MTLColorWriteMask gfx_metal_color_write_mask(U32 writeFlags) {
+    MTLColorWriteMask result = 0;
+    if (FLAGS_HAS(writeFlags, GfxColorWriteFlags_R)) {
+        result |= MTLColorWriteMaskRed;
+    }
+    if (FLAGS_HAS(writeFlags, GfxColorWriteFlags_G)) {
+        result |= MTLColorWriteMaskGreen;
+    }
+    if (FLAGS_HAS(writeFlags, GfxColorWriteFlags_B)) {
+        result |= MTLColorWriteMaskBlue;
+    }
+    if (FLAGS_HAS(writeFlags, GfxColorWriteFlags_A)) {
+        result |= MTLColorWriteMaskAlpha;
+    }
+    return result;
+}
+
+static MTLResourceUsage gfx_metal_resource_usage(U32 accessFlags) {
+    MTLResourceUsage result = 0;
+    if (FLAGS_HAS(accessFlags, GfxResourceAccessFlags_ShaderRead) ||
+        FLAGS_HAS(accessFlags, GfxResourceAccessFlags_IndirectRead)) {
+        result |= MTLResourceUsageRead;
+    }
+    if (FLAGS_HAS(accessFlags, GfxResourceAccessFlags_ShaderWrite)) {
+        result |= MTLResourceUsageWrite;
+    }
+    if (result == 0) {
+        result = MTLResourceUsageRead;
+    }
+    return result;
+}
+
+static MTLRenderStages gfx_metal_render_stages(U32 shaderStages, U32 accessFlags) {
+    MTLRenderStages result = 0;
+    if (FLAGS_HAS(shaderStages, GfxShaderStageFlags_Vertex)) {
+        result |= MTLRenderStageVertex;
+    }
+    if (FLAGS_HAS(shaderStages, GfxShaderStageFlags_Fragment)) {
+        result |= MTLRenderStageFragment;
+    }
+    if (result == 0 && FLAGS_HAS(accessFlags, GfxResourceAccessFlags_IndirectRead)) {
+        result = MTLRenderStageVertex;
+    }
+    if (result == 0) {
+        result = MTLRenderStageVertex | MTLRenderStageFragment;
+    }
+    return result;
 }
 
 static B32 gfx_metal_validation_has(GfxDevice* device, GfxValidationFlags flags) {
@@ -659,6 +717,45 @@ static GfxResourceId gfx_metal_register_resource(GfxDevice* device, GfxResourceK
     GfxResourceId result = gfx_resource_table_alloc(&device->resourceTable, kind, index, generation);
     device->stats.resourceTableCount = device->resourceTable.liveCount;
     return result;
+}
+
+static void gfx_metal_render_use_resource(GfxDevice* device, id<MTLRenderCommandEncoder> encoder, const GfxResourceUse* use) {
+    if (!device || !encoder || !use) {
+        return;
+    }
+
+    MTLResourceUsage usage = gfx_metal_resource_usage(use->accessFlags);
+    MTLRenderStages stages = gfx_metal_render_stages(use->shaderStages, use->accessFlags);
+    if (use->kind == GfxResourceUseKind_Texture) {
+        GfxMetalTexture* texture = gfx_metal_resolve_texture(device, use->texture);
+        if (texture->texture) {
+            [encoder useResource:texture->texture usage:usage stages:stages];
+        }
+    } else {
+        GfxMetalBuffer* buffer = gfx_metal_resolve_buffer(device, use->buffer);
+        if (buffer->buffer) {
+            [encoder useResource:buffer->buffer usage:usage stages:stages];
+        }
+    }
+}
+
+static void gfx_metal_compute_use_resource(GfxDevice* device, id<MTLComputeCommandEncoder> encoder, const GfxResourceUse* use) {
+    if (!device || !encoder || !use) {
+        return;
+    }
+
+    MTLResourceUsage usage = gfx_metal_resource_usage(use->accessFlags);
+    if (use->kind == GfxResourceUseKind_Texture) {
+        GfxMetalTexture* texture = gfx_metal_resolve_texture(device, use->texture);
+        if (texture->texture) {
+            [encoder useResource:texture->texture usage:usage];
+        }
+    } else {
+        GfxMetalBuffer* buffer = gfx_metal_resolve_buffer(device, use->buffer);
+        if (buffer->buffer) {
+            [encoder useResource:buffer->buffer usage:usage];
+        }
+    }
 }
 
 static U64 gfx_metal_retire_serial(GfxDevice* device) {
@@ -1405,10 +1502,13 @@ GfxPipeline gfx_create_graphics_pipeline(GfxDevice* device, const GfxGraphicsPip
         }
         return {};
     }
-    if (!desc->colorFormats || desc->colorFormatCount == 0u ||
-        desc->colorFormatCount > GFX_MAX_COLOR_TARGETS) {
+    if (!desc->colorFormats ||
+        !desc->blendStates ||
+        desc->colorFormatCount == 0u ||
+        desc->colorFormatCount > GFX_MAX_COLOR_TARGETS ||
+        desc->blendStateCount != desc->colorFormatCount) {
         if (gfx_metal_api_validation_enabled(device)) {
-            LOG_ERROR("gfx", "Invalid graphics pipeline color formats");
+            LOG_ERROR("gfx", "Invalid graphics pipeline color/blend formats");
         }
         return {};
     }
@@ -1481,32 +1581,17 @@ GfxPipeline gfx_create_graphics_pipeline(GfxDevice* device, const GfxGraphicsPip
         }
     }
 
-    MTLVertexDescriptor* vertexDescriptor = [[MTLVertexDescriptor alloc] init];
-    if (!vertexDescriptor) {
-        [pipelineDesc release];
-        [vertexFunction release];
-        [fragmentFunction release];
-        [vertexLibrary release];
-        [fragmentLibrary release];
-        return {};
-    }
-    vertexDescriptor.layouts[0].stride = desc->vertexBuffer.stride;
-    vertexDescriptor.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
-    vertexDescriptor.layouts[0].stepRate = 1u;
-
-    for (U32 i = 0; i < desc->attributeCount; ++i) {
-        const GfxVertexAttribute* attribute = &desc->attributes[i];
-        if (attribute->location >= 31u) {
-            continue;
-        }
-        vertexDescriptor.attributes[attribute->location].format = gfx_metal_vertex_format(attribute->format);
-        vertexDescriptor.attributes[attribute->location].offset = attribute->offset;
-        vertexDescriptor.attributes[attribute->location].bufferIndex = 0u;
-    }
-    pipelineDesc.vertexDescriptor = vertexDescriptor;
-
     for (U32 i = 0; i < desc->colorFormatCount; ++i) {
+        const GfxColorBlendState* blendState = desc->blendStates + i;
         pipelineDesc.colorAttachments[i].pixelFormat = gfx_metal_pixel_format(desc->colorFormats[i]);
+        pipelineDesc.colorAttachments[i].blendingEnabled = blendState->blendEnabled ? YES : NO;
+        pipelineDesc.colorAttachments[i].sourceRGBBlendFactor = gfx_metal_blend_factor(blendState->srcColorFactor);
+        pipelineDesc.colorAttachments[i].destinationRGBBlendFactor = gfx_metal_blend_factor(blendState->dstColorFactor);
+        pipelineDesc.colorAttachments[i].rgbBlendOperation = gfx_metal_blend_op(blendState->colorOp);
+        pipelineDesc.colorAttachments[i].sourceAlphaBlendFactor = gfx_metal_blend_factor(blendState->srcAlphaFactor);
+        pipelineDesc.colorAttachments[i].destinationAlphaBlendFactor = gfx_metal_blend_factor(blendState->dstAlphaFactor);
+        pipelineDesc.colorAttachments[i].alphaBlendOperation = gfx_metal_blend_op(blendState->alphaOp);
+        pipelineDesc.colorAttachments[i].writeMask = gfx_metal_color_write_mask(blendState->writeFlags);
     }
     if (desc->depthFormat != GfxFormat_Invalid) {
         pipelineDesc.depthAttachmentPixelFormat = gfx_metal_pixel_format(desc->depthFormat);
@@ -1515,7 +1600,6 @@ GfxPipeline gfx_create_graphics_pipeline(GfxDevice* device, const GfxGraphicsPip
     error = nil;
     id<MTLRenderPipelineState> pipelineState = [device->metalDevice newRenderPipelineStateWithDescriptor:pipelineDesc
                                                                                                     error:&error];
-    [vertexDescriptor release];
     [pipelineDesc release];
     [vertexFunction release];
     [fragmentFunction release];
@@ -2019,10 +2103,12 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
     gfx_metal_api_assert(device, desc->colorTargetCount <= GFX_MAX_COLOR_TARGETS);
     gfx_metal_api_assert(device, desc->colorTargetCount == 0u || desc->colorTargets != 0);
     gfx_metal_api_assert(device, areaCount == 0u || areas != 0);
+    gfx_metal_api_assert(device, desc->resourceUseCount == 0u || desc->resourceUses != 0);
     if (desc->colorTargetCount == 0u ||
         desc->colorTargetCount > GFX_MAX_COLOR_TARGETS ||
         !desc->colorTargets ||
-        (areaCount != 0u && !areas)) {
+        (areaCount != 0u && !areas) ||
+        (desc->resourceUseCount != 0u && !desc->resourceUses)) {
         if (gfx_metal_api_validation_enabled(device)) {
             LOG_ERROR("gfx", "Invalid render pass descriptor");
         }
@@ -2126,33 +2212,15 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
     }
 
     if (device->resourceArgumentBuffer) {
+        [encoder setVertexBuffer:device->resourceArgumentBuffer
+                           offset:0u
+                          atIndex:GFX_SHADER_SLOT_RESOURCE_TABLE];
         [encoder setFragmentBuffer:device->resourceArgumentBuffer
                              offset:0u
                             atIndex:GFX_SHADER_SLOT_RESOURCE_TABLE];
 
-        for (U32 resourceIndex = 1u; resourceIndex < device->resourceTable.count; ++resourceIndex) {
-            GfxResourceTableEntry* entry = device->resourceTable.entries ? &device->resourceTable.entries[resourceIndex] : 0;
-            if (!entry) {
-                continue;
-            }
-
-            if (entry->kind == GfxResourceKind_Texture) {
-                GfxTexture textureHandle = {entry->index, entry->generation};
-                GfxMetalTexture* texture = gfx_metal_resolve_texture(device, textureHandle);
-                if (texture->texture) {
-                    [encoder useResource:texture->texture
-                                    usage:MTLResourceUsageRead
-                                   stages:MTLRenderStageFragment];
-                }
-            } else if (entry->kind == GfxResourceKind_Buffer) {
-                GfxBuffer bufferHandle = {entry->index, entry->generation};
-                GfxMetalBuffer* buffer = gfx_metal_resolve_buffer(device, bufferHandle);
-                if (buffer->buffer) {
-                    [encoder useResource:buffer->buffer
-                                    usage:MTLResourceUsageRead
-                                   stages:MTLRenderStageFragment];
-                }
-            }
+        for (U32 resourceIndex = 0u; resourceIndex < desc->resourceUseCount; ++resourceIndex) {
+            gfx_metal_render_use_resource(device, encoder, desc->resourceUses + resourceIndex);
         }
     }
 
@@ -2183,21 +2251,39 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
 
         for (U32 drawIndex = 0; drawIndex < area->drawCount; ++drawIndex) {
             const GfxDraw* draw = &area->draws[drawIndex];
-            if (draw->indexCount == 0u) {
+            if (draw->kind != GfxDrawKind_DirectIndexed &&
+                draw->kind != GfxDrawKind_IndirectIndexed) {
+                gfx_metal_api_assert(device, 0 && "Invalid gfx draw kind");
+                continue;
+            }
+            if (draw->kind == GfxDrawKind_DirectIndexed &&
+                (draw->indexCount == 0u || draw->instanceCount == 0u)) {
+                continue;
+            }
+            if (draw->kind == GfxDrawKind_IndirectIndexed &&
+                draw->indirectArgs.size < sizeof(GfxDrawIndexedIndirectArgs)) {
+                gfx_metal_api_assert(device, draw->indirectArgs.size >= sizeof(GfxDrawIndexedIndirectArgs));
                 continue;
             }
 
             GfxMetalPipeline* pipeline = gfx_metal_resolve_pipeline(device, draw->pipeline);
-            GfxMetalBuffer* vertexBuffer = gfx_metal_resolve_buffer(device, draw->vertexBuffer);
             GfxMetalBuffer* indexBuffer = gfx_metal_resolve_buffer(device, draw->indexBuffer);
             GfxMetalBuffer* rootDataBuffer = gfx_metal_resolve_buffer(device, draw->rootData.buffer);
+            GfxMetalBuffer* indirectBuffer = (draw->kind == GfxDrawKind_IndirectIndexed) ?
+                                             gfx_metal_resolve_buffer(device, draw->indirectArgs.buffer) :
+                                             &g_gfxMetalNilBuffer;
 
             gfx_metal_api_assert(device, pipeline->kind == GfxPipelineKind_Graphics || pipeline->graphicsPipeline == 0);
             if (pipeline->kind != GfxPipelineKind_Graphics ||
                 !pipeline->graphicsPipeline ||
-                !vertexBuffer->buffer ||
                 !indexBuffer->buffer ||
-                !rootDataBuffer->buffer) {
+                !rootDataBuffer->buffer ||
+                (draw->kind == GfxDrawKind_IndirectIndexed && !indirectBuffer->buffer)) {
+                continue;
+            }
+            if (draw->kind == GfxDrawKind_IndirectIndexed &&
+                !FLAGS_HAS(indirectBuffer->usageFlags, GfxBufferUsageFlags_Indirect)) {
+                gfx_metal_api_assert(device, FLAGS_HAS(indirectBuffer->usageFlags, GfxBufferUsageFlags_Indirect));
                 continue;
             }
 
@@ -2212,7 +2298,6 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
                 device->stats.pipelineSwitchCount += 1u;
             }
 
-            [encoder setVertexBuffer:vertexBuffer->buffer offset:(NSUInteger)draw->vertexByteOffset atIndex:0u];
             [encoder setVertexBuffer:rootDataBuffer->buffer
                                offset:(NSUInteger)draw->rootData.offset
                               atIndex:GFX_SHADER_SLOT_ROOT_DATA];
@@ -2220,15 +2305,23 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
                                  offset:(NSUInteger)draw->rootData.offset
                                 atIndex:GFX_SHADER_SLOT_ROOT_DATA];
 
-            U32 instanceCount = draw->instanceCount ? draw->instanceCount : 1u;
-            [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                                indexCount:draw->indexCount
-                                 indexType:gfx_metal_index_type(draw->indexType)
-                               indexBuffer:indexBuffer->buffer
-                         indexBufferOffset:(NSUInteger)draw->indexByteOffset
-                             instanceCount:instanceCount
-                                baseVertex:draw->baseVertex
-                              baseInstance:draw->firstInstance];
+            if (draw->kind == GfxDrawKind_IndirectIndexed) {
+                [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                     indexType:gfx_metal_index_type(draw->indexType)
+                                   indexBuffer:indexBuffer->buffer
+                             indexBufferOffset:(NSUInteger)draw->indexByteOffset
+                                indirectBuffer:indirectBuffer->buffer
+                          indirectBufferOffset:(NSUInteger)draw->indirectArgs.offset];
+            } else {
+                [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                    indexCount:draw->indexCount
+                                     indexType:gfx_metal_index_type(draw->indexType)
+                                   indexBuffer:indexBuffer->buffer
+                             indexBufferOffset:(NSUInteger)draw->indexByteOffset
+                                 instanceCount:draw->instanceCount
+                                    baseVertex:draw->baseVertex
+                                  baseInstance:draw->firstInstance];
+            }
             device->stats.drawCount += 1u;
         }
     }
@@ -2253,8 +2346,10 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
 
     gfx_metal_api_assert(device, dispatchCount == 0u || dispatches != 0);
     gfx_metal_api_assert(device, desc->writeCount == 0u || desc->writes != 0);
+    gfx_metal_api_assert(device, desc->resourceUseCount == 0u || desc->resourceUses != 0);
     if ((dispatchCount != 0u && !dispatches) ||
-        (desc->writeCount != 0u && !desc->writes)) {
+        (desc->writeCount != 0u && !desc->writes) ||
+        (desc->resourceUseCount != 0u && !desc->resourceUses)) {
         return;
     }
 
@@ -2280,18 +2375,8 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
                     offset:0u
                    atIndex:GFX_SHADER_SLOT_RESOURCE_TABLE];
 
-        for (U32 resourceIndex = 1u; resourceIndex < device->resourceTable.count; ++resourceIndex) {
-            GfxResourceTableEntry* entry = device->resourceTable.entries ? &device->resourceTable.entries[resourceIndex] : 0;
-            if (!entry || entry->kind != GfxResourceKind_Buffer) {
-                continue;
-            }
-
-            GfxBuffer bufferHandle = {entry->index, entry->generation};
-            GfxMetalBuffer* buffer = gfx_metal_resolve_buffer(device, bufferHandle);
-            if (buffer->buffer) {
-                [encoder useResource:buffer->buffer
-                                usage:MTLResourceUsageRead | MTLResourceUsageWrite];
-            }
+        for (U32 resourceIndex = 0u; resourceIndex < desc->resourceUseCount; ++resourceIndex) {
+            gfx_metal_compute_use_resource(device, encoder, desc->resourceUses + resourceIndex);
         }
     }
 

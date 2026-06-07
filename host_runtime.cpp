@@ -34,6 +34,7 @@ static const char* HOST_HOT_MODULE_INPUTS[] = {
     "app_include.hpp",
     "app_include.cpp",
     "app.cpp",
+    "app_gfx_demo.cpp",
     "app_state.hpp",
     "nstl/content/content.hpp",
     "nstl/content/content.cpp",

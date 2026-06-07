@@ -65,11 +65,11 @@ enum GfxMemoryKind {
 
 enum GfxBufferUsageFlags {
     GfxBufferUsageFlags_None    = 0,
-    GfxBufferUsageFlags_Vertex  = (1u << 0),
-    GfxBufferUsageFlags_Index   = (1u << 1),
-    GfxBufferUsageFlags_Uniform = (1u << 2),
-    GfxBufferUsageFlags_Storage = (1u << 3),
-    GfxBufferUsageFlags_CopyDst = (1u << 4),
+    GfxBufferUsageFlags_Index   = (1u << 0),
+    GfxBufferUsageFlags_Uniform = (1u << 1),
+    GfxBufferUsageFlags_Storage = (1u << 2),
+    GfxBufferUsageFlags_CopyDst = (1u << 3),
+    GfxBufferUsageFlags_Indirect = (1u << 4),
 };
 
 enum GfxTextureUsageFlags {
@@ -113,15 +113,13 @@ enum GfxPipelineKind {
     GfxPipelineKind_Compute,
 };
 
-enum GfxPrimitiveTopology {
-    GfxPrimitiveTopology_TriangleList = 0,
+enum GfxDrawKind {
+    GfxDrawKind_DirectIndexed = 0,
+    GfxDrawKind_IndirectIndexed,
 };
 
-enum GfxVertexFormat {
-    GfxVertexFormat_F32x2 = 0,
-    GfxVertexFormat_F32x3,
-    GfxVertexFormat_F32x4,
-    GfxVertexFormat_U8x4_UNorm,
+enum GfxPrimitiveTopology {
+    GfxPrimitiveTopology_TriangleList = 0,
 };
 
 enum GfxFilter {
@@ -149,6 +147,50 @@ enum GfxCompareOp {
     GfxCompareOp_Always = 0,
     GfxCompareOp_Less,
     GfxCompareOp_LessEqual,
+};
+
+enum GfxBlendFactor {
+    GfxBlendFactor_Zero = 0,
+    GfxBlendFactor_One,
+    GfxBlendFactor_SrcAlpha,
+    GfxBlendFactor_OneMinusSrcAlpha,
+};
+
+enum GfxBlendOp {
+    GfxBlendOp_Add = 0,
+};
+
+enum GfxColorWriteFlags {
+    GfxColorWriteFlags_None = 0,
+    GfxColorWriteFlags_R    = (1u << 0),
+    GfxColorWriteFlags_G    = (1u << 1),
+    GfxColorWriteFlags_B    = (1u << 2),
+    GfxColorWriteFlags_A    = (1u << 3),
+    GfxColorWriteFlags_RGBA = GfxColorWriteFlags_R |
+                              GfxColorWriteFlags_G |
+                              GfxColorWriteFlags_B |
+                              GfxColorWriteFlags_A,
+};
+
+enum GfxResourceUseKind {
+    GfxResourceUseKind_Buffer = 0,
+    GfxResourceUseKind_Texture,
+};
+
+enum GfxResourceAccessFlags {
+    GfxResourceAccessFlags_None         = 0,
+    GfxResourceAccessFlags_ShaderRead   = (1u << 0),
+    GfxResourceAccessFlags_ShaderWrite  = (1u << 1),
+    GfxResourceAccessFlags_IndirectRead = (1u << 2),
+};
+
+enum GfxShaderStageFlags {
+    GfxShaderStageFlags_None     = 0,
+    GfxShaderStageFlags_Vertex   = (1u << 0),
+    GfxShaderStageFlags_Fragment = (1u << 1),
+    GfxShaderStageFlags_Compute  = (1u << 2),
+    GfxShaderStageFlags_Graphics = GfxShaderStageFlags_Vertex |
+                                   GfxShaderStageFlags_Fragment,
 };
 
 enum GfxValidationFlags {
@@ -213,16 +255,6 @@ struct GfxShaderCode {
     const char* entry;
 };
 
-struct GfxVertexAttribute {
-    U32 location;
-    U32 offset;
-    GfxVertexFormat format;
-};
-
-struct GfxVertexBufferLayout {
-    U32 stride;
-};
-
 struct GfxRasterState {
     GfxCullMode cullMode;
     GfxFrontFace frontFace;
@@ -234,18 +266,28 @@ struct GfxDepthState {
     GfxCompareOp compareOp;
 };
 
+struct GfxColorBlendState {
+    B32 blendEnabled;
+    GfxBlendFactor srcColorFactor;
+    GfxBlendFactor dstColorFactor;
+    GfxBlendOp colorOp;
+    GfxBlendFactor srcAlphaFactor;
+    GfxBlendFactor dstAlphaFactor;
+    GfxBlendOp alphaOp;
+    U32 writeFlags;
+};
+
 struct GfxGraphicsPipelineDesc {
     const char* name;
     GfxShaderCode vertexShader;
     GfxShaderCode fragmentShader;
-    const GfxVertexAttribute* attributes;
-    U32 attributeCount;
-    GfxVertexBufferLayout vertexBuffer;
     GfxPrimitiveTopology topology;
     GfxRasterState raster;
     GfxDepthState depth;
     const GfxFormat* colorFormats;
     U32 colorFormatCount;
+    const GfxColorBlendState* blendStates;
+    U32 blendStateCount;
     GfxFormat depthFormat;
 };
 
@@ -274,10 +316,9 @@ struct GfxRect {
 };
 
 struct GfxDraw {
+    GfxDrawKind kind;
     GfxPipeline pipeline;
-    GfxBuffer vertexBuffer;
     GfxBuffer indexBuffer;
-    U64 vertexByteOffset;
     U64 indexByteOffset;
     U32 indexCount;
     U32 instanceCount;
@@ -285,6 +326,15 @@ struct GfxDraw {
     U32 firstInstance;
     GfxIndexType indexType;
     GfxGpuSlice rootData;
+    GfxGpuSlice indirectArgs;
+};
+
+struct GfxDrawIndexedIndirectArgs {
+    U32 indexCount;
+    U32 instanceCount;
+    U32 firstIndex;
+    S32 baseVertex;
+    U32 firstInstance;
 };
 
 struct GfxDrawArea {
@@ -306,6 +356,14 @@ struct GfxComputeWrite {
     GfxGpuSlice slice;
 };
 
+struct GfxResourceUse {
+    GfxResourceUseKind kind;
+    U32 accessFlags;
+    U32 shaderStages;
+    GfxBuffer buffer;
+    GfxTexture texture;
+};
+
 struct GfxColorTarget {
     GfxTexture texture;
     GfxLoadOp loadOp;
@@ -325,12 +383,16 @@ struct GfxRenderPassDesc {
     const GfxColorTarget* colorTargets;
     U32 colorTargetCount;
     const GfxDepthTarget* depthTarget;
+    const GfxResourceUse* resourceUses;
+    U32 resourceUseCount;
 };
 
 struct GfxComputePassDesc {
     const char* name;
     const GfxComputeWrite* writes;
     U32 writeCount;
+    const GfxResourceUse* resourceUses;
+    U32 resourceUseCount;
 };
 
 struct GfxStats {

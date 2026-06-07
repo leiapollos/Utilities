@@ -20,65 +20,162 @@ struct APP_StateDesc {
 };
 
 struct AppGfxDemoObject;
+struct AppGfxGpuObject;
+struct AppGfxGpuCullSource;
+struct AppGfxGpuCullObject;
 struct AppGfxMaterial;
+struct AppGfxVisibilityBin;
+struct AppGfxVisibilityGroup;
+
+struct AppResourceState {
+    Arena* arena;
+    ContentStore* contentStore;
+    FileStream* fileStream;
+    ArtifactCache* artifactCache;
+};
+
+struct AppGfxShaderBuildState {
+    U64 sourceTimestamp;
+    B32 initialized;
+};
+
+struct AppGfxDemoShaderFiles {
+    FileHandle triangleVertex;
+    FileHandle triangleFragment;
+    FileHandle materialCompute;
+    FileHandle cullBoundsCompute;
+    FileHandle visibilityCountCompute;
+    FileHandle visibilityPrefixCompute;
+    FileHandle visibilityCompactCompute;
+    FileHandle textureSource;
+};
+
+struct AppGfxDemoPipelineState {
+    ArtifactKey triangleOpaqueArtifactKey;
+    ArtifactKey triangleTransparentArtifactKey;
+    ArtifactKey materialComputeArtifactKey;
+    ArtifactKey cullBoundsComputeArtifactKey;
+    ArtifactKey visibilityCountComputeArtifactKey;
+    ArtifactKey visibilityPrefixComputeArtifactKey;
+    ArtifactKey visibilityCompactComputeArtifactKey;
+    GfxPipeline triangleOpaque;
+    GfxPipeline triangleTransparent;
+    GfxPipeline materialCompute;
+    GfxPipeline cullBoundsCompute;
+    GfxPipeline visibilityCountCompute;
+    GfxPipeline visibilityPrefixCompute;
+    GfxPipeline visibilityCompactCompute;
+};
+
+struct AppGfxDemoRendererData {
+    F32 animationSeconds;
+    AppGfxDemoObject* objects;
+    U32 objectCount;
+    AppGfxGpuObject* gpuObjects;
+    U32 gpuObjectCount;
+    AppGfxGpuCullSource* gpuCullSources;
+    U32 gpuCullSourceCount;
+    AppGfxMaterial* materialSources;
+    U32 materialSourceCount;
+    U32* visibilitySourceIndices;
+    U32 visibilitySourceIndexCount;
+    AppGfxVisibilityBin* visibilityBins;
+    U32 visibilityBinCount;
+    AppGfxVisibilityGroup* visibilityGroups;
+    U32 visibilityGroupCount;
+    U32 dataVersion;
+    U32 materialCount;
+};
+
+struct AppGfxDemoGpuResources {
+    GfxBuffer triangleVertexBuffer;
+    GfxResourceId triangleVertexBufferId;
+    GfxBuffer triangleIndexBuffer;
+    GfxBuffer objectBuffer;
+    GfxResourceId objectBufferId;
+    GfxBuffer materialSourceBuffer;
+    GfxResourceId materialSourceBufferId;
+    GfxBuffer materialBuffer;
+    GfxResourceId materialBufferId;
+    GfxBuffer visibilitySourceIndexBuffer;
+    GfxResourceId visibilitySourceIndexBufferId;
+    GfxBuffer cullSourceBuffer;
+    GfxResourceId cullSourceBufferId;
+    GfxBuffer cullObjectBuffer;
+    GfxResourceId cullObjectBufferId;
+    GfxBuffer visibilityBinBuffer;
+    GfxResourceId visibilityBinBufferId;
+    GfxBuffer visibilityGroupBuffer;
+    GfxResourceId visibilityGroupBufferId;
+    GfxBuffer visibilityGroupCountBuffer;
+    GfxResourceId visibilityGroupCountBufferId;
+    GfxBuffer visibilityGroupOffsetBuffer;
+    GfxResourceId visibilityGroupOffsetBufferId;
+    GfxBuffer visibleIndexBuffer;
+    GfxResourceId visibleIndexBufferId;
+    GfxBuffer indirectArgsBuffer;
+    GfxResourceId indirectArgsBufferId;
+    GfxTexture texture;
+    GfxTexture offscreenColor;
+    GfxTexture depth;
+    GfxSampler sampler;
+    GfxResourceId textureId;
+    GfxResourceId samplerId;
+    U32 targetWidth;
+    U32 targetHeight;
+};
+
+struct AppGfxDemoUploadState {
+    ArtifactKey textureDecodeArtifactKey;
+    ContentHash decodedTextureHash;
+    U64 textureGeneration;
+    U64 textureFailedGeneration;
+    B32 materialSourceUploaded;
+    B32 materialSourceDirty;
+    B32 textureUploaded;
+    B32 materialsReady;
+    B32 materialDirty;
+    B32 objectUploaded;
+    B32 objectDirty;
+    B32 cullSourceUploaded;
+    B32 cullSourceDirty;
+    B32 visibilitySourceUploaded;
+    B32 visibilitySourceDirty;
+    B32 visibilityBinUploaded;
+    B32 visibilityBinDirty;
+    B32 visibilityGroupUploaded;
+    B32 visibilityGroupDirty;
+};
+
+struct AppGfxDemoRuntimeState {
+    B32 initialized;
+    B32 geometryCreated;
+    B32 geometryUploaded;
+    B32 ready;
+    U32 loadLogMask;
+};
+
+struct AppGfxDemoState {
+    AppGfxDemoShaderFiles shaders;
+    AppGfxDemoPipelineState pipelines;
+    AppGfxDemoRendererData renderer;
+    AppGfxDemoGpuResources gpu;
+    AppGfxDemoUploadState upload;
+    AppGfxDemoRuntimeState runtime;
+};
 
 struct AppCoreState {
     U32 windowWidth;
     U32 windowHeight;
     U64 frameCounter;
     U32 reloadCount;
-    F32 gfxDemoAnimationSeconds;
 
     JobSystem* jobSystem;
     U32 workerCount;
 
-    B32 gfxDemoInitialized;
-    B32 gfxDemoGeometryCreated;
-    B32 gfxDemoGeometryUploaded;
-    B32 gfxDemoReady;
-    U32 gfxDemoLoadLogMask;
-    Arena* resourceArena;
-    ContentStore* contentStore;
-    FileStream* fileStream;
-    ArtifactCache* artifactCache;
-    U64 gfxShaderSourceTimestamp;
-    B32 gfxShaderBuildInitialized;
-    FileHandle gfxTriangleVertexShader;
-    FileHandle gfxTriangleFragmentShader;
-    FileHandle gfxDemoComputeShader;
-    FileHandle gfxDemoTextureSource;
-    ArtifactKey gfxTrianglePipelineArtifactKey;
-    ArtifactKey gfxDemoComputePipelineArtifactKey;
-    ArtifactKey gfxDemoTextureDecodeArtifactKey;
-    GfxBuffer gfxTriangleVertexBuffer;
-    GfxBuffer gfxTriangleIndexBuffer;
-    GfxPipeline gfxTrianglePipeline;
-    GfxPipeline gfxDemoComputePipeline;
-    GfxTexture gfxDemoTexture;
-    GfxTexture gfxDemoOffscreenColor;
-    GfxTexture gfxDemoDepth;
-    GfxSampler gfxDemoSampler;
-    AppGfxDemoObject* gfxDemoObjects;
-    U32 gfxDemoObjectCount;
-    AppGfxMaterial* gfxDemoMaterialSources;
-    U32 gfxDemoMaterialSourceCount;
-    GfxBuffer gfxDemoMaterialSourceBuffer;
-    GfxResourceId gfxDemoMaterialSourceBufferId;
-    GfxBuffer gfxDemoMaterialBuffer;
-    GfxResourceId gfxDemoMaterialBufferId;
-    GfxResourceId gfxDemoTextureId;
-    GfxResourceId gfxDemoSamplerId;
-    U32 gfxDemoTargetWidth;
-    U32 gfxDemoTargetHeight;
-    U32 gfxDemoMaterialCount;
-    B32 gfxDemoMaterialSourceUploaded;
-    B32 gfxDemoMaterialSourceDirty;
-    B32 gfxDemoTextureUploaded;
-    B32 gfxDemoMaterialsReady;
-    B32 gfxDemoMaterialDirty;
-    ContentHash gfxDemoDecodedTextureHash;
-    U64 gfxDemoTextureGeneration;
-    U64 gfxDemoTextureFailedGeneration;
+    AppResourceState resources;
+    AppGfxShaderBuildState gfxShaderBuild;
+    AppGfxDemoState gfxDemo;
 };
 
 struct APP_Context {
