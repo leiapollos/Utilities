@@ -1,10 +1,8 @@
 #pragma once
 
 #define GFX_MAX_COLOR_TARGETS 4u
-#define GFX_SHADER_SLOT_DRAW_DATA 8u
-#define GFX_SHADER_SLOT_DISPATCH_DATA GFX_SHADER_SLOT_DRAW_DATA
+#define GFX_SHADER_SLOT_ROOT_DATA 8u
 #define GFX_SHADER_SLOT_RESOURCE_TABLE 9u
-#define GFX_SHADER_SLOT_PASS_DATA 10u
 #define GFX_TEXTURE_UPLOAD_BYTES_PER_ROW_ALIGNMENT 256u
 
 struct GfxDevice;
@@ -39,7 +37,6 @@ struct GfxGpuSlice {
     GfxBuffer buffer;
     U64 offset;
     U64 size;
-    U64 address;
 };
 
 struct GfxTemp {
@@ -81,8 +78,12 @@ enum GfxTextureUsageFlags {
     GfxTextureUsageFlags_DepthTarget = (1u << 1),
     GfxTextureUsageFlags_Sampled     = (1u << 2),
     GfxTextureUsageFlags_Storage     = (1u << 3),
-    GfxTextureUsageFlags_Transient   = (1u << 4),
-    GfxTextureUsageFlags_CopyDst     = (1u << 5),
+    GfxTextureUsageFlags_CopyDst     = (1u << 4),
+};
+
+enum GfxTextureStorageKind {
+    GfxTextureStorageKind_Device = 0,
+    GfxTextureStorageKind_Transient,
 };
 
 enum GfxLoadOp {
@@ -180,6 +181,7 @@ struct GfxTextureDesc {
     U32 mipCount;
     GfxFormat format;
     U32 usageFlags;
+    GfxTextureStorageKind storageKind;
 };
 
 struct GfxTextureUploadRegion {
@@ -282,7 +284,7 @@ struct GfxDraw {
     S32 baseVertex;
     U32 firstInstance;
     GfxIndexType indexType;
-    GfxGpuSlice drawData;
+    GfxGpuSlice rootData;
 };
 
 struct GfxDrawArea {
@@ -294,49 +296,15 @@ struct GfxDrawArea {
 
 struct GfxDispatch {
     GfxPipeline pipeline;
-    GfxGpuSlice dispatchData;
+    GfxGpuSlice rootData;
     U32 groupsX;
     U32 groupsY;
     U32 groupsZ;
 };
 
-enum GfxStageFlags {
-    GfxStageFlags_None     = 0,
-    GfxStageFlags_Vertex   = (1u << 0),
-    GfxStageFlags_Fragment = (1u << 1),
-    GfxStageFlags_Compute  = (1u << 2),
-};
-
-enum GfxAccessFlags {
-    GfxAccessFlags_None  = 0,
-    GfxAccessFlags_Read  = (1u << 0),
-    GfxAccessFlags_Write = (1u << 1),
-};
-
-struct GfxBufferBinding {
-    U32 slot;
+struct GfxComputeWrite {
     GfxGpuSlice slice;
-    U32 stages;
-    U32 access;
 };
-
-FORCE_INLINE GfxBufferBinding gfx_buffer_read(U32 slot, GfxGpuSlice slice, U32 stages) {
-    GfxBufferBinding result = {};
-    result.slot = slot;
-    result.slice = slice;
-    result.stages = stages;
-    result.access = GfxAccessFlags_Read;
-    return result;
-}
-
-FORCE_INLINE GfxBufferBinding gfx_buffer_write(U32 slot, GfxGpuSlice slice, U32 stages) {
-    GfxBufferBinding result = {};
-    result.slot = slot;
-    result.slice = slice;
-    result.stages = stages;
-    result.access = GfxAccessFlags_Write;
-    return result;
-}
 
 struct GfxColorTarget {
     GfxTexture texture;
@@ -357,16 +325,12 @@ struct GfxRenderPassDesc {
     const GfxColorTarget* colorTargets;
     U32 colorTargetCount;
     const GfxDepthTarget* depthTarget;
-    const GfxBufferBinding* bufferBindings;
-    U32 bufferBindingCount;
-    U32 width;
-    U32 height;
 };
 
 struct GfxComputePassDesc {
     const char* name;
-    const GfxBufferBinding* bufferBindings;
-    U32 bufferBindingCount;
+    const GfxComputeWrite* writes;
+    U32 writeCount;
 };
 
 struct GfxStats {
@@ -394,6 +358,7 @@ UTILITIES_SHARED_API void gfx_destroy_texture(GfxDevice* device, GfxTexture text
 UTILITIES_SHARED_API void gfx_destroy_sampler(GfxDevice* device, GfxSampler sampler);
 UTILITIES_SHARED_API void gfx_destroy_pipeline(GfxDevice* device, GfxPipeline pipeline);
 
+UTILITIES_SHARED_API GfxResourceId gfx_register_buffer(GfxDevice* device, GfxBuffer buffer);
 UTILITIES_SHARED_API GfxResourceId gfx_register_texture(GfxDevice* device, GfxTexture texture);
 UTILITIES_SHARED_API GfxResourceId gfx_register_sampler(GfxDevice* device, GfxSampler sampler);
 

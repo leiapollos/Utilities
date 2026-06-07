@@ -19,6 +19,9 @@ struct APP_StateDesc {
     U64 alignment;
 };
 
+struct AppGfxDemoObject;
+struct AppGfxMaterial;
+
 struct AppCoreState {
     U32 windowWidth;
     U32 windowHeight;
@@ -55,12 +58,21 @@ struct AppCoreState {
     GfxTexture gfxDemoOffscreenColor;
     GfxTexture gfxDemoDepth;
     GfxSampler gfxDemoSampler;
+    AppGfxDemoObject* gfxDemoObjects;
+    U32 gfxDemoObjectCount;
+    AppGfxMaterial* gfxDemoMaterialSources;
+    U32 gfxDemoMaterialSourceCount;
+    GfxBuffer gfxDemoMaterialSourceBuffer;
+    GfxResourceId gfxDemoMaterialSourceBufferId;
     GfxBuffer gfxDemoMaterialBuffer;
+    GfxResourceId gfxDemoMaterialBufferId;
     GfxResourceId gfxDemoTextureId;
     GfxResourceId gfxDemoSamplerId;
     U32 gfxDemoTargetWidth;
     U32 gfxDemoTargetHeight;
     U32 gfxDemoMaterialCount;
+    B32 gfxDemoMaterialSourceUploaded;
+    B32 gfxDemoMaterialSourceDirty;
     B32 gfxDemoTextureUploaded;
     B32 gfxDemoMaterialsReady;
     B32 gfxDemoMaterialDirty;

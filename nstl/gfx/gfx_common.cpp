@@ -33,6 +33,12 @@ struct GfxTextureUploadValidation {
     B32 sizeValid;
 };
 
+struct GfxTextureDescValidation {
+    B32 storageKindValid;
+    B32 transientAttachmentOnly;
+    B32 transientSingleMip;
+};
+
 FORCE_INLINE B32 gfx_buffer_handle_equal(GfxBuffer a, GfxBuffer b) {
     return (a.index == b.index && a.generation == b.generation) ? 1 : 0;
 }
@@ -61,6 +67,34 @@ static U32 gfx_format_bytes_per_pixel(GfxFormat format) {
             return 0u;
         }
     }
+}
+
+static B32 gfx_texture_is_transient_storage_kind(GfxTextureStorageKind storageKind) {
+    return (storageKind == GfxTextureStorageKind_Transient) ? 1 : 0;
+}
+
+static GfxTextureDescValidation gfx_validate_texture_desc_storage(const GfxTextureDesc* desc) {
+    GfxTextureDescValidation result = {};
+    if (!desc) {
+        return result;
+    }
+
+    result.storageKindValid = (desc->storageKind == GfxTextureStorageKind_Device ||
+                               desc->storageKind == GfxTextureStorageKind_Transient) ? 1 : 0;
+    result.transientAttachmentOnly = 1;
+    result.transientSingleMip = 1;
+
+    if (desc->storageKind == GfxTextureStorageKind_Transient) {
+        U32 attachmentFlags = GfxTextureUsageFlags_ColorTarget | GfxTextureUsageFlags_DepthTarget;
+        U32 forbiddenFlags = GfxTextureUsageFlags_Sampled |
+                             GfxTextureUsageFlags_Storage |
+                             GfxTextureUsageFlags_CopyDst;
+        result.transientAttachmentOnly = ((desc->usageFlags & attachmentFlags) != 0u &&
+                                          (desc->usageFlags & forbiddenFlags) == 0u) ? 1 : 0;
+        result.transientSingleMip = (desc->mipCount == 0u || desc->mipCount == 1u) ? 1 : 0;
+    }
+
+    return result;
 }
 
 static B32 gfx_validate_texture_upload_region(GfxFormat format,
