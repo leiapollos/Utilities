@@ -52,6 +52,7 @@ enum GfxBackend {
 
 enum GfxFormat {
     GfxFormat_Invalid = 0,
+    GfxFormat_R8_UNorm,
     GfxFormat_BGRA8_UNorm,
     GfxFormat_RGBA8_UNorm,
     GfxFormat_RGBA16_Float,

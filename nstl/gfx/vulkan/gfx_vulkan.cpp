@@ -418,6 +418,7 @@ static U32 gfx_vulkan_find_memory_type(GfxDevice* device, U32 typeBits, VkMemory
 
 static VkFormat gfx_vulkan_format(GfxFormat format) {
     switch (format) {
+        case GfxFormat_R8_UNorm: return VK_FORMAT_R8_UNORM;
         case GfxFormat_BGRA8_UNorm: return VK_FORMAT_B8G8R8A8_UNORM;
         case GfxFormat_RGBA8_UNorm: return VK_FORMAT_R8G8B8A8_UNORM;
         case GfxFormat_RGBA16_Float: return VK_FORMAT_R16G16B16A16_SFLOAT;

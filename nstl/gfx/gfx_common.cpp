@@ -53,6 +53,9 @@ FORCE_INLINE B32 gfx_pipeline_handle_equal(GfxPipeline a, GfxPipeline b) {
 
 static U32 gfx_format_bytes_per_pixel(GfxFormat format) {
     switch (format) {
+        case GfxFormat_R8_UNorm: {
+            return 1u;
+        }
         case GfxFormat_BGRA8_UNorm:
         case GfxFormat_RGBA8_UNorm: {
             return 4u;

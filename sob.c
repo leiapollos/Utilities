@@ -753,6 +753,7 @@ static void apply_third_party_warning_flags(Sob_Target* target) {
 #else
     const char* flags[] = {
         "-Wno-deprecated-declarations",
+        "-Wno-deprecated-volatile",
     };
 #endif
 
@@ -1159,10 +1160,14 @@ static int configure_runtime_executable(Sob_Arena* arena, Sob_Target* target, Bu
 #else
     sob_target_add_source(target, "main.mm");
 #endif
+    sob_target_add_source(target, "third_party/freetype_v0/freetype_v0.cpp");
     configure_common_includes(target);
+    sob_target_add_include(target, "third_party/freetype_local/include");
+    sob_target_add_include(target, "third_party/freetype/include");
     sob_target_set_standard(target, Sob_Standard_Cpp20);
     apply_cpp_runtime_flags(target);
     apply_common_warning_flags(target);
+    apply_third_party_warning_flags(target);
     apply_mode_target_flags(target, mode);
 
 #if SOB_MACOS

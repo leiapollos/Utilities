@@ -155,6 +155,27 @@ struct AppGfxDemoRuntimeState {
     U32 loadLogMask;
 };
 
+struct AppGfxDemoTextState {
+    TextContext* context;
+    TextFont font;
+    FileHandle fontFile;
+    FileHandle vertexShader;
+    FileHandle fragmentShader;
+    ContentHash vertexShaderHash;
+    ContentHash fragmentShaderHash;
+    GfxPipeline pipeline;
+    GfxTexture atlasTexture;
+    GfxResourceId atlasTextureId;
+    GfxSampler atlasSampler;
+    GfxResourceId atlasSamplerId;
+    GfxBuffer indexBuffer;
+    GfxBuffer quadBuffers[2];
+    GfxResourceId quadBufferIds[2];
+    U64 loadedFontGeneration;
+    U64 failedFontGeneration;
+    B32 gpuResourcesCreated;
+};
+
 struct AppGfxDemoState {
     AppGfxDemoShaderFiles shaders;
     AppGfxDemoPipelineState pipelines;
@@ -162,6 +183,7 @@ struct AppGfxDemoState {
     AppGfxDemoGpuResources gpu;
     AppGfxDemoUploadState upload;
     AppGfxDemoRuntimeState runtime;
+    AppGfxDemoTextState text;
 };
 
 struct AppCoreState {

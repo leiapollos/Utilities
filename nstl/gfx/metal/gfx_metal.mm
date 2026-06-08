@@ -211,6 +211,9 @@ static NSString* gfx_nsstring_from_bytes(const void* data, U64 size) {
 
 static MTLPixelFormat gfx_metal_pixel_format(GfxFormat format) {
     switch (format) {
+        case GfxFormat_R8_UNorm: {
+            return MTLPixelFormatR8Unorm;
+        }
         case GfxFormat_BGRA8_UNorm: {
             return MTLPixelFormatBGRA8Unorm;
         }

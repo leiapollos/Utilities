@@ -5,11 +5,13 @@
 #include "nstl/base/base_include.hpp"
 #include "nstl/os/os_include.hpp"
 #include "nstl/gfx/gfx_include.hpp"
+#include "nstl/text/text_include.hpp"
 #include "app_interface.hpp"
 
 #include "nstl/base/base_include.cpp"
 #include "nstl/os/os_include.cpp"
 #include "nstl/gfx/gfx_include.cpp"
+#include "nstl/text/text_include.cpp"
 
 
 #define HOT_MODULE_HISTORY_MAX 32
@@ -48,12 +50,16 @@ static const char* HOST_HOT_MODULE_INPUTS[] = {
     "nstl/artifact/artifact.cpp",
     "nstl/artifact/artifact_include.hpp",
     "nstl/artifact/artifact_include.cpp",
+    "nstl/text/text.hpp",
+    "nstl/text/text_include.hpp",
     "app/shaders/shader_manifest.h",
+    "app/fonts/NotoSans-Regular.ttf",
 };
 
 static const char* HOST_SHADER_INPUTS[] = {
     "app/shaders/shader_manifest.h",
     "app/shaders/demo.slang",
+    "app/shaders/text.slang",
     "app/shaders/gfx_shader_abi.slang",
     "app/shaders/demo_shader_support.slang",
 };
@@ -69,6 +75,14 @@ static const char* HOST_RESTART_REQUIRED_INPUTS[] = {
     "nstl/gfx/metal/gfx_metal.mm",
     "nstl/gfx/vulkan/gfx_vulkan_include.hpp",
     "nstl/gfx/vulkan/gfx_vulkan.cpp",
+    "nstl/text/text.hpp",
+    "nstl/text/text.cpp",
+    "nstl/text/text_include.hpp",
+    "nstl/text/text_include.cpp",
+    "third_party/kb/kb_text_shape.h",
+    "third_party/freetype_v0/freetype_v0.cpp",
+    "third_party/freetype_local/include/freetype/config/ftmodule.h",
+    "third_party/freetype/include/freetype/config/ftoption.h",
 };
 
 typedef B32 (*AppLoadProc)(AppLoadParams* params, AppCode* outCode);

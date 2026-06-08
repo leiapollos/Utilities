@@ -27,6 +27,12 @@
 #define APP_GFX_DEMO_CULL_VERTEX_MAX_Y 0.55f
 #define APP_GFX_DEMO_CULL_MAX_ANIMATION_SCALE 1.055f
 #define APP_GFX_DEMO_CULL_WOBBLE_EXTENT 0.014f
+#define APP_GFX_DEMO_FONT_PATH "app/fonts/NotoSans-Regular.ttf"
+#define APP_GFX_DEMO_TEXT_ATLAS_WIDTH 1024u
+#define APP_GFX_DEMO_TEXT_ATLAS_HEIGHT 1024u
+#define APP_GFX_DEMO_TEXT_MAX_GLYPHS 4096u
+#define APP_GFX_DEMO_TEXT_MAX_QUADS 4096u
+#define APP_GFX_DEMO_TEXT_FRAME_BUFFER_COUNT 2u
 #define APP_IMAGE_RGBA8_BYTES_PER_PIXEL 4u
 
 // Demo shader ABI
@@ -106,6 +112,14 @@ struct AppGfxDemoRenderPacket {
     U32 areaCount;
 };
 
+struct AppGfxTextRenderPacket {
+    GfxRenderPassDesc pass;
+    GfxColorTarget colorTarget;
+    GfxResourceUse resourceUses[2];
+    GfxDrawArea area;
+    GfxDraw draw;
+};
+
 typedef enum AppTrianglePipelineKind {
     AppTrianglePipelineKind_Opaque = 0u,
     AppTrianglePipelineKind_Transparent,
@@ -139,6 +153,25 @@ struct AppGfxDrawRootData {
     U32 _padding4;
     U32 _padding5;
     U32 _padding6;
+};
+
+struct AppTextDrawRootData {
+    U32 quadBuffer;
+    U32 quadByteOffset;
+    U32 atlasTexture;
+    U32 atlasSampler;
+    F32 targetWidth;
+    F32 targetHeight;
+    U32 _padding0;
+    U32 _padding1;
+    U32 _padding2;
+    U32 _padding3;
+    U32 _padding4;
+    U32 _padding5;
+    U32 _padding6;
+    U32 _padding7;
+    U32 _padding8;
+    U32 _padding9;
 };
 
 struct AppGfxMaterial {
@@ -221,6 +254,8 @@ struct AppGfxVisibilityComputeRootData {
 };
 
 static_assert(sizeof(AppGfxDrawRootData) == 64u, "DrawRootData shader ABI mismatch");
+static_assert(sizeof(AppTextDrawRootData) == 64u, "TextDrawRootData shader ABI mismatch");
+static_assert(sizeof(TextQuad) == 36u, "TextQuad shader ABI mismatch");
 static_assert(sizeof(AppGfxVertex) == 24u, "Demo vertex shader ABI mismatch");
 static_assert(sizeof(AppGfxGpuObject) == 32u, "Demo object shader ABI mismatch");
 static_assert(sizeof(AppGfxGpuCullSource) == 48u, "Demo cull source shader ABI mismatch");
@@ -250,6 +285,31 @@ APP_SHADER_ABI_OFFSET(AppGfxDrawRootData, _padding3, 48u);
 APP_SHADER_ABI_OFFSET(AppGfxDrawRootData, _padding4, 52u);
 APP_SHADER_ABI_OFFSET(AppGfxDrawRootData, _padding5, 56u);
 APP_SHADER_ABI_OFFSET(AppGfxDrawRootData, _padding6, 60u);
+APP_SHADER_ABI_OFFSET(AppTextDrawRootData, quadBuffer, 0u);
+APP_SHADER_ABI_OFFSET(AppTextDrawRootData, quadByteOffset, 4u);
+APP_SHADER_ABI_OFFSET(AppTextDrawRootData, atlasTexture, 8u);
+APP_SHADER_ABI_OFFSET(AppTextDrawRootData, atlasSampler, 12u);
+APP_SHADER_ABI_OFFSET(AppTextDrawRootData, targetWidth, 16u);
+APP_SHADER_ABI_OFFSET(AppTextDrawRootData, targetHeight, 20u);
+APP_SHADER_ABI_OFFSET(AppTextDrawRootData, _padding0, 24u);
+APP_SHADER_ABI_OFFSET(AppTextDrawRootData, _padding1, 28u);
+APP_SHADER_ABI_OFFSET(AppTextDrawRootData, _padding2, 32u);
+APP_SHADER_ABI_OFFSET(AppTextDrawRootData, _padding3, 36u);
+APP_SHADER_ABI_OFFSET(AppTextDrawRootData, _padding4, 40u);
+APP_SHADER_ABI_OFFSET(AppTextDrawRootData, _padding5, 44u);
+APP_SHADER_ABI_OFFSET(AppTextDrawRootData, _padding6, 48u);
+APP_SHADER_ABI_OFFSET(AppTextDrawRootData, _padding7, 52u);
+APP_SHADER_ABI_OFFSET(AppTextDrawRootData, _padding8, 56u);
+APP_SHADER_ABI_OFFSET(AppTextDrawRootData, _padding9, 60u);
+APP_SHADER_ABI_OFFSET(TextQuad, minX, 0u);
+APP_SHADER_ABI_OFFSET(TextQuad, minY, 4u);
+APP_SHADER_ABI_OFFSET(TextQuad, maxX, 8u);
+APP_SHADER_ABI_OFFSET(TextQuad, maxY, 12u);
+APP_SHADER_ABI_OFFSET(TextQuad, minU, 16u);
+APP_SHADER_ABI_OFFSET(TextQuad, minV, 20u);
+APP_SHADER_ABI_OFFSET(TextQuad, maxU, 24u);
+APP_SHADER_ABI_OFFSET(TextQuad, maxV, 28u);
+APP_SHADER_ABI_OFFSET(TextQuad, rgba8, 32u);
 APP_SHADER_ABI_OFFSET(AppGfxVertex, position, 0u);
 APP_SHADER_ABI_OFFSET(AppGfxVertex, color, 8u);
 APP_SHADER_ABI_OFFSET(AppGfxGpuObject, offsetScale, 0u);
@@ -382,6 +442,7 @@ enum AppGfxDemoLoadLog {
     AppGfxDemoLoadLog_TextureUploaded = (1u << 5u),
     AppGfxDemoLoadLog_Ready = (1u << 6u),
     AppGfxDemoLoadLog_Targets = (1u << 7u),
+    AppGfxDemoLoadLog_TextReady = (1u << 8u),
 };
 
 enum AppArtifactTypeId {
@@ -416,7 +477,10 @@ static GfxPipeline* app_triangle_pipeline_slot(AppCoreState* state, AppTriangleP
 static ArtifactKey* app_triangle_pipeline_artifact_key_slot(AppCoreState* state, AppTrianglePipelineKind kind);
 static B32 app_gfx_demo_create_triangle_pipeline(APP_Context* ctx, ContentHash vertexHash, ContentHash fragmentHash, AppTrianglePipelineKind kind, GfxPipeline* outPipeline);
 static B32 app_gfx_demo_create_compute_pipeline(APP_Context* ctx, ContentHash shaderHash, const char* name, const char* entry, U32 threadsPerThreadgroupX, GfxPipeline* outPipeline);
+static B32 app_gfx_demo_create_text_pipeline(APP_Context* ctx, ContentHash vertexHash, ContentHash fragmentHash, GfxPipeline* outPipeline);
 static B32 app_gfx_demo_init(APP_Context* ctx);
+static B32 app_gfx_demo_ensure_text_context(APP_Context* ctx);
+static void app_gfx_demo_try_load_text_font(APP_Context* ctx);
 static B32 app_gfx_seed_demo_renderer_data(APP_Context* ctx);
 static B32 app_gfx_demo_renderer_data_current(const AppCoreState* state);
 static B32 app_gfx_demo_allocate_seed_base_arrays(AppCoreState* state, AppGfxDemoRendererSeedData* seed);
@@ -439,8 +503,10 @@ static void app_gfx_upload_demo_visibility_sources(APP_Context* ctx, GfxFrame* f
 static void app_gfx_try_update_triangle_pipelines(APP_Context* ctx);
 static void app_gfx_try_update_demo_compute_pipeline(APP_Context* ctx);
 static void app_gfx_try_update_demo_gpu_data_pipelines(APP_Context* ctx);
+static void app_gfx_try_update_text_pipeline(APP_Context* ctx);
 static void app_gfx_upload_demo_texture(APP_Context* ctx, GfxFrame* frame);
 static void app_gfx_upload_demo_material_sources(APP_Context* ctx, GfxFrame* frame);
+static void app_gfx_try_create_text_gpu_resources(APP_Context* ctx);
 static GfxResourceUse app_gfx_buffer_resource_use(GfxBuffer buffer, U32 accessFlags, U32 shaderStages);
 static GfxResourceUse app_gfx_texture_resource_use(GfxTexture texture, U32 accessFlags, U32 shaderStages);
 static B32 app_gfx_build_demo_material_compute_packet(APP_Context* ctx, GfxFrame* frame, AppGfxDemoComputePacket* outPacket);
@@ -478,7 +544,14 @@ static B32 app_gfx_build_demo_render_packet(APP_Context* ctx,
                                             B32 useDepth,
                                             B32 offscreen,
                                             AppGfxDemoRenderPacket* outPacket);
+static B32 app_gfx_build_text_render_packet(APP_Context* ctx,
+                                            GfxFrame* frame,
+                                            GfxTexture colorTexture,
+                                            TextDrawData drawData,
+                                            AppGfxTextRenderPacket* outPacket);
+static void app_gfx_draw_demo_text(APP_Context* ctx, GfxCommandBuffer* commands, GfxFrame* frame, GfxTexture colorTexture);
 static void app_gfx_demo_destroy_pipeline_state(GfxDevice* device, AppGfxDemoPipelineState* pipelines);
+static void app_gfx_demo_destroy_text_state(APP_Context* ctx);
 static void app_gfx_demo_destroy_gpu_resources(APP_Context* ctx);
 static void app_gfx_demo_clear_renderer_data(AppGfxDemoRendererData* renderer);
 static void app_gfx_demo_clear_upload_state(AppGfxDemoUploadState* upload);
@@ -500,6 +573,13 @@ static void app_gfx_demo_resource_cache_reset(APP_Context* ctx) {
     state->gfxDemo.shaders.visibilityPrefixCompute = FILE_HANDLE_ZERO;
     state->gfxDemo.shaders.visibilityCompactCompute = FILE_HANDLE_ZERO;
     state->gfxDemo.shaders.textureSource = FILE_HANDLE_ZERO;
+    state->gfxDemo.text.vertexShader = FILE_HANDLE_ZERO;
+    state->gfxDemo.text.fragmentShader = FILE_HANDLE_ZERO;
+    state->gfxDemo.text.fontFile = FILE_HANDLE_ZERO;
+    state->gfxDemo.text.vertexShaderHash = CONTENT_HASH_ZERO;
+    state->gfxDemo.text.fragmentShaderHash = CONTENT_HASH_ZERO;
+    state->gfxDemo.text.loadedFontGeneration = 0u;
+    state->gfxDemo.text.failedFontGeneration = 0u;
     state->gfxDemo.pipelines.triangleOpaqueArtifactKey = ARTIFACT_KEY_ZERO;
     state->gfxDemo.pipelines.triangleTransparentArtifactKey = ARTIFACT_KEY_ZERO;
     state->gfxDemo.pipelines.materialComputeArtifactKey = ARTIFACT_KEY_ZERO;
@@ -574,7 +654,10 @@ static void app_gfx_demo_watch_files(APP_Context* ctx) {
     StringU8 visibilityCountComputePath = str8_concat(scratch.arena, exeDir, str8("/../" APP_SHADER_DEMO_VISIBILITY_COUNT_COMPUTE_RUNTIME_PATH));
     StringU8 visibilityPrefixComputePath = str8_concat(scratch.arena, exeDir, str8("/../" APP_SHADER_DEMO_VISIBILITY_PREFIX_COMPUTE_RUNTIME_PATH));
     StringU8 visibilityCompactComputePath = str8_concat(scratch.arena, exeDir, str8("/../" APP_SHADER_DEMO_VISIBILITY_COMPACT_COMPUTE_RUNTIME_PATH));
+    StringU8 textVertexPath = str8_concat(scratch.arena, exeDir, str8("/../" APP_SHADER_TEXT_VERTEX_RUNTIME_PATH));
+    StringU8 textFragmentPath = str8_concat(scratch.arena, exeDir, str8("/../" APP_SHADER_TEXT_FRAGMENT_RUNTIME_PATH));
     StringU8 texturePath = str8_concat(scratch.arena, exeDir, str8("/../" APP_GFX_DEMO_TEXTURE_PATH));
+    StringU8 fontPath = str8_concat(scratch.arena, exeDir, str8("/../" APP_GFX_DEMO_FONT_PATH));
 
     state->gfxDemo.shaders.triangleVertex = file_watch(state->resources.fileStream, vertexShaderPath, 0u);
     state->gfxDemo.shaders.triangleFragment = file_watch(state->resources.fileStream, fragmentShaderPath, 0u);
@@ -584,6 +667,9 @@ static void app_gfx_demo_watch_files(APP_Context* ctx) {
     state->gfxDemo.shaders.visibilityPrefixCompute = file_watch(state->resources.fileStream, visibilityPrefixComputePath, 0u);
     state->gfxDemo.shaders.visibilityCompactCompute = file_watch(state->resources.fileStream, visibilityCompactComputePath, 0u);
     state->gfxDemo.shaders.textureSource = file_watch(state->resources.fileStream, texturePath, 0u);
+    state->gfxDemo.text.vertexShader = file_watch(state->resources.fileStream, textVertexPath, 0u);
+    state->gfxDemo.text.fragmentShader = file_watch(state->resources.fileStream, textFragmentPath, 0u);
+    state->gfxDemo.text.fontFile = file_watch(state->resources.fileStream, fontPath, 0u);
 }
 
 // Demo texture decode
@@ -943,6 +1029,78 @@ static B32 app_gfx_demo_create_triangle_pipeline(APP_Context* ctx,
     return 1;
 }
 
+static B32 app_gfx_demo_create_text_pipeline(APP_Context* ctx,
+                                             ContentHash vertexHash,
+                                             ContentHash fragmentHash,
+                                             GfxPipeline* outPipeline) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->host != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+    ASSERT_ALWAYS(outPipeline != 0);
+
+    *outPipeline = {};
+    if (ctx->host->gfxDevice == 0 || ctx->core->resources.contentStore == 0) {
+        return 0;
+    }
+
+    ContentView vertexView = content_view_hash(ctx->core->resources.contentStore, vertexHash);
+    ContentView fragmentView = content_view_hash(ctx->core->resources.contentStore, fragmentHash);
+    if (!vertexView.valid || vertexView.size == 0u ||
+        !fragmentView.valid || fragmentView.size == 0u) {
+        return 0;
+    }
+
+    GfxFormat colorFormats[1] = {
+        GfxFormat_BGRA8_UNorm,
+    };
+    GfxColorBlendState blendStates[1] = {};
+    blendStates[0].blendEnabled = 1;
+    blendStates[0].srcColorFactor = GfxBlendFactor_SrcAlpha;
+    blendStates[0].dstColorFactor = GfxBlendFactor_OneMinusSrcAlpha;
+    blendStates[0].colorOp = GfxBlendOp_Add;
+    blendStates[0].srcAlphaFactor = GfxBlendFactor_One;
+    blendStates[0].dstAlphaFactor = GfxBlendFactor_OneMinusSrcAlpha;
+    blendStates[0].alphaOp = GfxBlendOp_Add;
+    blendStates[0].writeFlags = GfxColorWriteFlags_RGBA;
+
+    GfxGraphicsPipelineDesc pipelineDesc = {};
+    pipelineDesc.name = "text pipeline";
+#if defined(PLATFORM_OS_WINDOWS)
+    pipelineDesc.vertexShader.format = GfxShaderFormat_SPIRV;
+    pipelineDesc.vertexShader.entry = APP_SHADER_TEXT_VERTEX_ENTRY;
+    pipelineDesc.fragmentShader.format = GfxShaderFormat_SPIRV;
+    pipelineDesc.fragmentShader.entry = APP_SHADER_TEXT_FRAGMENT_ENTRY;
+#else
+    pipelineDesc.vertexShader.format = GfxShaderFormat_MSL_Source;
+    pipelineDesc.vertexShader.entry = APP_SHADER_TEXT_VERTEX_ENTRY;
+    pipelineDesc.fragmentShader.format = GfxShaderFormat_MSL_Source;
+    pipelineDesc.fragmentShader.entry = APP_SHADER_TEXT_FRAGMENT_ENTRY;
+#endif
+    pipelineDesc.vertexShader.data = vertexView.data;
+    pipelineDesc.vertexShader.size = vertexView.size;
+    pipelineDesc.fragmentShader.data = fragmentView.data;
+    pipelineDesc.fragmentShader.size = fragmentView.size;
+    pipelineDesc.topology = GfxPrimitiveTopology_TriangleList;
+    pipelineDesc.raster.cullMode = GfxCullMode_None;
+    pipelineDesc.raster.frontFace = GfxFrontFace_CCW;
+    pipelineDesc.depth.depthTestEnabled = 0;
+    pipelineDesc.depth.depthWriteEnabled = 0;
+    pipelineDesc.depth.compareOp = GfxCompareOp_Always;
+    pipelineDesc.colorFormats = colorFormats;
+    pipelineDesc.colorFormatCount = ARRAY_COUNT(colorFormats);
+    pipelineDesc.blendStates = blendStates;
+    pipelineDesc.blendStateCount = ARRAY_COUNT(blendStates);
+    pipelineDesc.depthFormat = GfxFormat_Invalid;
+
+    GfxPipeline pipeline = gfx_create_graphics_pipeline(ctx->host->gfxDevice, &pipelineDesc);
+    if (pipeline.generation == 0u) {
+        return 0;
+    }
+
+    *outPipeline = pipeline;
+    return 1;
+}
+
 static B32 app_build_compute_pipeline_artifact(ArtifactBuildContext* artifactCtx, ArtifactValue* outValue, U64* outBytes) {
     if (!artifactCtx || !artifactCtx->content || !outValue ||
         artifactCtx->requestDataSize != sizeof(AppComputePipelineArtifactData)) {
@@ -1138,6 +1296,9 @@ static B32 app_gfx_demo_init(APP_Context* ctx) {
     if (!app_resource_cache_init(ctx)) {
         return 0;
     }
+    if (!app_gfx_demo_ensure_text_context(ctx)) {
+        return 0;
+    }
     if (!app_gfx_seed_demo_renderer_data(ctx)) {
         return 0;
     }
@@ -1146,6 +1307,66 @@ static B32 app_gfx_demo_init(APP_Context* ctx) {
     state->gfxDemo.runtime.initialized = 1;
     app_gfx_demo_log_once(state, AppGfxDemoLoadLog_Started, "Demo resources requested");
     return 1;
+}
+
+static B32 app_gfx_demo_ensure_text_context(APP_Context* ctx) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    AppCoreState* state = ctx->core;
+    if (state->gfxDemo.text.context != 0) {
+        return 1;
+    }
+    if (state->resources.arena == 0) {
+        return 0;
+    }
+
+    TextContextDesc desc = {};
+    desc.arena = state->resources.arena;
+    desc.atlasWidth = APP_GFX_DEMO_TEXT_ATLAS_WIDTH;
+    desc.atlasHeight = APP_GFX_DEMO_TEXT_ATLAS_HEIGHT;
+    desc.maxFonts = 1u;
+    desc.maxGlyphs = APP_GFX_DEMO_TEXT_MAX_GLYPHS;
+    if (!text_context_create(&desc, &state->gfxDemo.text.context)) {
+        LOG_ERROR("text", "Failed to create text context");
+        return 0;
+    }
+    return 1;
+}
+
+static void app_gfx_demo_try_load_text_font(APP_Context* ctx) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    AppCoreState* state = ctx->core;
+    if (state->gfxDemo.text.font.generation != 0u ||
+        state->gfxDemo.text.context == 0 ||
+        state->resources.fileStream == 0) {
+        return;
+    }
+
+    FileView fontView = file_view(state->resources.fileStream, state->gfxDemo.text.fontFile);
+    if (fontView.status != FileStatus_Ready || fontView.size == 0u || fontView.data == 0) {
+        return;
+    }
+    if (state->gfxDemo.text.failedFontGeneration == fontView.generation) {
+        return;
+    }
+
+    TextFontDesc fontDesc = {};
+    fontDesc.debugName = str8("NotoSans-Regular");
+    fontDesc.data = fontView.data;
+    fontDesc.size = fontView.size;
+    fontDesc.faceIndex = 0u;
+    TextFont font = text_font_load_memory(state->gfxDemo.text.context, &fontDesc);
+    if (font.generation == 0u) {
+        state->gfxDemo.text.failedFontGeneration = fontView.generation;
+        LOG_ERROR("text", "Failed to load bundled font");
+        return;
+    }
+
+    state->gfxDemo.text.font = font;
+    state->gfxDemo.text.loadedFontGeneration = fontView.generation;
 }
 
 static AppGfxGpuObject app_gfx_demo_gpu_object_from_object(const AppGfxDemoObject* object) {
@@ -2197,6 +2418,47 @@ static void app_gfx_try_update_demo_gpu_data_pipelines(APP_Context* ctx) {
     }
 }
 
+static void app_gfx_try_update_text_pipeline(APP_Context* ctx) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->host != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    AppCoreState* state = ctx->core;
+    if (state->resources.fileStream == 0 ||
+        state->resources.contentStore == 0 ||
+        ctx->host->gfxDevice == 0) {
+        return;
+    }
+
+    FileView vertexView = file_view(state->resources.fileStream, state->gfxDemo.text.vertexShader);
+    FileView fragmentView = file_view(state->resources.fileStream, state->gfxDemo.text.fragmentShader);
+    if (vertexView.status != FileStatus_Ready ||
+        fragmentView.status != FileStatus_Ready ||
+        content_hash_is_zero(vertexView.hash) ||
+        content_hash_is_zero(fragmentView.hash)) {
+        return;
+    }
+
+    if (state->gfxDemo.text.pipeline.generation != 0u &&
+        content_hash_equal(state->gfxDemo.text.vertexShaderHash, vertexView.hash) &&
+        content_hash_equal(state->gfxDemo.text.fragmentShaderHash, fragmentView.hash)) {
+        return;
+    }
+
+    GfxPipeline newPipeline = {};
+    if (!app_gfx_demo_create_text_pipeline(ctx, vertexView.hash, fragmentView.hash, &newPipeline)) {
+        return;
+    }
+
+    GfxPipeline oldPipeline = state->gfxDemo.text.pipeline;
+    state->gfxDemo.text.pipeline = newPipeline;
+    state->gfxDemo.text.vertexShaderHash = vertexView.hash;
+    state->gfxDemo.text.fragmentShaderHash = fragmentView.hash;
+    if (oldPipeline.generation != 0u) {
+        gfx_destroy_pipeline(ctx->host->gfxDevice, oldPipeline);
+    }
+}
+
 // Demo texture and material uploads
 static void app_gfx_upload_demo_texture(APP_Context* ctx, GfxFrame* frame) {
     ASSERT_ALWAYS(ctx != 0);
@@ -2353,6 +2615,113 @@ static void app_gfx_upload_demo_material_sources(APP_Context* ctx, GfxFrame* fra
     state->gfxDemo.upload.materialSourceUploaded = 1;
     state->gfxDemo.upload.materialSourceDirty = 0;
     state->gfxDemo.upload.materialDirty = 1;
+}
+
+static void app_gfx_try_create_text_gpu_resources(APP_Context* ctx) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->host != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    AppCoreState* state = ctx->core;
+    AppGfxDemoTextState* text = &state->gfxDemo.text;
+    if (text->gpuResourcesCreated || ctx->host->gfxDevice == 0) {
+        return;
+    }
+
+    Temp scratch = get_scratch(0, 0);
+    if (scratch.arena == 0) {
+        return;
+    }
+    DEFER_REF(temp_end(&scratch));
+
+    U32 indexCount = APP_GFX_DEMO_TEXT_MAX_QUADS * 6u;
+    U16* indices = ARENA_PUSH_ARRAY(scratch.arena, U16, indexCount);
+    if (indices == 0) {
+        return;
+    }
+
+    for (U32 quadIndex = 0u; quadIndex < APP_GFX_DEMO_TEXT_MAX_QUADS; ++quadIndex) {
+        U16 baseVertex = (U16)(quadIndex * 4u);
+        U32 baseIndex = quadIndex * 6u;
+        indices[baseIndex + 0u] = baseVertex + 0u;
+        indices[baseIndex + 1u] = baseVertex + 1u;
+        indices[baseIndex + 2u] = baseVertex + 2u;
+        indices[baseIndex + 3u] = baseVertex + 2u;
+        indices[baseIndex + 4u] = baseVertex + 3u;
+        indices[baseIndex + 5u] = baseVertex + 0u;
+    }
+
+    GfxTextureDesc atlasDesc = {};
+    atlasDesc.name = "text atlas";
+    atlasDesc.width = APP_GFX_DEMO_TEXT_ATLAS_WIDTH;
+    atlasDesc.height = APP_GFX_DEMO_TEXT_ATLAS_HEIGHT;
+    atlasDesc.mipCount = 1u;
+    atlasDesc.format = GfxFormat_R8_UNorm;
+    atlasDesc.usageFlags = GfxTextureUsageFlags_Sampled | GfxTextureUsageFlags_CopyDst;
+    atlasDesc.storageKind = GfxTextureStorageKind_Device;
+    GfxTexture atlasTexture = gfx_create_texture(ctx->host->gfxDevice, &atlasDesc);
+    GfxResourceId atlasTextureId = gfx_register_texture(ctx->host->gfxDevice, atlasTexture);
+
+    GfxSamplerDesc samplerDesc = {};
+    samplerDesc.name = "text atlas sampler";
+    samplerDesc.minFilter = GfxFilter_Linear;
+    samplerDesc.magFilter = GfxFilter_Linear;
+    samplerDesc.addressU = GfxAddressMode_ClampToEdge;
+    samplerDesc.addressV = GfxAddressMode_ClampToEdge;
+    GfxSampler atlasSampler = gfx_create_sampler(ctx->host->gfxDevice, &samplerDesc);
+    GfxResourceId atlasSamplerId = gfx_register_sampler(ctx->host->gfxDevice, atlasSampler);
+
+    GfxBufferDesc indexDesc = {};
+    indexDesc.name = "text quad indices";
+    indexDesc.size = sizeof(U16) * indexCount;
+    indexDesc.usageFlags = GfxBufferUsageFlags_Index;
+    indexDesc.memoryKind = GfxMemoryKind_Upload;
+    indexDesc.initialData = indices;
+    GfxBuffer indexBuffer = gfx_create_buffer(ctx->host->gfxDevice, &indexDesc);
+
+    GfxBuffer quadBuffers[APP_GFX_DEMO_TEXT_FRAME_BUFFER_COUNT] = {};
+    GfxResourceId quadBufferIds[APP_GFX_DEMO_TEXT_FRAME_BUFFER_COUNT] = {};
+    for (U32 bufferIndex = 0u; bufferIndex < APP_GFX_DEMO_TEXT_FRAME_BUFFER_COUNT; ++bufferIndex) {
+        GfxBufferDesc quadDesc = {};
+        quadDesc.name = "text quads";
+        quadDesc.size = sizeof(TextQuad) * APP_GFX_DEMO_TEXT_MAX_QUADS;
+        quadDesc.usageFlags = GfxBufferUsageFlags_Storage;
+        quadDesc.memoryKind = GfxMemoryKind_Upload;
+        quadBuffers[bufferIndex] = gfx_create_buffer(ctx->host->gfxDevice, &quadDesc);
+        quadBufferIds[bufferIndex] = gfx_register_buffer(ctx->host->gfxDevice, quadBuffers[bufferIndex]);
+    }
+
+    B32 created = atlasTexture.generation != 0u &&
+                  atlasTextureId.index != 0u &&
+                  atlasSampler.generation != 0u &&
+                  atlasSamplerId.index != 0u &&
+                  indexBuffer.generation != 0u;
+    for (U32 bufferIndex = 0u; bufferIndex < APP_GFX_DEMO_TEXT_FRAME_BUFFER_COUNT; ++bufferIndex) {
+        created = created &&
+                  quadBuffers[bufferIndex].generation != 0u &&
+                  quadBufferIds[bufferIndex].index != 0u;
+    }
+
+    if (!created) {
+        for (U32 bufferIndex = 0u; bufferIndex < APP_GFX_DEMO_TEXT_FRAME_BUFFER_COUNT; ++bufferIndex) {
+            gfx_destroy_buffer(ctx->host->gfxDevice, quadBuffers[bufferIndex]);
+        }
+        gfx_destroy_buffer(ctx->host->gfxDevice, indexBuffer);
+        gfx_destroy_sampler(ctx->host->gfxDevice, atlasSampler);
+        gfx_destroy_texture(ctx->host->gfxDevice, atlasTexture);
+        return;
+    }
+
+    text->atlasTexture = atlasTexture;
+    text->atlasTextureId = atlasTextureId;
+    text->atlasSampler = atlasSampler;
+    text->atlasSamplerId = atlasSamplerId;
+    text->indexBuffer = indexBuffer;
+    for (U32 bufferIndex = 0u; bufferIndex < APP_GFX_DEMO_TEXT_FRAME_BUFFER_COUNT; ++bufferIndex) {
+        text->quadBuffers[bufferIndex] = quadBuffers[bufferIndex];
+        text->quadBufferIds[bufferIndex] = quadBufferIds[bufferIndex];
+    }
+    text->gpuResourcesCreated = 1;
 }
 
 static GfxResourceUse app_gfx_buffer_resource_use(GfxBuffer buffer, U32 accessFlags, U32 shaderStages) {
@@ -3095,6 +3464,157 @@ static B32 app_gfx_build_demo_render_packet(APP_Context* ctx,
     return 1;
 }
 
+static B32 app_gfx_build_text_render_packet(APP_Context* ctx,
+                                            GfxFrame* frame,
+                                            GfxTexture colorTexture,
+                                            TextDrawData drawData,
+                                            AppGfxTextRenderPacket* outPacket) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->host != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+    ASSERT_ALWAYS(outPacket != 0);
+
+    MEMSET(outPacket, 0, sizeof(*outPacket));
+    AppGfxDemoTextState* text = &ctx->core->gfxDemo.text;
+    if (frame == 0 ||
+        drawData.quadCount == 0u ||
+        drawData.quadCount > APP_GFX_DEMO_TEXT_MAX_QUADS ||
+        text->pipeline.generation == 0u ||
+        text->atlasTexture.generation == 0u ||
+        text->atlasTextureId.index == 0u ||
+        text->atlasSamplerId.index == 0u ||
+        text->indexBuffer.generation == 0u) {
+        return 0;
+    }
+
+    U32 frameBufferIndex = (U32)(ctx->core->frameCounter & (APP_GFX_DEMO_TEXT_FRAME_BUFFER_COUNT - 1u));
+    if (text->quadBuffers[frameBufferIndex].generation == 0u ||
+        text->quadBufferIds[frameBufferIndex].index == 0u) {
+        return 0;
+    }
+
+    U64 quadBytes = sizeof(TextQuad) * drawData.quadCount;
+    if (!gfx_upload_buffer(frame,
+                           text->quadBuffers[frameBufferIndex],
+                           0u,
+                           drawData.quads,
+                           quadBytes)) {
+        return 0;
+    }
+
+    GfxTemp rootTemp = gfx_allocate_temp(frame, sizeof(AppTextDrawRootData), 16u);
+    if (rootTemp.cpu == 0) {
+        return 0;
+    }
+
+    AppTextDrawRootData* rootData = (AppTextDrawRootData*)rootTemp.cpu;
+    rootData->quadBuffer = text->quadBufferIds[frameBufferIndex].index;
+    rootData->quadByteOffset = 0u;
+    rootData->atlasTexture = text->atlasTextureId.index;
+    rootData->atlasSampler = text->atlasSamplerId.index;
+    rootData->targetWidth = (F32)ctx->host->windowWidth;
+    rootData->targetHeight = (F32)ctx->host->windowHeight;
+    rootData->_padding0 = 0u;
+    rootData->_padding1 = 0u;
+    rootData->_padding2 = 0u;
+    rootData->_padding3 = 0u;
+    rootData->_padding4 = 0u;
+    rootData->_padding5 = 0u;
+    rootData->_padding6 = 0u;
+    rootData->_padding7 = 0u;
+    rootData->_padding8 = 0u;
+    rootData->_padding9 = 0u;
+
+    outPacket->draw.kind = GfxDrawKind_DirectIndexed;
+    outPacket->draw.pipeline = text->pipeline;
+    outPacket->draw.indexBuffer = text->indexBuffer;
+    outPacket->draw.indexByteOffset = 0u;
+    outPacket->draw.indexCount = drawData.quadCount * 6u;
+    outPacket->draw.instanceCount = 1u;
+    outPacket->draw.baseVertex = 0;
+    outPacket->draw.firstInstance = 0u;
+    outPacket->draw.indexType = GfxIndexType_U16;
+    outPacket->draw.rootData = rootTemp.gpu;
+
+    outPacket->area = app_gfx_demo_draw_area(ctx->host->windowWidth,
+                                             ctx->host->windowHeight,
+                                             &outPacket->draw,
+                                             1u);
+    outPacket->colorTarget.texture = colorTexture;
+    outPacket->colorTarget.loadOp = GfxLoadOp_Load;
+    outPacket->colorTarget.storeOp = GfxStoreOp_Store;
+
+    outPacket->resourceUses[0] = app_gfx_buffer_resource_use(text->quadBuffers[frameBufferIndex],
+                                                             GfxResourceAccessFlags_ShaderRead,
+                                                             GfxShaderStageFlags_Vertex);
+    outPacket->resourceUses[1] = app_gfx_texture_resource_use(text->atlasTexture,
+                                                              GfxResourceAccessFlags_ShaderRead,
+                                                              GfxShaderStageFlags_Fragment);
+    outPacket->pass.name = "text overlay pass";
+    outPacket->pass.colorTargets = &outPacket->colorTarget;
+    outPacket->pass.colorTargetCount = 1u;
+    outPacket->pass.resourceUses = outPacket->resourceUses;
+    outPacket->pass.resourceUseCount = ARRAY_COUNT(outPacket->resourceUses);
+    return 1;
+}
+
+static void app_gfx_draw_demo_text(APP_Context* ctx, GfxCommandBuffer* commands, GfxFrame* frame, GfxTexture colorTexture) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    AppGfxDemoTextState* text = &ctx->core->gfxDemo.text;
+    if (commands == 0 ||
+        frame == 0 ||
+        text->context == 0 ||
+        text->font.generation == 0u ||
+        !text->gpuResourcesCreated ||
+        text->pipeline.generation == 0u) {
+        return;
+    }
+
+    TextDrawDesc drawDesc = {};
+    drawDesc.font = text->font;
+    drawDesc.text = str8("Hello, text\nOla, acao, coracao\nOlá, ação, coração\nAVATAR ToYo office ffi fi fl");
+    drawDesc.x = 28.0f;
+    drawDesc.y = 28.0f;
+    drawDesc.pixelSize = 24.0f;
+    drawDesc.rgba8 = 0xF4F1E8FFu;
+
+    Temp scratch = get_scratch(0, 0);
+    if (scratch.arena == 0) {
+        return;
+    }
+    DEFER_REF(temp_end(&scratch));
+
+    TextDrawData drawData = text_prepare_draw(text->context, scratch.arena, &drawDesc);
+    if (drawData.quadCount == 0u) {
+        return;
+    }
+    if (drawData.quadCount > APP_GFX_DEMO_TEXT_MAX_QUADS) {
+        drawData.quadCount = APP_GFX_DEMO_TEXT_MAX_QUADS;
+    }
+
+    for (U32 uploadIndex = 0u; uploadIndex < drawData.uploadCount; ++uploadIndex) {
+        TextAtlasUpload* upload = drawData.uploads + uploadIndex;
+        GfxTextureUploadRegion region = {};
+        region.layerCount = 1u;
+        region.x = upload->x;
+        region.y = upload->y;
+        region.width = upload->width;
+        region.height = upload->height;
+        region.depth = 1u;
+        region.bytesPerRow = upload->pitch;
+        region.rowsPerImage = upload->height;
+        gfx_upload_texture(frame, text->atlasTexture, &region, upload->pixels);
+    }
+
+    AppGfxTextRenderPacket packet = {};
+    if (app_gfx_build_text_render_packet(ctx, frame, colorTexture, drawData, &packet)) {
+        gfx_render_pass(commands, &packet.pass, &packet.area, 1u);
+        app_gfx_demo_log_once(ctx->core, AppGfxDemoLoadLog_TextReady, "Text overlay ready");
+    }
+}
+
 // Demo frame and shutdown
 static void app_gfx_demo_destroy_pipeline_state(GfxDevice* device, AppGfxDemoPipelineState* pipelines) {
     ASSERT_ALWAYS(pipelines != 0);
@@ -3110,6 +3630,28 @@ static void app_gfx_demo_destroy_pipeline_state(GfxDevice* device, AppGfxDemoPip
     }
 
     *pipelines = {};
+}
+
+static void app_gfx_demo_destroy_text_state(APP_Context* ctx) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    AppGfxDemoTextState* text = &ctx->core->gfxDemo.text;
+    GfxDevice* device = ctx->host ? ctx->host->gfxDevice : 0;
+    if (device != 0) {
+        for (U32 bufferIndex = 0u; bufferIndex < APP_GFX_DEMO_TEXT_FRAME_BUFFER_COUNT; ++bufferIndex) {
+            gfx_destroy_buffer(device, text->quadBuffers[bufferIndex]);
+        }
+        gfx_destroy_buffer(device, text->indexBuffer);
+        gfx_destroy_sampler(device, text->atlasSampler);
+        gfx_destroy_texture(device, text->atlasTexture);
+        gfx_destroy_pipeline(device, text->pipeline);
+    }
+    if (text->context != 0) {
+        text_context_destroy(text->context);
+    }
+
+    *text = {};
 }
 
 static void app_gfx_demo_destroy_gpu_resources(APP_Context* ctx) {
@@ -3164,6 +3706,7 @@ static void app_gfx_demo_shutdown(APP_Context* ctx) {
 
     AppCoreState* state = ctx->core;
     GfxDevice* device = ctx->host ? ctx->host->gfxDevice : 0;
+    app_gfx_demo_destroy_text_state(ctx);
     app_resource_cache_shutdown(ctx);
 
     if (device != 0) {
@@ -3225,6 +3768,10 @@ static void app_gfx_demo_frame(APP_Context* ctx, F32 deltaSeconds) {
 
     GfxCommandBuffer* commands = gfx_get_command_buffer(frame);
     GfxTexture backbuffer = gfx_get_backbuffer(frame);
+
+    app_gfx_demo_try_load_text_font(ctx);
+    app_gfx_try_create_text_gpu_resources(ctx);
+    app_gfx_try_update_text_pipeline(ctx);
 
     if (!ctx->core->gfxDemo.runtime.geometryCreated) {
         app_gfx_try_create_demo_buffers(ctx);
@@ -3292,6 +3839,7 @@ static void app_gfx_demo_frame(APP_Context* ctx, F32 deltaSeconds) {
                         visiblePacket.areas,
                         visiblePacket.areaCount);
     }
+    app_gfx_draw_demo_text(ctx, commands, frame, backbuffer);
     if (drawCount != 0u && !ctx->core->gfxDemo.runtime.ready) {
         ctx->core->gfxDemo.runtime.ready = 1;
         app_gfx_demo_log_once(ctx->core, AppGfxDemoLoadLog_Ready, "Demo resources ready");
