@@ -1,0 +1,17 @@
+#define FT2_BUILD_LIBRARY
+
+#include "../freetype/src/base/ftdebug.c"
+#include "../freetype/src/base/ftsystem.c"
+#include "../freetype/src/base/ftinit.c"
+#include "../freetype/src/base/ftbase.c"
+#include "../freetype/src/base/ftbbox.c"
+#include "../freetype/src/base/ftbitmap.c"
+#include "../freetype/src/base/ftglyph.c"
+#include "../freetype/src/base/ftmm.c"
+#include "../freetype/src/base/ftstroke.c"
+#include "../freetype/src/sfnt/sfnt.c"
+#include "../freetype/src/truetype/truetype.c"
+#include "../freetype/src/smooth/smooth.c"
+#include "../freetype/src/raster/raster.c"
+#include "../freetype/src/autofit/autofit.c"
+#include "../freetype/src/psnames/psnames.c"
