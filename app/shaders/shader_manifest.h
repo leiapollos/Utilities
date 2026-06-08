@@ -5,6 +5,7 @@
 
 #define APP_SHADER_SLANG_DEMO_SOURCE "app/shaders/demo.slang"
 #define APP_SHADER_SLANG_ABI_SOURCE "app/shaders/gfx_shader_abi.slang"
+#define APP_SHADER_SLANG_DEMO_SUPPORT_SOURCE "app/shaders/demo_shader_support.slang"
 
 #define APP_SHADER_TRIANGLE_VERTEX_ENTRY "triangle_vertex"
 #define APP_SHADER_TRIANGLE_FRAGMENT_ENTRY "triangle_fragment"
@@ -32,7 +33,8 @@
 
 #define APP_SHADER_SOURCE_LIST(X) \
     X(DemoSlang, APP_SHADER_SLANG_DEMO_SOURCE) \
-    X(GfxShaderAbiSlang, APP_SHADER_SLANG_ABI_SOURCE)
+    X(GfxShaderAbiSlang, APP_SHADER_SLANG_ABI_SOURCE) \
+    X(DemoShaderSupportSlang, APP_SHADER_SLANG_DEMO_SUPPORT_SOURCE)
 
 #define APP_SHADER_VULKAN_OUTPUT_LIST(X) \
     X(TriangleVertex, APP_SHADER_SLANG_DEMO_SOURCE, APP_SHADER_VK_TRIANGLE_VERTEX_OUTPUT, APP_SHADER_TRIANGLE_VERTEX_ENTRY, vertex, graphics) \

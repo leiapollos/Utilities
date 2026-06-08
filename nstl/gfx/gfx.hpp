@@ -356,6 +356,8 @@ struct GfxComputeWrite {
     GfxGpuSlice slice;
 };
 
+// Declares shader-visible resources touched by a pass. Compute write visibility is
+// still declared explicitly through GfxComputeWrite.
 struct GfxResourceUse {
     GfxResourceUseKind kind;
     U32 accessFlags;

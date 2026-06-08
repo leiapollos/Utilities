@@ -1,4 +1,4 @@
-#include "gfx_shader_abi.slang"
+#include "demo_shader_support.slang"
 
 #if GFX_SHADER_STAGE_GRAPHICS
 [shader("vertex")]

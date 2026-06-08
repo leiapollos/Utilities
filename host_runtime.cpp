@@ -55,6 +55,7 @@ static const char* HOST_SHADER_INPUTS[] = {
     "app/shaders/shader_manifest.h",
     "app/shaders/demo.slang",
     "app/shaders/gfx_shader_abi.slang",
+    "app/shaders/demo_shader_support.slang",
 };
 
 static const char* HOST_RESTART_REQUIRED_INPUTS[] = {

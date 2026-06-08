@@ -29,6 +29,7 @@
 #define APP_GFX_DEMO_CULL_WOBBLE_EXTENT 0.014f
 #define APP_IMAGE_RGBA8_BYTES_PER_PIXEL 4u
 
+// Demo shader ABI
 struct AppGfxVertex {
     F32 position[2];
     F32 color[4];
@@ -337,6 +338,7 @@ APP_SHADER_ABI_OFFSET(GfxDrawIndexedIndirectArgs, baseVertex, 12u);
 APP_SHADER_ABI_OFFSET(GfxDrawIndexedIndirectArgs, firstInstance, 16u);
 #undef APP_SHADER_ABI_OFFSET
 
+// Demo artifacts and decoded assets
 struct AppImageRGBA8 {
     U32 width;
     U32 height;
@@ -358,6 +360,17 @@ struct AppPPMToken {
 struct AppPPMCursor {
     const U8* at;
     const U8* end;
+};
+
+struct AppGfxDemoRendererSeedData {
+    AppGfxDemoObject* objects;
+    AppGfxGpuObject* gpuObjects;
+    AppGfxGpuCullSource* cullSources;
+    AppGfxMaterial* materials;
+    U32* visibilitySourceIndices;
+    AppGfxVisibilityBin* visibilityBins;
+    AppGfxVisibilityGroup* visibilityGroups;
+    U32 visibilityGroupCount;
 };
 
 enum AppGfxDemoLoadLog {
@@ -405,6 +418,19 @@ static B32 app_gfx_demo_create_triangle_pipeline(APP_Context* ctx, ContentHash v
 static B32 app_gfx_demo_create_compute_pipeline(APP_Context* ctx, ContentHash shaderHash, const char* name, const char* entry, U32 threadsPerThreadgroupX, GfxPipeline* outPipeline);
 static B32 app_gfx_demo_init(APP_Context* ctx);
 static B32 app_gfx_seed_demo_renderer_data(APP_Context* ctx);
+static B32 app_gfx_demo_renderer_data_current(const AppCoreState* state);
+static B32 app_gfx_demo_allocate_seed_base_arrays(AppCoreState* state, AppGfxDemoRendererSeedData* seed);
+static B32 app_gfx_demo_allocate_seed_visibility_groups(AppCoreState* state, AppGfxDemoRendererSeedData* seed, U32 visibilityGroupCount);
+static void app_gfx_demo_clear_seed_base_arrays(AppGfxDemoRendererSeedData* seed);
+static void app_gfx_demo_seed_visible_objects(AppGfxDemoRendererSeedData* seed);
+static void app_gfx_demo_seed_stress_objects(AppGfxDemoRendererSeedData* seed);
+static void app_gfx_demo_seed_material_sources(AppGfxDemoRendererSeedData* seed);
+static void app_gfx_demo_derive_gpu_records(AppGfxDemoRendererSeedData* seed);
+static void app_gfx_demo_count_bins(const AppGfxDemoRendererSeedData* seed, U32* outBinCounts, U32 outBinCount);
+static U32 app_gfx_demo_count_visibility_groups(const U32* binCounts, U32 binCount);
+static void app_gfx_demo_build_visibility_layout(AppGfxDemoRendererSeedData* seed, const U32* binCounts, U32 binCount);
+static void app_gfx_demo_publish_seed_data(AppCoreState* state, const AppGfxDemoRendererSeedData* seed);
+static void app_gfx_demo_mark_renderer_uploads_dirty(AppCoreState* state);
 static void app_gfx_demo_log_once(AppCoreState* state, U32 bit, const char* message);
 static void app_gfx_try_create_demo_buffers(APP_Context* ctx);
 static void app_gfx_upload_demo_geometry(APP_Context* ctx, GfxFrame* frame);
@@ -452,9 +478,15 @@ static B32 app_gfx_build_demo_render_packet(APP_Context* ctx,
                                             B32 useDepth,
                                             B32 offscreen,
                                             AppGfxDemoRenderPacket* outPacket);
+static void app_gfx_demo_destroy_pipeline_state(GfxDevice* device, AppGfxDemoPipelineState* pipelines);
+static void app_gfx_demo_destroy_gpu_resources(APP_Context* ctx);
+static void app_gfx_demo_clear_renderer_data(AppGfxDemoRendererData* renderer);
+static void app_gfx_demo_clear_upload_state(AppGfxDemoUploadState* upload);
+static void app_gfx_demo_clear_runtime_state(AppGfxDemoRuntimeState* runtime);
 static void app_gfx_demo_shutdown(APP_Context* ctx);
 static void app_gfx_demo_frame(APP_Context* ctx, F32 deltaSeconds);
 
+// Demo artifact wiring
 static void app_gfx_demo_resource_cache_reset(APP_Context* ctx) {
     ASSERT_ALWAYS(ctx != 0);
     ASSERT_ALWAYS(ctx->core != 0);
@@ -554,6 +586,7 @@ static void app_gfx_demo_watch_files(APP_Context* ctx) {
     state->gfxDemo.shaders.textureSource = file_watch(state->resources.fileStream, texturePath, 0u);
 }
 
+// Demo texture decode
 static B32 app_ppm_is_space(U8 c) {
     return c == (U8)' ' ||
            c == (U8)'\n' ||
@@ -717,6 +750,7 @@ static B32 app_decode_ppm_rgba8(Arena* arena, const void* data, U64 size, AppIma
     return 1;
 }
 
+// Demo pipeline artifact construction
 struct AppTrianglePipelineArtifactData {
     ContentHash vertexHash;
     ContentHash fragmentHash;
@@ -1148,91 +1182,124 @@ static AppGfxGpuCullSource app_gfx_demo_cull_source_from_object(const AppGfxDemo
     return result;
 }
 
-static B32 app_gfx_seed_demo_renderer_data(APP_Context* ctx) {
-    ASSERT_ALWAYS(ctx != 0);
-    ASSERT_ALWAYS(ctx->core != 0);
+// Demo renderer data seeding
+static B32 app_gfx_demo_renderer_data_current(const AppCoreState* state) {
+    ASSERT_ALWAYS(state != 0);
 
-    AppCoreState* state = ctx->core;
-    B32 rendererDataCurrent = (state->gfxDemo.renderer.dataVersion == APP_GFX_DEMO_RENDERER_DATA_VERSION &&
-                               state->gfxDemo.renderer.objects != 0 &&
-                               state->gfxDemo.renderer.objectCount == APP_GFX_DEMO_OBJECT_COUNT &&
-                               state->gfxDemo.renderer.gpuObjects != 0 &&
-                               state->gfxDemo.renderer.gpuObjectCount == APP_GFX_DEMO_OBJECT_COUNT &&
-                               state->gfxDemo.renderer.gpuCullSources != 0 &&
-                               state->gfxDemo.renderer.gpuCullSourceCount == APP_GFX_DEMO_OBJECT_COUNT &&
-                               state->gfxDemo.renderer.visibilitySourceIndices != 0 &&
-                               state->gfxDemo.renderer.visibilitySourceIndexCount == APP_GFX_DEMO_OBJECT_COUNT &&
-                               state->gfxDemo.renderer.visibilityBins != 0 &&
-                               state->gfxDemo.renderer.visibilityBinCount == AppGfxDrawBinKind_COUNT &&
-                               state->gfxDemo.renderer.visibilityGroups != 0 &&
-                               state->gfxDemo.renderer.visibilityGroupCount != 0u &&
-                               state->gfxDemo.renderer.materialSources != 0 &&
-                               state->gfxDemo.renderer.materialSourceCount == APP_GFX_DEMO_MATERIAL_COUNT) ? 1 : 0;
-    if (rendererDataCurrent) {
-        return 1;
-    }
+    B32 result = (state->gfxDemo.renderer.dataVersion == APP_GFX_DEMO_RENDERER_DATA_VERSION &&
+                  state->gfxDemo.renderer.objects != 0 &&
+                  state->gfxDemo.renderer.objectCount == APP_GFX_DEMO_OBJECT_COUNT &&
+                  state->gfxDemo.renderer.gpuObjects != 0 &&
+                  state->gfxDemo.renderer.gpuObjectCount == APP_GFX_DEMO_OBJECT_COUNT &&
+                  state->gfxDemo.renderer.gpuCullSources != 0 &&
+                  state->gfxDemo.renderer.gpuCullSourceCount == APP_GFX_DEMO_OBJECT_COUNT &&
+                  state->gfxDemo.renderer.visibilitySourceIndices != 0 &&
+                  state->gfxDemo.renderer.visibilitySourceIndexCount == APP_GFX_DEMO_OBJECT_COUNT &&
+                  state->gfxDemo.renderer.visibilityBins != 0 &&
+                  state->gfxDemo.renderer.visibilityBinCount == AppGfxDrawBinKind_COUNT &&
+                  state->gfxDemo.renderer.visibilityGroups != 0 &&
+                  state->gfxDemo.renderer.visibilityGroupCount != 0u &&
+                  state->gfxDemo.renderer.materialSources != 0 &&
+                  state->gfxDemo.renderer.materialSourceCount == APP_GFX_DEMO_MATERIAL_COUNT) ? 1 : 0;
+    return result;
+}
+
+static B32 app_gfx_demo_allocate_seed_base_arrays(AppCoreState* state, AppGfxDemoRendererSeedData* seed) {
+    ASSERT_ALWAYS(state != 0);
+    ASSERT_ALWAYS(seed != 0);
+
     if (state->resources.arena == 0) {
         return 0;
     }
 
-    AppGfxDemoObject* objects = state->gfxDemo.renderer.objects;
-    AppGfxGpuObject* gpuObjects = state->gfxDemo.renderer.gpuObjects;
-    AppGfxGpuCullSource* cullSources = state->gfxDemo.renderer.gpuCullSources;
-    AppGfxMaterial* materials = state->gfxDemo.renderer.materialSources;
-    U32* visibilitySourceIndices = state->gfxDemo.renderer.visibilitySourceIndices;
-    AppGfxVisibilityBin* visibilityBins = state->gfxDemo.renderer.visibilityBins;
-    AppGfxVisibilityGroup* visibilityGroups = state->gfxDemo.renderer.visibilityGroups;
-    if (objects == 0 || state->gfxDemo.renderer.objectCount != APP_GFX_DEMO_OBJECT_COUNT) {
-        objects = ARENA_PUSH_ARRAY(state->resources.arena, AppGfxDemoObject, APP_GFX_DEMO_OBJECT_COUNT);
-        if (objects == 0) {
+    seed->objects = state->gfxDemo.renderer.objects;
+    seed->gpuObjects = state->gfxDemo.renderer.gpuObjects;
+    seed->cullSources = state->gfxDemo.renderer.gpuCullSources;
+    seed->materials = state->gfxDemo.renderer.materialSources;
+    seed->visibilitySourceIndices = state->gfxDemo.renderer.visibilitySourceIndices;
+    seed->visibilityBins = state->gfxDemo.renderer.visibilityBins;
+    seed->visibilityGroups = state->gfxDemo.renderer.visibilityGroups;
+    seed->visibilityGroupCount = state->gfxDemo.renderer.visibilityGroupCount;
+
+    if (seed->objects == 0 || state->gfxDemo.renderer.objectCount != APP_GFX_DEMO_OBJECT_COUNT) {
+        seed->objects = ARENA_PUSH_ARRAY(state->resources.arena, AppGfxDemoObject, APP_GFX_DEMO_OBJECT_COUNT);
+        if (seed->objects == 0) {
             LOG_ERROR("gfx", "Failed to allocate demo object data");
             return 0;
         }
     }
-    if (gpuObjects == 0 || state->gfxDemo.renderer.gpuObjectCount != APP_GFX_DEMO_OBJECT_COUNT) {
-        gpuObjects = ARENA_PUSH_ARRAY(state->resources.arena, AppGfxGpuObject, APP_GFX_DEMO_OBJECT_COUNT);
-        if (gpuObjects == 0) {
+    if (seed->gpuObjects == 0 || state->gfxDemo.renderer.gpuObjectCount != APP_GFX_DEMO_OBJECT_COUNT) {
+        seed->gpuObjects = ARENA_PUSH_ARRAY(state->resources.arena, AppGfxGpuObject, APP_GFX_DEMO_OBJECT_COUNT);
+        if (seed->gpuObjects == 0) {
             LOG_ERROR("gfx", "Failed to allocate demo GPU object data");
             return 0;
         }
     }
-    if (cullSources == 0 || state->gfxDemo.renderer.gpuCullSourceCount != APP_GFX_DEMO_OBJECT_COUNT) {
-        cullSources = ARENA_PUSH_ARRAY(state->resources.arena, AppGfxGpuCullSource, APP_GFX_DEMO_OBJECT_COUNT);
-        if (cullSources == 0) {
+    if (seed->cullSources == 0 || state->gfxDemo.renderer.gpuCullSourceCount != APP_GFX_DEMO_OBJECT_COUNT) {
+        seed->cullSources = ARENA_PUSH_ARRAY(state->resources.arena, AppGfxGpuCullSource, APP_GFX_DEMO_OBJECT_COUNT);
+        if (seed->cullSources == 0) {
             LOG_ERROR("gfx", "Failed to allocate demo GPU cull source data");
             return 0;
         }
     }
-    if (materials == 0 || state->gfxDemo.renderer.materialSourceCount != APP_GFX_DEMO_MATERIAL_COUNT) {
-        materials = ARENA_PUSH_ARRAY(state->resources.arena, AppGfxMaterial, APP_GFX_DEMO_MATERIAL_COUNT);
-        if (materials == 0) {
+    if (seed->materials == 0 || state->gfxDemo.renderer.materialSourceCount != APP_GFX_DEMO_MATERIAL_COUNT) {
+        seed->materials = ARENA_PUSH_ARRAY(state->resources.arena, AppGfxMaterial, APP_GFX_DEMO_MATERIAL_COUNT);
+        if (seed->materials == 0) {
             LOG_ERROR("gfx", "Failed to allocate demo material data");
             return 0;
         }
     }
-    if (visibilitySourceIndices == 0 ||
+    if (seed->visibilitySourceIndices == 0 ||
         state->gfxDemo.renderer.visibilitySourceIndexCount != APP_GFX_DEMO_OBJECT_COUNT) {
-        visibilitySourceIndices = ARENA_PUSH_ARRAY(state->resources.arena, U32, APP_GFX_DEMO_OBJECT_COUNT);
-        if (visibilitySourceIndices == 0) {
+        seed->visibilitySourceIndices = ARENA_PUSH_ARRAY(state->resources.arena, U32, APP_GFX_DEMO_OBJECT_COUNT);
+        if (seed->visibilitySourceIndices == 0) {
             LOG_ERROR("gfx", "Failed to allocate demo visibility source indices");
             return 0;
         }
     }
-    if (visibilityBins == 0 ||
+    if (seed->visibilityBins == 0 ||
         state->gfxDemo.renderer.visibilityBinCount != AppGfxDrawBinKind_COUNT) {
-        visibilityBins = ARENA_PUSH_ARRAY(state->resources.arena, AppGfxVisibilityBin, AppGfxDrawBinKind_COUNT);
-        if (visibilityBins == 0) {
+        seed->visibilityBins = ARENA_PUSH_ARRAY(state->resources.arena, AppGfxVisibilityBin, AppGfxDrawBinKind_COUNT);
+        if (seed->visibilityBins == 0) {
             LOG_ERROR("gfx", "Failed to allocate demo visibility bins");
             return 0;
         }
     }
+    return 1;
+}
 
-    MEMSET(objects, 0, sizeof(AppGfxDemoObject) * APP_GFX_DEMO_OBJECT_COUNT);
-    MEMSET(gpuObjects, 0, sizeof(AppGfxGpuObject) * APP_GFX_DEMO_OBJECT_COUNT);
-    MEMSET(cullSources, 0, sizeof(AppGfxGpuCullSource) * APP_GFX_DEMO_OBJECT_COUNT);
-    MEMSET(materials, 0, sizeof(AppGfxMaterial) * APP_GFX_DEMO_MATERIAL_COUNT);
-    MEMSET(visibilitySourceIndices, 0, sizeof(U32) * APP_GFX_DEMO_OBJECT_COUNT);
-    MEMSET(visibilityBins, 0, sizeof(AppGfxVisibilityBin) * AppGfxDrawBinKind_COUNT);
+static B32 app_gfx_demo_allocate_seed_visibility_groups(AppCoreState* state, AppGfxDemoRendererSeedData* seed, U32 visibilityGroupCount) {
+    ASSERT_ALWAYS(state != 0);
+    ASSERT_ALWAYS(seed != 0);
+
+    if (state->resources.arena == 0 || visibilityGroupCount == 0u) {
+        return 0;
+    }
+    if (seed->visibilityGroups == 0 ||
+        state->gfxDemo.renderer.visibilityGroupCount != visibilityGroupCount) {
+        seed->visibilityGroups = ARENA_PUSH_ARRAY(state->resources.arena, AppGfxVisibilityGroup, visibilityGroupCount);
+        if (seed->visibilityGroups == 0) {
+            LOG_ERROR("gfx", "Failed to allocate demo visibility groups");
+            return 0;
+        }
+    }
+    seed->visibilityGroupCount = visibilityGroupCount;
+    return 1;
+}
+
+static void app_gfx_demo_clear_seed_base_arrays(AppGfxDemoRendererSeedData* seed) {
+    ASSERT_ALWAYS(seed != 0);
+
+    MEMSET(seed->objects, 0, sizeof(AppGfxDemoObject) * APP_GFX_DEMO_OBJECT_COUNT);
+    MEMSET(seed->gpuObjects, 0, sizeof(AppGfxGpuObject) * APP_GFX_DEMO_OBJECT_COUNT);
+    MEMSET(seed->cullSources, 0, sizeof(AppGfxGpuCullSource) * APP_GFX_DEMO_OBJECT_COUNT);
+    MEMSET(seed->materials, 0, sizeof(AppGfxMaterial) * APP_GFX_DEMO_MATERIAL_COUNT);
+    MEMSET(seed->visibilitySourceIndices, 0, sizeof(U32) * APP_GFX_DEMO_OBJECT_COUNT);
+    MEMSET(seed->visibilityBins, 0, sizeof(AppGfxVisibilityBin) * AppGfxDrawBinKind_COUNT);
+}
+
+static void app_gfx_demo_seed_visible_objects(AppGfxDemoRendererSeedData* seed) {
+    ASSERT_ALWAYS(seed != 0);
 
     for (U32 row = 0u; row < APP_GFX_DEMO_DRAW_ROWS; ++row) {
         for (U32 column = 0u; column < APP_GFX_DEMO_DRAW_COLUMNS; ++column) {
@@ -1247,7 +1314,7 @@ static B32 app_gfx_seed_demo_renderer_data(APP_Context* ctx) {
             F32 centeredY = rowT * 2.0f - 1.0f;
             F32 radialDepth = MIN((centeredX * centeredX + centeredY * centeredY) * 0.5f, 1.0f);
 
-            AppGfxDemoObject* object = objects + index;
+            AppGfxDemoObject* object = seed->objects + index;
             object->offset[0] = centeredX * APP_GFX_DEMO_OVERLAP_EXTENT_X;
             object->offset[1] = centeredY * APP_GFX_DEMO_OVERLAP_EXTENT_Y;
             object->scale = APP_GFX_DEMO_OVERLAP_SCALE;
@@ -1261,28 +1328,19 @@ static B32 app_gfx_seed_demo_renderer_data(APP_Context* ctx) {
             } else if ((index % 7u) == 0u) {
                 object->flags = AppGfxDemoObjectFlags_AlphaTest;
             }
-
-            gpuObjects[index] = app_gfx_demo_gpu_object_from_object(object);
-            cullSources[index] = app_gfx_demo_cull_source_from_object(object, index);
-
-            AppGfxMaterial* material = materials + index;
-            material->baseColor[0] = columnT;
-            material->baseColor[1] = rowT;
-            material->baseColor[2] = 0.0f;
-            material->baseColor[3] = 1.0f;
-            material->albedoTexture = 0u;
-            material->samplerIndex = 0u;
-            material->flags = 0u;
-            material->_padding = 0u;
         }
     }
+}
+
+static void app_gfx_demo_seed_stress_objects(AppGfxDemoRendererSeedData* seed) {
+    ASSERT_ALWAYS(seed != 0);
 
     for (U32 stressIndex = 0u; stressIndex < APP_GFX_DEMO_CULL_STRESS_OBJECT_COUNT; ++stressIndex) {
         U32 index = APP_GFX_DEMO_DRAW_COUNT + stressIndex;
         F32 laneX = (F32)(stressIndex & 31u);
         F32 laneY = (F32)((stressIndex >> 5u) & 31u);
 
-        AppGfxDemoObject* object = objects + index;
+        AppGfxDemoObject* object = seed->objects + index;
         object->offset[0] = 2.25f + laneX * 0.035f;
         object->offset[1] = -1.85f + laneY * 0.025f;
         object->scale = APP_GFX_DEMO_OVERLAP_SCALE;
@@ -1293,34 +1351,76 @@ static B32 app_gfx_seed_demo_renderer_data(APP_Context* ctx) {
         object->flags = ((stressIndex & 3u) == 0u) ?
                         AppGfxDemoObjectFlags_AlphaTest :
                         AppGfxDemoObjectFlags_None;
-
-        gpuObjects[index] = app_gfx_demo_gpu_object_from_object(object);
-        cullSources[index] = app_gfx_demo_cull_source_from_object(object, index);
     }
+}
 
-    U32 binCounts[AppGfxDrawBinKind_COUNT] = {};
+static void app_gfx_demo_seed_material_sources(AppGfxDemoRendererSeedData* seed) {
+    ASSERT_ALWAYS(seed != 0);
+
+    for (U32 row = 0u; row < APP_GFX_DEMO_DRAW_ROWS; ++row) {
+        for (U32 column = 0u; column < APP_GFX_DEMO_DRAW_COLUMNS; ++column) {
+            U32 index = row * APP_GFX_DEMO_DRAW_COLUMNS + column;
+            F32 columnT = (APP_GFX_DEMO_DRAW_COLUMNS > 1u) ?
+                          ((F32)column / (F32)(APP_GFX_DEMO_DRAW_COLUMNS - 1u)) :
+                          0.0f;
+            F32 rowT = (APP_GFX_DEMO_DRAW_ROWS > 1u) ?
+                       ((F32)row / (F32)(APP_GFX_DEMO_DRAW_ROWS - 1u)) :
+                       0.0f;
+
+            AppGfxMaterial* material = seed->materials + index;
+            material->baseColor[0] = columnT;
+            material->baseColor[1] = rowT;
+            material->baseColor[2] = 0.0f;
+            material->baseColor[3] = 1.0f;
+            material->albedoTexture = 0u;
+            material->samplerIndex = 0u;
+            material->flags = 0u;
+            material->_padding = 0u;
+        }
+    }
+}
+
+static void app_gfx_demo_derive_gpu_records(AppGfxDemoRendererSeedData* seed) {
+    ASSERT_ALWAYS(seed != 0);
+
     for (U32 objectIndex = 0u; objectIndex < APP_GFX_DEMO_OBJECT_COUNT; ++objectIndex) {
-        AppGfxDrawBinKind binKind = app_gfx_demo_draw_bin_kind(objects + objectIndex);
-        ++binCounts[binKind];
+        AppGfxDemoObject* object = seed->objects + objectIndex;
+        seed->gpuObjects[objectIndex] = app_gfx_demo_gpu_object_from_object(object);
+        seed->cullSources[objectIndex] = app_gfx_demo_cull_source_from_object(object, objectIndex);
     }
+}
 
-    U32 visibilityGroupCount = 0u;
+static void app_gfx_demo_count_bins(const AppGfxDemoRendererSeedData* seed, U32* outBinCounts, U32 outBinCount) {
+    ASSERT_ALWAYS(seed != 0);
+    ASSERT_ALWAYS(outBinCounts != 0);
+    ASSERT_ALWAYS(outBinCount >= AppGfxDrawBinKind_COUNT);
+
+    for (U32 objectIndex = 0u; objectIndex < APP_GFX_DEMO_OBJECT_COUNT; ++objectIndex) {
+        AppGfxDrawBinKind binKind = app_gfx_demo_draw_bin_kind(seed->objects + objectIndex);
+        ++outBinCounts[binKind];
+    }
+}
+
+static U32 app_gfx_demo_count_visibility_groups(const U32* binCounts, U32 binCount) {
+    ASSERT_ALWAYS(binCounts != 0);
+    ASSERT_ALWAYS(binCount >= AppGfxDrawBinKind_COUNT);
+
+    U32 result = 0u;
     for (U32 binIndex = 0u; binIndex < AppGfxDrawBinKind_COUNT; ++binIndex) {
         U32 binGroupCount = (binCounts[binIndex] + APP_GFX_DEMO_VISIBILITY_THREADS_PER_GROUP - 1u) /
                             APP_GFX_DEMO_VISIBILITY_THREADS_PER_GROUP;
         ASSERT_ALWAYS(binGroupCount <= APP_GFX_DEMO_VISIBILITY_MAX_GROUPS_PER_BIN);
-        visibilityGroupCount += binGroupCount;
+        result += binGroupCount;
     }
+    return result;
+}
 
-    if (visibilityGroups == 0 ||
-        state->gfxDemo.renderer.visibilityGroupCount != visibilityGroupCount) {
-        visibilityGroups = ARENA_PUSH_ARRAY(state->resources.arena, AppGfxVisibilityGroup, visibilityGroupCount);
-        if (visibilityGroups == 0) {
-            LOG_ERROR("gfx", "Failed to allocate demo visibility groups");
-            return 0;
-        }
-    }
-    MEMSET(visibilityGroups, 0, sizeof(AppGfxVisibilityGroup) * visibilityGroupCount);
+static void app_gfx_demo_build_visibility_layout(AppGfxDemoRendererSeedData* seed, const U32* binCounts, U32 binCount) {
+    ASSERT_ALWAYS(seed != 0);
+    ASSERT_ALWAYS(binCounts != 0);
+    ASSERT_ALWAYS(binCount >= AppGfxDrawBinKind_COUNT);
+
+    MEMSET(seed->visibilityGroups, 0, sizeof(AppGfxVisibilityGroup) * seed->visibilityGroupCount);
 
     U32 binStarts[AppGfxDrawBinKind_COUNT] = {};
     U32 totalSourceCount = 0u;
@@ -1331,7 +1431,7 @@ static B32 app_gfx_seed_demo_renderer_data(APP_Context* ctx) {
         U32 binGroupCount = (binCounts[binIndex] + APP_GFX_DEMO_VISIBILITY_THREADS_PER_GROUP - 1u) /
                             APP_GFX_DEMO_VISIBILITY_THREADS_PER_GROUP;
 
-        AppGfxVisibilityBin* bin = visibilityBins + binIndex;
+        AppGfxVisibilityBin* bin = seed->visibilityBins + binIndex;
         bin->sourceIndexByteOffset = binStarts[binIndex] * sizeof(U32);
         bin->sourceIndexCount = binCounts[binIndex];
         bin->visibleIndexByteOffset = binStarts[binIndex] * sizeof(U32);
@@ -1344,26 +1444,26 @@ static B32 app_gfx_seed_demo_renderer_data(APP_Context* ctx) {
     }
 
     ASSERT_ALWAYS(totalSourceCount == APP_GFX_DEMO_OBJECT_COUNT);
-    ASSERT_ALWAYS(groupStart == visibilityGroupCount);
+    ASSERT_ALWAYS(groupStart == seed->visibilityGroupCount);
 
     U32 binWrites[AppGfxDrawBinKind_COUNT] = {};
     for (U32 objectIndex = 0u; objectIndex < APP_GFX_DEMO_OBJECT_COUNT; ++objectIndex) {
-        AppGfxDrawBinKind binKind = app_gfx_demo_draw_bin_kind(objects + objectIndex);
+        AppGfxDrawBinKind binKind = app_gfx_demo_draw_bin_kind(seed->objects + objectIndex);
         U32 sourceIndex = binStarts[binKind] + binWrites[binKind];
-        visibilitySourceIndices[sourceIndex] = objectIndex;
+        seed->visibilitySourceIndices[sourceIndex] = objectIndex;
         ++binWrites[binKind];
     }
 
-    AppGfxVisibilityBin* transparentBin = visibilityBins + AppGfxDrawBinKind_Transparent;
+    AppGfxVisibilityBin* transparentBin = seed->visibilityBins + AppGfxDrawBinKind_Transparent;
     if (transparentBin->sourceIndexCount != 0u) {
         U32 transparentStart = transparentBin->sourceIndexByteOffset / sizeof(U32);
-        app_gfx_sort_demo_transparent_indices(objects,
-                                              visibilitySourceIndices + transparentStart,
+        app_gfx_sort_demo_transparent_indices(seed->objects,
+                                              seed->visibilitySourceIndices + transparentStart,
                                               transparentBin->sourceIndexCount);
     }
 
     for (U32 binIndex = 0u; binIndex < AppGfxDrawBinKind_COUNT; ++binIndex) {
-        const AppGfxVisibilityBin* bin = visibilityBins + binIndex;
+        const AppGfxVisibilityBin* bin = seed->visibilityBins + binIndex;
         for (U32 groupIndex = 0u; groupIndex < bin->groupCount; ++groupIndex) {
             U32 globalGroupIndex = bin->groupStart + groupIndex;
             U32 sourceIndexOffset = groupIndex * APP_GFX_DEMO_VISIBILITY_THREADS_PER_GROUP;
@@ -1372,7 +1472,7 @@ static B32 app_gfx_seed_demo_renderer_data(APP_Context* ctx) {
                 sourceIndexCount = APP_GFX_DEMO_VISIBILITY_THREADS_PER_GROUP;
             }
 
-            AppGfxVisibilityGroup* group = visibilityGroups + globalGroupIndex;
+            AppGfxVisibilityGroup* group = seed->visibilityGroups + globalGroupIndex;
             group->sourceIndexByteOffset = bin->sourceIndexByteOffset + sourceIndexOffset * sizeof(U32);
             group->sourceIndexCount = sourceIndexCount;
             group->visibleIndexByteOffset = bin->visibleIndexByteOffset;
@@ -1383,23 +1483,33 @@ static B32 app_gfx_seed_demo_renderer_data(APP_Context* ctx) {
             group->_padding3 = 0u;
         }
     }
+}
 
-    state->gfxDemo.renderer.objects = objects;
+static void app_gfx_demo_publish_seed_data(AppCoreState* state, const AppGfxDemoRendererSeedData* seed) {
+    ASSERT_ALWAYS(state != 0);
+    ASSERT_ALWAYS(seed != 0);
+
+    state->gfxDemo.renderer.objects = seed->objects;
     state->gfxDemo.renderer.objectCount = APP_GFX_DEMO_OBJECT_COUNT;
-    state->gfxDemo.renderer.gpuObjects = gpuObjects;
+    state->gfxDemo.renderer.gpuObjects = seed->gpuObjects;
     state->gfxDemo.renderer.gpuObjectCount = APP_GFX_DEMO_OBJECT_COUNT;
-    state->gfxDemo.renderer.gpuCullSources = cullSources;
+    state->gfxDemo.renderer.gpuCullSources = seed->cullSources;
     state->gfxDemo.renderer.gpuCullSourceCount = APP_GFX_DEMO_OBJECT_COUNT;
-    state->gfxDemo.renderer.visibilitySourceIndices = visibilitySourceIndices;
+    state->gfxDemo.renderer.visibilitySourceIndices = seed->visibilitySourceIndices;
     state->gfxDemo.renderer.visibilitySourceIndexCount = APP_GFX_DEMO_OBJECT_COUNT;
-    state->gfxDemo.renderer.visibilityBins = visibilityBins;
+    state->gfxDemo.renderer.visibilityBins = seed->visibilityBins;
     state->gfxDemo.renderer.visibilityBinCount = AppGfxDrawBinKind_COUNT;
-    state->gfxDemo.renderer.visibilityGroups = visibilityGroups;
-    state->gfxDemo.renderer.visibilityGroupCount = visibilityGroupCount;
-    state->gfxDemo.renderer.materialSources = materials;
+    state->gfxDemo.renderer.visibilityGroups = seed->visibilityGroups;
+    state->gfxDemo.renderer.visibilityGroupCount = seed->visibilityGroupCount;
+    state->gfxDemo.renderer.materialSources = seed->materials;
     state->gfxDemo.renderer.materialSourceCount = APP_GFX_DEMO_MATERIAL_COUNT;
     state->gfxDemo.renderer.materialCount = APP_GFX_DEMO_MATERIAL_COUNT;
     state->gfxDemo.renderer.dataVersion = APP_GFX_DEMO_RENDERER_DATA_VERSION;
+}
+
+static void app_gfx_demo_mark_renderer_uploads_dirty(AppCoreState* state) {
+    ASSERT_ALWAYS(state != 0);
+
     state->gfxDemo.upload.objectUploaded = 0;
     state->gfxDemo.upload.objectDirty = 1;
     state->gfxDemo.upload.cullSourceUploaded = 0;
@@ -1412,6 +1522,37 @@ static B32 app_gfx_seed_demo_renderer_data(APP_Context* ctx) {
     state->gfxDemo.upload.visibilityGroupDirty = 1;
     state->gfxDemo.upload.materialSourceUploaded = 0;
     state->gfxDemo.upload.materialSourceDirty = 1;
+}
+
+static B32 app_gfx_seed_demo_renderer_data(APP_Context* ctx) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    AppCoreState* state = ctx->core;
+    if (app_gfx_demo_renderer_data_current(state)) {
+        return 1;
+    }
+
+    AppGfxDemoRendererSeedData seed = {};
+    if (!app_gfx_demo_allocate_seed_base_arrays(state, &seed)) {
+        return 0;
+    }
+
+    app_gfx_demo_clear_seed_base_arrays(&seed);
+    app_gfx_demo_seed_visible_objects(&seed);
+    app_gfx_demo_seed_stress_objects(&seed);
+    app_gfx_demo_seed_material_sources(&seed);
+    app_gfx_demo_derive_gpu_records(&seed);
+
+    U32 binCounts[AppGfxDrawBinKind_COUNT] = {};
+    app_gfx_demo_count_bins(&seed, binCounts, ARRAY_COUNT(binCounts));
+    U32 visibilityGroupCount = app_gfx_demo_count_visibility_groups(binCounts, ARRAY_COUNT(binCounts));
+    if (!app_gfx_demo_allocate_seed_visibility_groups(state, &seed, visibilityGroupCount)) {
+        return 0;
+    }
+    app_gfx_demo_build_visibility_layout(&seed, binCounts, ARRAY_COUNT(binCounts));
+    app_gfx_demo_publish_seed_data(state, &seed);
+    app_gfx_demo_mark_renderer_uploads_dirty(state);
     return 1;
 }
 
@@ -1424,6 +1565,7 @@ static void app_gfx_demo_log_once(AppCoreState* state, U32 bit, const char* mess
     state->gfxDemo.runtime.loadLogMask |= bit;
 }
 
+// Demo GPU resources and uploads
 static void app_gfx_try_create_demo_buffers(APP_Context* ctx) {
     ASSERT_ALWAYS(ctx != 0);
     ASSERT_ALWAYS(ctx->host != 0);
@@ -1765,6 +1907,7 @@ static void app_gfx_upload_demo_visibility_sources(APP_Context* ctx, GfxFrame* f
     }
 }
 
+// Demo pipeline updates
 static void app_gfx_try_update_triangle_pipelines(APP_Context* ctx) {
     ASSERT_ALWAYS(ctx != 0);
     ASSERT_ALWAYS(ctx->host != 0);
@@ -2054,6 +2197,7 @@ static void app_gfx_try_update_demo_gpu_data_pipelines(APP_Context* ctx) {
     }
 }
 
+// Demo texture and material uploads
 static void app_gfx_upload_demo_texture(APP_Context* ctx, GfxFrame* frame) {
     ASSERT_ALWAYS(ctx != 0);
     ASSERT_ALWAYS(ctx->host != 0);
@@ -2229,6 +2373,7 @@ static GfxResourceUse app_gfx_texture_resource_use(GfxTexture texture, U32 acces
     return result;
 }
 
+// Demo pass packet builders
 static B32 app_gfx_build_demo_material_compute_packet(APP_Context* ctx, GfxFrame* frame, AppGfxDemoComputePacket* outPacket) {
     ASSERT_ALWAYS(ctx != 0);
     ASSERT_ALWAYS(ctx->core != 0);
@@ -2583,6 +2728,7 @@ static B32 app_gfx_dispatch_demo_visibility(APP_Context* ctx, GfxCommandBuffer* 
     return 1;
 }
 
+// Demo targets and render bins
 static void app_gfx_destroy_demo_targets(APP_Context* ctx) {
     ASSERT_ALWAYS(ctx != 0);
     ASSERT_ALWAYS(ctx->core != 0);
@@ -2949,23 +3095,30 @@ static B32 app_gfx_build_demo_render_packet(APP_Context* ctx,
     return 1;
 }
 
-static void app_gfx_demo_shutdown(APP_Context* ctx) {
+// Demo frame and shutdown
+static void app_gfx_demo_destroy_pipeline_state(GfxDevice* device, AppGfxDemoPipelineState* pipelines) {
+    ASSERT_ALWAYS(pipelines != 0);
+
+    if (device != 0) {
+        gfx_destroy_pipeline(device, pipelines->triangleOpaque);
+        gfx_destroy_pipeline(device, pipelines->triangleTransparent);
+        gfx_destroy_pipeline(device, pipelines->materialCompute);
+        gfx_destroy_pipeline(device, pipelines->cullBoundsCompute);
+        gfx_destroy_pipeline(device, pipelines->visibilityCountCompute);
+        gfx_destroy_pipeline(device, pipelines->visibilityPrefixCompute);
+        gfx_destroy_pipeline(device, pipelines->visibilityCompactCompute);
+    }
+
+    *pipelines = {};
+}
+
+static void app_gfx_demo_destroy_gpu_resources(APP_Context* ctx) {
     ASSERT_ALWAYS(ctx != 0);
     ASSERT_ALWAYS(ctx->core != 0);
 
     AppCoreState* state = ctx->core;
     GfxDevice* device = ctx->host ? ctx->host->gfxDevice : 0;
-    app_resource_cache_shutdown(ctx);
-
     if (device != 0) {
-        app_gfx_destroy_demo_targets(ctx);
-        gfx_destroy_pipeline(device, state->gfxDemo.pipelines.triangleOpaque);
-        gfx_destroy_pipeline(device, state->gfxDemo.pipelines.triangleTransparent);
-        gfx_destroy_pipeline(device, state->gfxDemo.pipelines.materialCompute);
-        gfx_destroy_pipeline(device, state->gfxDemo.pipelines.cullBoundsCompute);
-        gfx_destroy_pipeline(device, state->gfxDemo.pipelines.visibilityCountCompute);
-        gfx_destroy_pipeline(device, state->gfxDemo.pipelines.visibilityPrefixCompute);
-        gfx_destroy_pipeline(device, state->gfxDemo.pipelines.visibilityCompactCompute);
         gfx_destroy_buffer(device, state->gfxDemo.gpu.triangleIndexBuffer);
         gfx_destroy_buffer(device, state->gfxDemo.gpu.triangleVertexBuffer);
         gfx_destroy_buffer(device, state->gfxDemo.gpu.objectBuffer);
@@ -2984,95 +3137,43 @@ static void app_gfx_demo_shutdown(APP_Context* ctx) {
         gfx_destroy_texture(device, state->gfxDemo.gpu.texture);
     }
 
-    state->gfxDemo.pipelines.triangleOpaque = {};
-    state->gfxDemo.pipelines.triangleTransparent = {};
-    state->gfxDemo.pipelines.materialCompute = {};
-    state->gfxDemo.pipelines.cullBoundsCompute = {};
-    state->gfxDemo.pipelines.visibilityCountCompute = {};
-    state->gfxDemo.pipelines.visibilityPrefixCompute = {};
-    state->gfxDemo.pipelines.visibilityCompactCompute = {};
-    state->gfxDemo.gpu.triangleIndexBuffer = {};
-    state->gfxDemo.gpu.triangleVertexBuffer = {};
-    state->gfxDemo.gpu.triangleVertexBufferId = {};
-    state->gfxDemo.gpu.objectBuffer = {};
-    state->gfxDemo.gpu.objectBufferId = {};
-    state->gfxDemo.gpu.cullSourceBuffer = {};
-    state->gfxDemo.gpu.cullSourceBufferId = {};
-    state->gfxDemo.gpu.cullObjectBuffer = {};
-    state->gfxDemo.gpu.cullObjectBufferId = {};
-    state->gfxDemo.renderer.objects = 0;
-    state->gfxDemo.renderer.objectCount = 0u;
-    state->gfxDemo.renderer.gpuObjects = 0;
-    state->gfxDemo.renderer.gpuObjectCount = 0u;
-    state->gfxDemo.renderer.gpuCullSources = 0;
-    state->gfxDemo.renderer.gpuCullSourceCount = 0u;
-    state->gfxDemo.renderer.visibilitySourceIndices = 0;
-    state->gfxDemo.renderer.visibilitySourceIndexCount = 0u;
-    state->gfxDemo.renderer.visibilityBins = 0;
-    state->gfxDemo.renderer.visibilityBinCount = 0u;
-    state->gfxDemo.renderer.visibilityGroups = 0;
-    state->gfxDemo.renderer.visibilityGroupCount = 0u;
-    state->gfxDemo.renderer.materialSources = 0;
-    state->gfxDemo.renderer.materialSourceCount = 0u;
-    state->gfxDemo.gpu.materialSourceBuffer = {};
-    state->gfxDemo.gpu.materialSourceBufferId = {};
-    state->gfxDemo.gpu.materialBuffer = {};
-    state->gfxDemo.gpu.materialBufferId = {};
-    state->gfxDemo.gpu.visibilitySourceIndexBuffer = {};
-    state->gfxDemo.gpu.visibilitySourceIndexBufferId = {};
-    state->gfxDemo.gpu.visibilityBinBuffer = {};
-    state->gfxDemo.gpu.visibilityBinBufferId = {};
-    state->gfxDemo.gpu.visibilityGroupBuffer = {};
-    state->gfxDemo.gpu.visibilityGroupBufferId = {};
-    state->gfxDemo.gpu.visibilityGroupCountBuffer = {};
-    state->gfxDemo.gpu.visibilityGroupCountBufferId = {};
-    state->gfxDemo.gpu.visibilityGroupOffsetBuffer = {};
-    state->gfxDemo.gpu.visibilityGroupOffsetBufferId = {};
-    state->gfxDemo.gpu.visibleIndexBuffer = {};
-    state->gfxDemo.gpu.visibleIndexBufferId = {};
-    state->gfxDemo.gpu.indirectArgsBuffer = {};
-    state->gfxDemo.gpu.indirectArgsBufferId = {};
-    state->gfxDemo.gpu.texture = {};
-    state->gfxDemo.gpu.offscreenColor = {};
-    state->gfxDemo.gpu.depth = {};
-    state->gfxDemo.gpu.sampler = {};
-    state->gfxDemo.gpu.textureId = {};
-    state->gfxDemo.gpu.samplerId = {};
-    state->gfxDemo.gpu.targetWidth = 0u;
-    state->gfxDemo.gpu.targetHeight = 0u;
-    state->gfxDemo.renderer.dataVersion = 0u;
-    state->gfxDemo.renderer.materialCount = 0u;
-    state->gfxDemo.upload.materialSourceUploaded = 0;
-    state->gfxDemo.upload.materialSourceDirty = 0;
-    state->gfxDemo.upload.textureUploaded = 0;
-    state->gfxDemo.upload.materialsReady = 0;
-    state->gfxDemo.upload.materialDirty = 0;
-    state->gfxDemo.upload.objectUploaded = 0;
-    state->gfxDemo.upload.objectDirty = 0;
-    state->gfxDemo.upload.cullSourceUploaded = 0;
-    state->gfxDemo.upload.cullSourceDirty = 0;
-    state->gfxDemo.upload.visibilitySourceUploaded = 0;
-    state->gfxDemo.upload.visibilitySourceDirty = 0;
-    state->gfxDemo.upload.visibilityBinUploaded = 0;
-    state->gfxDemo.upload.visibilityBinDirty = 0;
-    state->gfxDemo.upload.visibilityGroupUploaded = 0;
-    state->gfxDemo.upload.visibilityGroupDirty = 0;
-    state->gfxDemo.pipelines.triangleOpaqueArtifactKey = ARTIFACT_KEY_ZERO;
-    state->gfxDemo.pipelines.triangleTransparentArtifactKey = ARTIFACT_KEY_ZERO;
-    state->gfxDemo.pipelines.materialComputeArtifactKey = ARTIFACT_KEY_ZERO;
-    state->gfxDemo.pipelines.cullBoundsComputeArtifactKey = ARTIFACT_KEY_ZERO;
-    state->gfxDemo.pipelines.visibilityCountComputeArtifactKey = ARTIFACT_KEY_ZERO;
-    state->gfxDemo.pipelines.visibilityPrefixComputeArtifactKey = ARTIFACT_KEY_ZERO;
-    state->gfxDemo.pipelines.visibilityCompactComputeArtifactKey = ARTIFACT_KEY_ZERO;
-    state->gfxDemo.upload.textureDecodeArtifactKey = ARTIFACT_KEY_ZERO;
-    state->gfxDemo.upload.decodedTextureHash = CONTENT_HASH_ZERO;
-    state->gfxDemo.upload.textureGeneration = 0u;
-    state->gfxDemo.upload.textureFailedGeneration = 0u;
-    state->gfxDemo.runtime.geometryCreated = 0;
-    state->gfxDemo.runtime.geometryUploaded = 0;
-    state->gfxDemo.runtime.ready = 0;
-    state->gfxDemo.runtime.loadLogMask = 0u;
-    state->gfxDemo.runtime.initialized = 0;
+    state->gfxDemo.gpu = {};
+}
+
+static void app_gfx_demo_clear_renderer_data(AppGfxDemoRendererData* renderer) {
+    ASSERT_ALWAYS(renderer != 0);
+
+    *renderer = {};
+}
+
+static void app_gfx_demo_clear_upload_state(AppGfxDemoUploadState* upload) {
+    ASSERT_ALWAYS(upload != 0);
+
+    *upload = {};
+}
+
+static void app_gfx_demo_clear_runtime_state(AppGfxDemoRuntimeState* runtime) {
+    ASSERT_ALWAYS(runtime != 0);
+
+    *runtime = {};
+}
+
+static void app_gfx_demo_shutdown(APP_Context* ctx) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    AppCoreState* state = ctx->core;
+    GfxDevice* device = ctx->host ? ctx->host->gfxDevice : 0;
+    app_resource_cache_shutdown(ctx);
+
+    if (device != 0) {
+        app_gfx_destroy_demo_targets(ctx);
+    }
+    app_gfx_demo_destroy_pipeline_state(device, &state->gfxDemo.pipelines);
+    app_gfx_demo_destroy_gpu_resources(ctx);
+    app_gfx_demo_clear_renderer_data(&state->gfxDemo.renderer);
+    app_gfx_demo_clear_upload_state(&state->gfxDemo.upload);
+    app_gfx_demo_clear_runtime_state(&state->gfxDemo.runtime);
 }
 
 static void app_gfx_demo_frame(APP_Context* ctx, F32 deltaSeconds) {
