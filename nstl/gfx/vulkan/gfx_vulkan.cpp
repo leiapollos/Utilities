@@ -1954,9 +1954,13 @@ B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDe
         VkPhysicalDeviceVulkan13Features vulkan13Features = {};
         vulkan13Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
 
+        VkPhysicalDeviceVulkan11Features vulkan11Features = {};
+        vulkan11Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+        vulkan11Features.pNext = &vulkan13Features;
+
         VkPhysicalDeviceDescriptorIndexingFeatures descriptorIndexingFeatures = {};
         descriptorIndexingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
-        descriptorIndexingFeatures.pNext = &vulkan13Features;
+        descriptorIndexingFeatures.pNext = &vulkan11Features;
 
         VkPhysicalDeviceFeatures2 features = {};
         features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
@@ -1964,6 +1968,7 @@ B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDe
         vkGetPhysicalDeviceFeatures2(physicalDevices[deviceIndex], &features);
         if (!vulkan13Features.dynamicRendering ||
             !vulkan13Features.synchronization2 ||
+            !vulkan11Features.shaderDrawParameters ||
             !descriptorIndexingFeatures.descriptorBindingSampledImageUpdateAfterBind ||
             !descriptorIndexingFeatures.descriptorBindingStorageBufferUpdateAfterBind ||
             !descriptorIndexingFeatures.descriptorBindingUpdateUnusedWhilePending) {
@@ -1990,7 +1995,7 @@ B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDe
         }
     }
     if (!device->physicalDevice) {
-        LOG_ERROR("gfx", "No Vulkan 1.3 device with graphics/present queue, dynamicRendering, synchronization2, and descriptor update-after-bind support");
+        LOG_ERROR("gfx", "No Vulkan 1.3 device with graphics/present queue, dynamicRendering, synchronization2, shaderDrawParameters, and descriptor update-after-bind support");
         gfx_device_destroy(device);
         return 0;
     }
@@ -2008,9 +2013,14 @@ B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDe
     vulkan13Features.dynamicRendering = VK_TRUE;
     vulkan13Features.synchronization2 = VK_TRUE;
 
+    VkPhysicalDeviceVulkan11Features vulkan11Features = {};
+    vulkan11Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+    vulkan11Features.pNext = &vulkan13Features;
+    vulkan11Features.shaderDrawParameters = VK_TRUE;
+
     VkPhysicalDeviceDescriptorIndexingFeatures descriptorIndexingFeatures = {};
     descriptorIndexingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
-    descriptorIndexingFeatures.pNext = &vulkan13Features;
+    descriptorIndexingFeatures.pNext = &vulkan11Features;
     descriptorIndexingFeatures.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
     descriptorIndexingFeatures.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
     descriptorIndexingFeatures.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
@@ -2294,14 +2304,28 @@ GfxTexture gfx_create_texture(GfxDevice* device, const GfxTextureDesc* desc) {
 
     VkMemoryRequirements requirements = {};
     vkGetImageMemoryRequirements(device->device, image, &requirements);
-    VkMemoryPropertyFlags memoryProperties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    VkMemoryPropertyFlags requiredMemoryProperties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    VkMemoryPropertyFlags preferredMemoryProperties = requiredMemoryProperties;
     if (gfx_texture_is_transient_storage_kind(desc->storageKind)) {
-        memoryProperties |= VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
+        preferredMemoryProperties |= VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
     }
-    U32 memoryType = gfx_vulkan_find_memory_type(device, requirements.memoryTypeBits, memoryProperties);
+    U32 memoryType = gfx_vulkan_find_memory_type(device, requirements.memoryTypeBits, preferredMemoryProperties);
+    if (memoryType == 0xffffffffu && preferredMemoryProperties != requiredMemoryProperties) {
+        memoryType = gfx_vulkan_find_memory_type(device, requirements.memoryTypeBits, requiredMemoryProperties);
+    }
     if (memoryType == 0xffffffffu) {
         if (gfx_vulkan_api_validation_enabled(device)) {
-            LOG_ERROR("gfx", "No compatible Vulkan texture memory type");
+            LOG_ERROR("gfx",
+                      "No compatible Vulkan texture memory type (name='{}', format={}, size={}x{}, usage=0x{:x}, storageKind={}, memoryTypeBits=0x{:x}, requiredProperties=0x{:x}, preferredProperties=0x{:x})",
+                      desc->name ? desc->name : "",
+                      (U32)desc->format,
+                      desc->width,
+                      desc->height,
+                      desc->usageFlags,
+                      (U32)desc->storageKind,
+                      requirements.memoryTypeBits,
+                      (U32)requiredMemoryProperties,
+                      (U32)preferredMemoryProperties);
         }
         vkDestroyImage(device->device, image, 0);
         return {};

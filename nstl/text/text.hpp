@@ -62,8 +62,8 @@ struct TextDrawData {
     B32 atlasOverflow;
 };
 
-B32 text_context_create(const TextContextDesc* desc, TextContext** outText);
-void text_context_destroy(TextContext* text);
+UTILITIES_SHARED_API B32 text_context_create(const TextContextDesc* desc, TextContext** outText);
+UTILITIES_SHARED_API void text_context_destroy(TextContext* text);
 
-TextFont text_font_load_memory(TextContext* text, const TextFontDesc* desc);
-TextDrawData text_prepare_draw(TextContext* text, Arena* frameArena, const TextDrawDesc* desc);
+UTILITIES_SHARED_API TextFont text_font_load_memory(TextContext* text, const TextFontDesc* desc);
+UTILITIES_SHARED_API TextDrawData text_prepare_draw(TextContext* text, Arena* frameArena, const TextDrawDesc* desc);

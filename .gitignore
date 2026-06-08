@@ -31,6 +31,10 @@ x86/
 [Aa][Rr][Mm]64/
 bld/
 [Bb]in/
+!third_party/slang/
+!third_party/slang/bin/
+!third_party/slang/bin/win64/
+!third_party/slang/bin/win64/**
 [Oo]bj/
 [Ll]og/
 [Ll]ogs/
