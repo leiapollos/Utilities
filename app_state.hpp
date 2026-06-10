@@ -61,6 +61,8 @@ struct AppRender2DState {
     U32 loadLogMask;
 };
 
+struct AppCoreState;
+
 #define APP_WORLD_MAX_RENDERABLES 16384u
 #define APP_WORLD_MAX_MESHES 8u
 #define APP_WORLD_MAX_MATERIALS 16u
@@ -83,9 +85,20 @@ struct AppWorldMesh {
     U32 indexCount;
     U32 firstIndex;
     U32 baseVertex;
+    GfxBuffer vertexBuffer;
+    GfxResourceId vertexBufferId;
+    U32 vertexByteOffset;
+    GfxBuffer indexBuffer;
+    U32 indexByteOffset;
+    B32 ownsBuffers;
     Vec3F32 boundsCenter;
     Vec3F32 boundsExtents;
     F32 boundsRadius;
+};
+
+struct AppWorldArtifactBridge {
+    GfxDevice* device;
+    AppCoreState* state;
 };
 
 struct AppWorldState {
@@ -128,6 +141,21 @@ struct AppWorldState {
     GfxPipeline computePipelines[5];
 
     AppWorldMeshHandle builtinMeshes[3];
+
+    GfxSampler worldSampler;
+    GfxResourceId worldSamplerId;
+    ShdWorldMaterialRecord materialRecords[APP_WORLD_MAX_MATERIALS];
+    B32 meshRecordsDirty;
+    B32 materialsDirty;
+
+    GfxTexture assetTextures[APP_WORLD_MAX_MESHES];
+    U32 assetTextureCount;
+
+    FileHandle duckMeshFile;
+    FileHandle duckTextureFile;
+    AppWorldMeshHandle duckMesh;
+    B32 duckTextureReady;
+    AppWorldArtifactBridge artifactBridge;
 
     ShdWorldFrameRecord frameRecord;
     ShdWorldRenderableRecord* renderables;

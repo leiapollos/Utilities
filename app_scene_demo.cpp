@@ -64,6 +64,18 @@ static void app_demo_scene_submit(APP_Context* ctx, AppRendererFrame* rendererFr
             AppWorldMeshHandle mesh = ((cellSeed & 3u) == 0u) ? world->builtinMeshes[1]
                                                               : world->builtinMeshes[0];
             U32 lane = cellSeed % 11u;
+            if (lane == 9u && world->duckMesh.generation != 0u) {
+                F32 halfSide = (F32)(side - 1u) * 0.5f;
+                Mat4x4F32 duckTransform = mat4_scale(app_world_vec3_(0.012f, 0.012f, 0.012f));
+                QuatF32 duckSpin = quat_from_axis_angle(app_world_vec3_(0.0f, 1.0f, 0.0f),
+                                                        (F32)cellSeed * 0.7f);
+                duckTransform = duckTransform * quat_to_mat4(duckSpin);
+                duckTransform = duckTransform * mat4_translate(app_world_vec3_(
+                    ((F32)x - halfSide) * APP_SCENE_GRID_SPACING, 0.0f,
+                    ((F32)z - halfSide) * APP_SCENE_GRID_SPACING));
+                app_world_push(ctx, world->duckMesh, 9u, AppWorldBin_Opaque, &duckTransform);
+                continue;
+            }
             if (lane == 3u) {
                 app_world_push(ctx, world->builtinMeshes[0], 6u, AppWorldBin_AlphaTest, &transform);
             } else if (lane == 5u || lane == 7u) {

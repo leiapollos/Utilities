@@ -2,7 +2,7 @@
 // Created by André Leite on 31/10/2025.
 //
 
-#define APP_CORE_STATE_VERSION 56u
+#define APP_CORE_STATE_VERSION 57u
 
 #if defined(PLATFORM_BUILD_DEBUG)
 #define APP_GFX_DEV_SHADER_SOURCE_ENTRY(name, source) source,
@@ -86,6 +86,7 @@ static void app_frame(AppHost* host, HOT_StateStore* store, const AppInput* inpu
 
     APP_Context ctx = {};
     if (!app_context_from_call(host, store, &ctx)) {
+        LOG_ERROR("app", "frame context resolve failed");
         return;
     }
 

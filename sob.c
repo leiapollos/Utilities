@@ -89,6 +89,7 @@ typedef enum BuildTarget {
     BuildTarget_Ship,
     BuildTarget_Metagen,
     BuildTarget_Shaders,
+    BuildTarget_Cook,
     BuildTarget_Clean,
 } BuildTarget;
 
@@ -104,6 +105,7 @@ static void print_usage(void) {
     printf("  ship     Build one executable with app statically linked\n");
     printf("  metagen  Build metagen and regenerate metadata\n");
     printf("  shaders  Build reloadable shader artifacts\n");
+    printf("  cook     Build the asset cooker and cook app/assets/src\n");
     printf("  clean    Remove build artifacts\n");
     printf("\n");
     printf("Modes:\n");
@@ -166,6 +168,10 @@ static int parse_target(const char* value, BuildTarget* outTarget) {
         *outTarget = BuildTarget_Metagen;
         return 1;
     }
+    if (strcmp(value, "cook") == 0) {
+        *outTarget = BuildTarget_Cook;
+        return 1;
+    }
     if (strcmp(value, "shaders") == 0) {
         *outTarget = BuildTarget_Shaders;
         return 1;
@@ -200,6 +206,9 @@ static const char* build_target_name(BuildTarget target) {
     }
     if (target == BuildTarget_Metagen) {
         return "metagen";
+    }
+    if (target == BuildTarget_Cook) {
+        return "cook";
     }
     if (target == BuildTarget_Shaders) {
         return "shaders";
@@ -1319,6 +1328,92 @@ static S32 build_and_run_metagen(BuildMode mode) {
     return run_metagen_command();
 }
 
+#define COOKER_EXE_BASENAME "cooker"
+#if SOB_WINDOWS
+#define COOKER_RUN_PATH BUILD_DIR "\\tools\\" COOKER_EXE_BASENAME ".exe"
+#else
+#define COOKER_RUN_PATH BUILD_DIR "/tools/" COOKER_EXE_BASENAME
+#endif
+
+static const char* COOK_ASSET_SOURCES[] = {
+    "app/assets/src/Duck.glb",
+};
+
+static S32 build_and_run_cooker(BuildMode mode) {
+    if (sob_fs_mkdir_p(BUILD_TOOLS_DIR) != 0 && !sob_fs_is_dir(BUILD_TOOLS_DIR)) {
+        fprintf(stderr, "Error: failed to create '%s'\n", BUILD_TOOLS_DIR);
+        return 1;
+    }
+    if (sob_fs_mkdir_p("app/assets/cooked") != 0 && !sob_fs_is_dir("app/assets/cooked")) {
+        fprintf(stderr, "Error: failed to create 'app/assets/cooked'\n");
+        return 1;
+    }
+
+    Sob_Arena* arena = sob_arena_create();
+    if (!arena) {
+        return 1;
+    }
+    Sob_BuildContext* ctx = sob_build_create(arena);
+    if (!ctx) {
+        sob_arena_destroy(arena);
+        return 1;
+    }
+
+    configure_compiler_for_mode(ctx, mode);
+
+    Sob_Target* cooker = sob_target_create(ctx, "cooker", Sob_TargetKind_Executable,
+                                           .outputDir = BUILD_TOOLS_DIR,
+                                           .outputName = COOKER_EXE_BASENAME);
+    if (!cooker) {
+        sob_arena_destroy(arena);
+        return 1;
+    }
+    sob_target_add_source(cooker, "cooker/cooker_main.cpp");
+    sob_target_add_include(cooker, "meta");
+    sob_target_add_include(cooker, ".");
+    sob_target_set_standard(cooker, Sob_Standard_Cpp20);
+    apply_cpp_runtime_flags(cooker);
+#if !SOB_WINDOWS
+    sob_target_add_cflags(cooker, "-pthread");
+    sob_target_add_ldflags(cooker, "-pthread");
+#endif
+    apply_metagen_warning_flags(cooker);
+    apply_third_party_warning_flags(cooker);
+    apply_mode_target_flags(cooker, mode);
+#if !SOB_WINDOWS
+    sob_target_add_cflags(cooker, "-O2");
+#endif
+
+    printf("==> Building cooker (%s)...\n", build_mode_name(mode));
+    S32 buildResult = sob_build_run(ctx);
+    sob_arena_destroy(arena);
+    if (buildResult != 0) {
+        return buildResult;
+    }
+
+    for (S32 i = 0; i < (S32)(sizeof(COOK_ASSET_SOURCES) / sizeof(COOK_ASSET_SOURCES[0])); ++i) {
+        Sob_Arena* cmdArena = sob_arena_create();
+        if (!cmdArena) {
+            return 1;
+        }
+        Sob_Cmd* cmd = sob_cmd_create(cmdArena);
+        if (!cmd) {
+            sob_arena_destroy(cmdArena);
+            return 1;
+        }
+        sob_cmd_append(cmd, COOKER_RUN_PATH);
+        sob_cmd_append(cmd, COOK_ASSET_SOURCES[i]);
+        sob_cmd_append(cmd, "app/assets/cooked");
+        printf("==> Cooking %s...\n", COOK_ASSET_SOURCES[i]);
+        S32 result = sob_cmd_run(cmd);
+        sob_arena_destroy(cmdArena);
+        if (result != 0) {
+            return result;
+        }
+    }
+    return 0;
+}
+
 static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
     Sob_Arena* arena = sob_arena_create();
     if (!arena) {
@@ -1326,6 +1421,10 @@ static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
         return 1;
     }
 
+    if (requestedTarget == BuildTarget_Cook) {
+        sob_arena_destroy(arena);
+        return build_and_run_cooker(mode);
+    }
     if (requestedTarget == BuildTarget_Shaders) {
         S32 shaderResult = build_slang_shaders(arena);
         sob_arena_destroy(arena);

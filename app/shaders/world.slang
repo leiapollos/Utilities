@@ -4,6 +4,7 @@
 #if GFX_SHADER_STAGE_GRAPHICS
 
 static const uint WORLD_MATERIAL_FLAG_ALPHA_TEST = 1u;
+static const uint WORLD_MATERIAL_FLAG_TEXTURED = 2u;
 
 // transform arrays are column-major: flat index = column * 4 + row.
 float4 world_mul_point(float m[16], float3 p) {
@@ -72,6 +73,9 @@ float4 world_fragment(WorldVertexOut input) : SV_Target0 {
     float lighting = 0.25 + 0.75 * diffuse;
 
     float4 baseColor = float4(material.baseColor[0], material.baseColor[1], material.baseColor[2], material.baseColor[3]);
+    if ((material.flags & WORLD_MATERIAL_FLAG_TEXTURED) != 0u) {
+        baseColor *= gfx_sample_texture2d(material.textureIndex, material.samplerIndex, input.uv);
+    }
     return float4(baseColor.rgb * lighting, baseColor.a);
 }
 

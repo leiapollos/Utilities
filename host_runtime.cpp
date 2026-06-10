@@ -264,6 +264,30 @@ static B32 host_init(HostState* state) {
     LOG_INFO("host", "Allocated program memory (perm={} bytes, trans={} bytes)",
              state->storage.permanentSize, state->storage.transientSize);
 
+    {
+        // Sweep legacy module copies from crashed or killed sessions; unlink
+        // is safe even if another process still maps one.
+        Temp scratch = get_scratch(0, 0);
+        if (scratch.arena) {
+            for (U32 staleIndex = 1u; staleIndex <= 64u; ++staleIndex) {
+#if defined(PLATFORM_OS_WINDOWS)
+                StringU8 staleSuffix = str8(".dll");
+#else
+                StringU8 staleSuffix = str8(".dylib");
+#endif
+                StringU8 staleRelative = str8_concat(scratch.arena,
+                                                     str8("hot/utilities_app_loaded_"),
+                                                     str8_from_U64(scratch.arena, staleIndex, 10),
+                                                     staleSuffix);
+                StringU8 stalePath = host_build_module_path(staleRelative, scratch.arena);
+                if (stalePath.data && stalePath.size > 0) {
+                    host_delete_file(stalePath);
+                }
+            }
+            temp_end(&scratch);
+        }
+    }
+
     state->sourceTimestamp = host_get_newest_module_input_timestamp();
     state->restartRequiredTimestamp = host_get_newest_restart_required_input_timestamp(0);
 
@@ -537,8 +561,28 @@ static B32 host_copy_file(StringU8 srcPath, StringU8 dstPath) {
         return 0;
     }
 
-    if (OS_file_copy_contents((const char*) srcPath.data, (const char*) dstPath.data)) {
-        return 1;
+    // Copy through a temp file and rename so the published name always gets a
+    // fresh inode; rewriting a dylib in place while another process maps it
+    // trips the kernel code-sign cache (CODESIGNING / Invalid Page).
+    Temp scratch = get_scratch(0, 0);
+    if (!scratch.arena) {
+        return 0;
+    }
+    DEFER_REF(temp_end(&scratch));
+    StringU8 tempPath = str8_concat(scratch.arena, dstPath, str8(".tmp"));
+
+    if (OS_file_copy_contents((const char*) srcPath.data, (const char*) tempPath.data)) {
+#if defined(PLATFORM_OS_WINDOWS)
+        if (MoveFileExA((const char*) tempPath.data, (const char*) dstPath.data,
+                        MOVEFILE_REPLACE_EXISTING)) {
+            return 1;
+        }
+#else
+        if (rename((const char*) tempPath.data, (const char*) dstPath.data) == 0) {
+            return 1;
+        }
+#endif
+        host_delete_file(tempPath);
     }
 
     int errorCode = errno;
@@ -659,8 +703,15 @@ static B32 host_load_candidate(HostState* state, LoadedModule* outModule, String
 #else
     StringU8 moduleSuffix = str8(".dylib");
 #endif
+#if defined(PLATFORM_OS_WINDOWS)
+    U64 processId = (U64)GetCurrentProcessId();
+#else
+    U64 processId = (U64)getpid();
+#endif
     StringU8 loadPathRelative = str8_concat(arena,
                                             str8("hot/utilities_app_loaded_"),
+                                            str8_from_U64(arena, processId, 10),
+                                            str8("_"),
                                             str8_from_U64(arena, state->moduleGeneration, 10),
                                             moduleSuffix);
     if (!loadPathRelative.data || loadPathRelative.size == 0) {
