@@ -6,6 +6,7 @@
 #include "nstl/artifact/artifact_include.hpp"
 #include "nstl/text/text_include.hpp"
 #include "nstl/draw2d/draw2d_include.hpp"
+#include "nstl/ui/ui_include.hpp"
 #include "app_state.hpp"
 #include "app_renderer.hpp"
 #include "app_debug_draw.hpp"

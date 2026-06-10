@@ -61,6 +61,14 @@ struct AppRender2DState {
     U32 loadLogMask;
 };
 
+struct AppDemoState {
+    U8 titleBuffer[128];
+    U32 titleLength;
+    F32 titleSize;
+    B32 showClipDemo;
+    B32 showMarker;
+};
+
 struct AppCoreState {
     U32 windowWidth;
     U32 windowHeight;
@@ -68,6 +76,9 @@ struct AppCoreState {
     U32 reloadCount;
     F32 lastDeltaSeconds;
     F32 averageDeltaSeconds;
+    F32 lastWorkSeconds;
+    F32 averageWorkSeconds;
+    F32 lastSleepSeconds;
     B32 debugOverlayVisible;
 
     JobSystem* jobSystem;
@@ -76,6 +87,8 @@ struct AppCoreState {
     AppResourceState resources;
     AppGfxShaderBuildState gfxShaderBuild;
     AppRender2DState render2d;
+    AppDemoState demo;
+    UI_State ui;
 };
 
 struct APP_Context {

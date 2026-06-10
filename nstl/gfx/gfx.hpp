@@ -411,6 +411,8 @@ struct GfxStats {
     U32 stagingOverflowCount;
     U64 stagingBytesUsed;
     U64 frameIndex;
+    F32 gpuWaitMs;
+    F32 acquireWaitMs;
     // most recently completed frame, submission order, GpuTimings flag only
     F32 passGpuMs[GFX_MAX_TIMED_PASSES];
     U32 passGpuCount;

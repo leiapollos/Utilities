@@ -556,7 +556,19 @@ static void app_renderer_submit_text(APP_Context* ctx, AppRendererFrame* rendere
             app_renderer_upload_atlas(ctx, rendererFrame->frame, drawData->uploads + uploadIndex);
         }
     }
-    draw2d_glyph_quads(&ctx->core->render2d.draw2d, layer, (const Draw2DQuad*)drawData->quads, drawData->quadCount);
+    draw2d_glyph_quads(&ctx->core->render2d.draw2d, layer, (const Draw2DQuad*)drawData->quads, drawData->quadCount, 0.0f, 0.0f);
+}
+
+static void app_renderer_apply_text_uploads(APP_Context* ctx, AppRendererFrame* rendererFrame, const TextAtlasUpload* uploads, U32 uploadCount) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    if (rendererFrame == 0 || uploads == 0 || !ctx->core->render2d.gpuResourcesCreated) {
+        return;
+    }
+    for (U32 uploadIndex = 0u; uploadIndex < uploadCount; ++uploadIndex) {
+        app_renderer_upload_atlas(ctx, rendererFrame->frame, uploads + uploadIndex);
+    }
 }
 
 static void app_renderer_end_frame(APP_Context* ctx, AppRendererFrame* rendererFrame) {

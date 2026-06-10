@@ -2,7 +2,7 @@
 // Created by André Leite on 31/10/2025.
 //
 
-#define APP_CORE_STATE_VERSION 50u
+#define APP_CORE_STATE_VERSION 53u
 
 #if defined(PLATFORM_BUILD_DEBUG)
 #define APP_GFX_DEV_SHADER_SOURCE_ENTRY(name, source) source,
@@ -29,7 +29,8 @@ static ArtifactKey app_artifact_key_from_content(const char* label, ContentHash 
 static ContentHash app_content_hash_from_value(ArtifactValue value);
 static ArtifactValue app_content_hash_to_value(ContentHash hash);
 static void app_demo_scene_submit(APP_Context* ctx, AppRendererFrame* rendererFrame);
-static void app_debug_overlay_submit(APP_Context* ctx, AppRendererFrame* rendererFrame);
+static void app_demo_state_reset(AppDemoState* demo);
+static void app_ui_panels_submit(APP_Context* ctx, AppRendererFrame* rendererFrame, const AppInput* input);
 #if defined(PLATFORM_BUILD_DEBUG)
 static U64 app_gfx_newest_shader_source_timestamp(void);
 static void app_gfx_try_build_dev_shaders(APP_Context* ctx);
@@ -93,6 +94,7 @@ static void app_frame(AppHost* host, HOT_StateStore* store, const AppInput* inpu
     state->windowHeight = host->windowHeight;
     state->frameCounter += 1ull;
     state->lastDeltaSeconds = input->deltaSeconds;
+    state->lastSleepSeconds = input->sleepSeconds;
     state->averageDeltaSeconds = (state->averageDeltaSeconds <= 0.0f)
         ? input->deltaSeconds
         : state->averageDeltaSeconds * 0.95f + input->deltaSeconds * 0.05f;
@@ -102,7 +104,8 @@ static void app_frame(AppHost* host, HOT_StateStore* store, const AppInput* inpu
 
         if (event->tag == OS_GraphicsEvent_Tag_KeyDown &&
             event->keyDown.keyCode == OS_KeyCode_Escape &&
-            !event->keyDown.isRepeat) {
+            !event->keyDown.isRepeat &&
+            !state->ui.wantKeyboard) {
             host->shouldQuit = 1;
         }
         if (event->tag == OS_GraphicsEvent_Tag_KeyDown &&
@@ -112,12 +115,20 @@ static void app_frame(AppHost* host, HOT_StateStore* store, const AppInput* inpu
         }
     }
 
+    U64 workStartNs = OS_get_time_nanoseconds();
     AppRendererFrame* rendererFrame = app_renderer_begin_frame(&ctx);
     if (rendererFrame) {
         app_demo_scene_submit(&ctx, rendererFrame);
-        app_debug_overlay_submit(&ctx, rendererFrame);
+        app_ui_panels_submit(&ctx, rendererFrame, input);
         app_renderer_end_frame(&ctx, rendererFrame);
     }
+    U64 workEndNs = OS_get_time_nanoseconds();
+
+    F32 workSeconds = (F32)((F64)(workEndNs - workStartNs) / 1.0e9);
+    state->lastWorkSeconds = workSeconds;
+    state->averageWorkSeconds = (state->averageWorkSeconds <= 0.0f)
+        ? workSeconds
+        : state->averageWorkSeconds * 0.95f + workSeconds * 0.05f;
 }
 
 static void app_shutdown(AppHost* host, HOT_StateStore* store) {
@@ -394,6 +405,7 @@ static void app_state_init(APP_Context* ctx, APP_StateKind kind, void* memory) {
             core->windowWidth = ctx->host->windowWidth;
             core->windowHeight = ctx->host->windowHeight;
             core->debugOverlayVisible = 1;
+            app_demo_state_reset(&core->demo);
 
             StringU8 eventsDomain = str8((const char*) "events", 6);
             set_log_domain_level(eventsDomain, LogLevel_Debug);

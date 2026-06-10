@@ -212,13 +212,17 @@ void draw2d_box(Draw2DContext* ctx, Draw2DLayer layer, F32 minX, F32 minY, F32 m
     draw2d_append_solid(ctx, layer, maxX - thickness, minY + thickness, maxX, maxY - thickness, rgba8);
 }
 
-void draw2d_glyph_quads(Draw2DContext* ctx, Draw2DLayer layer, const Draw2DQuad* quads, U32 count) {
+void draw2d_glyph_quads(Draw2DContext* ctx, Draw2DLayer layer, const Draw2DQuad* quads, U32 count, F32 offsetX, F32 offsetY) {
     if (!ctx || !quads) {
         return;
     }
 
     for (U32 quadIndex = 0u; quadIndex < count; ++quadIndex) {
         Draw2DQuad quad = quads[quadIndex];
+        quad.minX += offsetX;
+        quad.minY += offsetY;
+        quad.maxX += offsetX;
+        quad.maxY += offsetY;
         if (!draw2d_clip_quad(ctx, &quad)) {
             continue;
         }

@@ -262,6 +262,9 @@ static void os_push_mouse_event(NSEvent* event, OS_GraphicsEvent_Tag tag) {
     NSPoint screenPoint = [NSEvent mouseLocation];
     NSPoint windowPoint = screenPoint;
     NSPoint localPoint = screenPoint;
+    F32 backingScale = 1.0f;
+    F32 x = (F32) screenPoint.x;
+    F32 y = (F32) screenPoint.y;
     B32 isInWindow = 0;
 
     if (window) {
@@ -271,24 +274,35 @@ static void os_push_mouse_event(NSEvent* event, OS_GraphicsEvent_Tag tag) {
             localPoint = [contentView convertPoint:windowPoint fromView:nil];
             NSRect bounds = [contentView bounds];
             isInWindow = NSPointInRect(localPoint, bounds) ? 1 : 0;
+
+            // Event contract: mouse coordinates are top-left-origin drawable pixels.
+            backingScale = (F32) [window backingScaleFactor];
+            NSPoint backingPoint = [contentView convertPointToBacking:localPoint];
+            NSSize backingSize = [contentView convertSizeToBacking:bounds.size];
+            x = (F32) backingPoint.x;
+            y = (F32) (backingSize.height - backingPoint.y);
         }
     }
 
-    F32 x = (F32) localPoint.x;
-    F32 y = (F32) localPoint.y;
-    F32 deltaX = (F32) [event deltaX];
-    F32 deltaY = (F32) [event deltaY];
+    F32 deltaX = (F32) [event deltaX] * backingScale;
+    F32 deltaY = (F32) [event deltaY] * backingScale;
     F32 globalX = (F32) screenPoint.x;
     F32 globalY = (F32) screenPoint.y;
     U32 modifiers = os_translate_modifier_flags([event modifierFlags]);
     enum OS_MouseButton button = os_translate_mouse_button_from_event(event);
-    
+
     OS_GraphicsEvent graphicsEvent = {};
-    
+
     switch (tag) {
         case OS_GraphicsEvent_Tag_MouseScroll: {
             F32 scrollDeltaX = (F32) [event scrollingDeltaX];
             F32 scrollDeltaY = (F32) [event scrollingDeltaY];
+            if (![event hasPreciseScrollingDeltas]) {
+                scrollDeltaX *= 12.0f;
+                scrollDeltaY *= 12.0f;
+            }
+            scrollDeltaX *= backingScale;
+            scrollDeltaY *= backingScale;
             graphicsEvent = OS_GraphicsEvent::mouse_scroll(handle, x, y, scrollDeltaX, scrollDeltaY, modifiers);
         } break;
         

@@ -1935,7 +1935,9 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
         return 0;
     }
 
+    U64 gpuWaitStartNs = OS_get_time_nanoseconds();
     dispatch_semaphore_wait(device->frameSemaphore, DISPATCH_TIME_FOREVER);
+    U64 gpuWaitEndNs = OS_get_time_nanoseconds();
 
     GfxFrame* frame = &device->frames[device->frameCursor];
     device->frameCursor = (device->frameCursor + 1u) % device->framesInFlight;
@@ -1947,7 +1949,9 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
 
     gfx_metal_release_frame_objects(frame);
 
+    U64 acquireStartNs = OS_get_time_nanoseconds();
     id<CAMetalDrawable> drawable = [device->metalLayer nextDrawable];
+    U64 acquireEndNs = OS_get_time_nanoseconds();
     if (!drawable) {
         LOG_ERROR("gfx", "Metal layer did not provide a drawable");
         dispatch_semaphore_signal(device->frameSemaphore);
@@ -2041,6 +2045,8 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
     device->stats.frameIndex = device->frameSerial;
     MEMCPY(device->stats.passGpuMs, resolvedMs, sizeof(resolvedMs));
     device->stats.passGpuCount = resolvedCount;
+    device->stats.gpuWaitMs = (F32)((F64)(gpuWaitEndNs - gpuWaitStartNs) / 1.0e6);
+    device->stats.acquireWaitMs = (F32)((F64)(acquireEndNs - acquireStartNs) / 1.0e6);
 
     return frame;
 }

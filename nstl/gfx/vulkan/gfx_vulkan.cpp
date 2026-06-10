@@ -2875,7 +2875,9 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
     }
 
     GfxFrame* frame = &device->frames[device->frameCursor];
+    U64 gpuWaitStartNs = OS_get_time_nanoseconds();
     VkResult fenceResult = vkGetFenceStatus(device->device, frame->fence);
+    U64 gpuWaitEndNs = OS_get_time_nanoseconds();
     if (fenceResult == VK_NOT_READY) {
         return 0;
     }
@@ -2889,12 +2891,14 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
         gfx_vulkan_drain_retired(device);
     }
 
+    U64 acquireStartNs = OS_get_time_nanoseconds();
     VkResult acquireResult = vkAcquireNextImageKHR(device->device,
                                                    device->swapchain,
                                                    0u,
                                                    frame->imageAvailableSemaphore,
                                                    0,
                                                    &frame->imageIndex);
+    U64 acquireEndNs = OS_get_time_nanoseconds();
     if (acquireResult == VK_TIMEOUT || acquireResult == VK_NOT_READY) {
         return 0;
     }
@@ -2963,6 +2967,8 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
     device->stats.frameIndex = device->frameSerial;
     MEMCPY(device->stats.passGpuMs, resolvedMs, sizeof(resolvedMs));
     device->stats.passGpuCount = resolvedCount;
+    device->stats.gpuWaitMs = (F32)((F64)(gpuWaitEndNs - gpuWaitStartNs) / 1.0e6);
+    device->stats.acquireWaitMs = (F32)((F64)(acquireEndNs - acquireStartNs) / 1.0e6);
     return frame;
 }
 

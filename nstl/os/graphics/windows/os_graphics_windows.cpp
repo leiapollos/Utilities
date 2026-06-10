@@ -351,7 +351,7 @@ static LRESULT CALLBACK os_windows_window_proc(HWND window, UINT message, WPARAM
                                                                   os_mouse_x_from_lparam(lParam),
                                                                   os_mouse_y_from_lparam(lParam),
                                                                   0.0f,
-                                                                  (F32)wheel / 120.0f,
+                                                                  (F32)wheel / 120.0f * 48.0f,
                                                                   os_translate_modifier_flags()));
             return 0;
         }

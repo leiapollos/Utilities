@@ -41,7 +41,7 @@ static const char* HOST_HOT_MODULE_INPUTS[] = {
     "app_renderer.cpp",
     "app_debug_draw.hpp",
     "app_debug_draw.cpp",
-    "app_debug_overlay.cpp",
+    "app_ui_panels.cpp",
     "app_scene_demo.cpp",
     "app_state.hpp",
     "nstl/content/content.hpp",
@@ -62,6 +62,10 @@ static const char* HOST_HOT_MODULE_INPUTS[] = {
     "nstl/draw2d/draw2d.cpp",
     "nstl/draw2d/draw2d_include.hpp",
     "nstl/draw2d/draw2d_include.cpp",
+    "nstl/ui/ui.hpp",
+    "nstl/ui/ui.cpp",
+    "nstl/ui/ui_include.hpp",
+    "nstl/ui/ui_include.cpp",
     "app/shaders/shader_manifest.h",
     "app/shaders/shader_records.generated.hpp",
     "app/fonts/NotoSans-Regular.ttf",
@@ -202,6 +206,7 @@ struct HostState {
     U32 targetFpsFocused;
     U32 targetFpsUnfocused;
     U32 minSleepMs;
+    F32 lastSleepSeconds;
     B32 framePacingEnabled;
     U32 exitAfterFrames;
     U32 framesRun;
@@ -1116,6 +1121,7 @@ static void host_update_input(HostState* state, F32 deltaSeconds) {
 
     AppInput* input = &state->input;
     input->deltaSeconds = deltaSeconds;
+    input->sleepSeconds = state->lastSleepSeconds;
     input->events = 0;
     input->eventCount = 0;
 
@@ -1241,6 +1247,7 @@ int host_main_loop(int argc, char** argv) {
             state.host.shouldQuit = 1;
         }
 
+        state.lastSleepSeconds = 0.0f;
         if (state.framePacingEnabled && !state.host.shouldQuit) {
             U32 targetFps = state.windowFocused ? state.targetFpsFocused : state.targetFpsUnfocused;
             targetFps = host_clamp_u32(targetFps, HOST_MIN_TARGET_FPS, HOST_MAX_TARGET_FPS);
@@ -1255,7 +1262,10 @@ int host_main_loop(int argc, char** argv) {
                     if (sleepMilliseconds < state.minSleepMs) {
                         sleepMilliseconds = state.minSleepMs;
                     }
+                    U64 sleepStartTime = OS_get_time_microseconds();
                     OS_sleep_milliseconds(sleepMilliseconds);
+                    U64 sleepEndTime = OS_get_time_microseconds();
+                    state.lastSleepSeconds = (F32)((F64)(sleepEndTime - sleepStartTime) / (F64)MILLION(1ULL));
                 }
             }
         }
