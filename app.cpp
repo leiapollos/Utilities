@@ -119,6 +119,8 @@ static void app_frame(AppHost* host, HOT_StateStore* store, const AppInput* inpu
         }
     }
 
+    text_frame_advance(state->render2d.textContext);
+
     AppRendererFrame* rendererFrame = 0;
     {
         PROF_SCOPE("renderer begin");

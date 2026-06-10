@@ -110,6 +110,17 @@ static void app_ui_stats_panel(APP_Context* ctx, UI_Context* ui) {
     ui_panel_end(ui);
 }
 
+#define APP_PROF_MERGED_CAP 128u
+#define APP_PROF_NIL 0xFFFFFFFFu
+
+struct AppProfMergedNode {
+    U32 site;
+    U32 depth;
+    U32 firstChild;
+    U32 lastChild;
+    U32 nextSibling;
+};
+
 static void app_ui_profiler_row(UI_Context* ui, const ProfSiteStats* stats, U32 site, U32 depth,
                                 StringU8 rowKey, U32* ioSelectedSite) {
     const ProfSiteStats* siteStats = stats + site;
@@ -221,12 +232,77 @@ static void app_ui_profiler_panel(APP_Context* ctx, UI_Context* ui) {
             for (U32 laneIndex = 0u; laneIndex < view->laneCount; ++laneIndex) {
                 const ProfLaneView* lane = view->lanes + laneIndex;
                 ui_label_colored(ui, str8_fmt(ui->frameArena, "[{}]", str8(lane->name)), 0x6B7480FFu);
-                U32 shown = MIN(lane->nodeCount, 96u);
-                for (U32 nodeIndex = 0u; nodeIndex < shown; ++nodeIndex) {
+
+                AppProfMergedNode merged[APP_PROF_MERGED_CAP];
+                U32 mergedCount = 0u;
+                U32 rootFirst = APP_PROF_NIL;
+                U32 rootLast = APP_PROF_NIL;
+                U32 depthStack[PROF_OPEN_STACK_DEPTH];
+                for (U32 nodeIndex = 0u; nodeIndex < lane->nodeCount; ++nodeIndex) {
                     const ProfFrameNode* node = lane->nodes + nodeIndex;
-                    app_ui_profiler_row(ui, stats, node->site, node->depth,
-                                        str8_fmt(ui->frameArena, "###prof_n_{}_{}", laneIndex, nodeIndex),
+                    U32 depth = node->depth;
+                    if (depth >= PROF_OPEN_STACK_DEPTH) {
+                        continue;
+                    }
+                    U32* firstLink = &rootFirst;
+                    U32* lastLink = &rootLast;
+                    if (depth != 0u) {
+                        U32 parent = depthStack[depth - 1u];
+                        if (parent == APP_PROF_NIL) {
+                            depthStack[depth] = APP_PROF_NIL;
+                            continue;
+                        }
+                        firstLink = &merged[parent].firstChild;
+                        lastLink = &merged[parent].lastChild;
+                    }
+                    U32 found = APP_PROF_NIL;
+                    for (U32 m = *firstLink; m != APP_PROF_NIL; m = merged[m].nextSibling) {
+                        if (merged[m].site == node->site) {
+                            found = m;
+                            break;
+                        }
+                    }
+                    if (found == APP_PROF_NIL) {
+                        if (mergedCount >= APP_PROF_MERGED_CAP) {
+                            depthStack[depth] = APP_PROF_NIL;
+                            continue;
+                        }
+                        found = mergedCount;
+                        mergedCount += 1u;
+                        merged[found].site = node->site;
+                        merged[found].depth = depth;
+                        merged[found].firstChild = APP_PROF_NIL;
+                        merged[found].lastChild = APP_PROF_NIL;
+                        merged[found].nextSibling = APP_PROF_NIL;
+                        if (*lastLink == APP_PROF_NIL) {
+                            *firstLink = found;
+                        } else {
+                            merged[*lastLink].nextSibling = found;
+                        }
+                        *lastLink = found;
+                    }
+                    depthStack[depth] = found;
+                }
+
+                U32 walkStack[PROF_OPEN_STACK_DEPTH];
+                U32 walkTop = 0u;
+                U32 current = rootFirst;
+                while (current != APP_PROF_NIL || walkTop != 0u) {
+                    if (current == APP_PROF_NIL) {
+                        walkTop -= 1u;
+                        current = merged[walkStack[walkTop]].nextSibling;
+                        continue;
+                    }
+                    app_ui_profiler_row(ui, stats, merged[current].site, merged[current].depth,
+                                        str8_fmt(ui->frameArena, "###prof_m_{}_{}", laneIndex, current),
                                         &state->profSelectedSite);
+                    if (merged[current].firstChild != APP_PROF_NIL && walkTop < PROF_OPEN_STACK_DEPTH) {
+                        walkStack[walkTop] = current;
+                        walkTop += 1u;
+                        current = merged[current].firstChild;
+                    } else {
+                        current = merged[current].nextSibling;
+                    }
                 }
             }
         }

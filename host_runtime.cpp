@@ -26,6 +26,7 @@
 #define HOST_MAX_TARGET_FPS 240u
 #define HOST_DEFAULT_MIN_SLEEP_MS 1u
 #define HOST_MAX_MIN_SLEEP_MS 16u
+#define HOST_MODULE_WATCH_INTERVAL_FRAMES 15u
 #define HOST_GFX_FRAMES_IN_FLIGHT 2u
 #define HOST_GFX_TEMP_BUFFER_SIZE MB(8)
 #define HOST_GFX_STAGING_BUFFER_SIZE MB(32)
@@ -358,7 +359,7 @@ static void host_update(HostState* state, F32 deltaSeconds) {
 
     arena_pop_to(state->frameArena, 0);
 
-    {
+    if ((state->framesRun % HOST_MODULE_WATCH_INTERVAL_FRAMES) == 0ull) {
         PROF_SCOPE("module watch");
         host_try_reload_module(state);
     }

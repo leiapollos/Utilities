@@ -68,6 +68,7 @@ UTILITIES_SHARED_API void text_context_destroy(TextContext* text);
 
 UTILITIES_SHARED_API TextFont text_font_load_memory(TextContext* text, const TextFontDesc* desc);
 UTILITIES_SHARED_API TextDrawData text_prepare_draw(TextContext* text, Arena* frameArena, const TextDrawDesc* desc);
+UTILITIES_SHARED_API void text_frame_advance(TextContext* text);
 
 UTILITIES_SHARED_API void text_white_uv(TextContext* text, F32* outU, F32* outV);
 UTILITIES_SHARED_API TextAtlasUpload text_atlas_full_upload(TextContext* text);

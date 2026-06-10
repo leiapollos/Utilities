@@ -5,6 +5,12 @@
 #define TEXT_SHAPE_CONTEXT_MEMORY_SIZE MB(4)
 #define TEXT_ATLAS_UPLOAD_PITCH_ALIGNMENT 256u
 
+#define TEXT_RUN_CACHE_SLOTS 1024u
+#define TEXT_RUN_CACHE_SLOT_QUADS 48u
+#define TEXT_RUN_CACHE_PROBE 8u
+#define TEXT_RUN_CACHE_EXPIRE_FRAMES 120u
+#define TEXT_RUN_CACHE_VALIDATE 0
+
 struct TextFontSlot {
     U32 generation;
     U32 index;
@@ -13,9 +19,18 @@ struct TextFontSlot {
     U64 fontByteSize;
     U32 faceIndex;
     U32 unitsPerEm;
+    U32 currentPixelSize;
     FT_Face ftFace;
     kbts_font kbFont;
     B32 kbFontValid;
+};
+
+struct TextRunEntry {
+    U64 key;
+    U32 quadCount;
+    U32 lastUsedFrame;
+    F32 width;
+    F32 height;
 };
 
 struct TextGlyphCacheEntry {
@@ -65,6 +80,14 @@ struct TextContext {
     F32 whiteU;
     F32 whiteV;
 
+    TextRunEntry* runEntries;
+    TextQuad* runQuads;
+    U32 runFrameIndex;
+    U64 runHits;
+    U64 runMisses;
+    U64 runBypasses;
+    U64 runEvictions;
+
     B32 loggedAtlasOverflow;
     B32 loggedGlyphOverflow;
     B32 loggedShapeMemory;
@@ -105,6 +128,108 @@ static TextFontSlot* text_font_slot_from_handle(TextContext* text, TextFont font
         return 0;
     }
     return slot;
+}
+
+static B32 text_font_set_pixel_size(TextFontSlot* font, U32 pixelSize) {
+    if (font->currentPixelSize == pixelSize) {
+        return 1;
+    }
+    if (FT_Set_Pixel_Sizes(font->ftFace, 0u, pixelSize) != 0) {
+        font->currentPixelSize = 0u;
+        return 0;
+    }
+    font->currentPixelSize = pixelSize;
+    return 1;
+}
+
+static U64 text_run_hash(const U8* data, U64 size, U64 seed) {
+    U64 hash = seed;
+    for (U64 at = 0u; at < size; ++at) {
+        hash ^= (U64)data[at];
+        hash *= 0x100000001b3ull;
+    }
+    return hash;
+}
+
+static U64 text_run_key(StringU8 bytes, U32 fontIndex, U32 fontGeneration, U32 pixelSize) {
+    U64 key = text_run_hash(bytes.data, bytes.size, 0xcbf29ce484222325ull);
+    U32 salt[3] = {fontIndex, fontGeneration, pixelSize};
+    key = text_run_hash((const U8*)salt, sizeof(salt), key);
+    return key ? key : 1ull;
+}
+
+static TextRunEntry* text_run_cache_find(TextContext* text, U64 key) {
+    if (!text->runEntries) {
+        return 0;
+    }
+    for (U32 probe = 0u; probe < TEXT_RUN_CACHE_PROBE; ++probe) {
+        TextRunEntry* entry = text->runEntries + ((key + probe) & (TEXT_RUN_CACHE_SLOTS - 1u));
+        if (entry->key == key) {
+            return entry;
+        }
+        if (entry->key == 0ull) {
+            return 0;
+        }
+    }
+    return 0;
+}
+
+static void text_run_cache_insert(TextContext* text, U64 key, const TextQuad* quads, U32 quadCount,
+                                  F32 width, F32 height) {
+    if (!text->runEntries) {
+        return;
+    }
+    TextRunEntry* victim = 0;
+    for (U32 probe = 0u; probe < TEXT_RUN_CACHE_PROBE; ++probe) {
+        TextRunEntry* entry = text->runEntries + ((key + probe) & (TEXT_RUN_CACHE_SLOTS - 1u));
+        if (entry->key == key || entry->key == 0ull) {
+            victim = entry;
+            break;
+        }
+        if (!victim || entry->lastUsedFrame < victim->lastUsedFrame) {
+            victim = entry;
+        }
+    }
+    if (victim->key != 0ull && victim->key != key) {
+        if (victim->lastUsedFrame + TEXT_RUN_CACHE_EXPIRE_FRAMES > text->runFrameIndex) {
+            text->runBypasses += 1ull;
+            return;
+        }
+        text->runEvictions += 1ull;
+    }
+    victim->key = key;
+    victim->quadCount = quadCount;
+    victim->lastUsedFrame = text->runFrameIndex;
+    victim->width = width;
+    victim->height = height;
+    U64 slotIndex = (U64)(victim - text->runEntries);
+    MEMCPY(text->runQuads + slotIndex * TEXT_RUN_CACHE_SLOT_QUADS, quads, quadCount * sizeof(TextQuad));
+}
+
+static TextDrawData text_run_cache_emit(TextContext* text, Arena* frameArena, TextRunEntry* entry,
+                                        const TextDrawDesc* desc) {
+    TextDrawData result = text_draw_data_nil();
+    U32 quadCount = entry->quadCount;
+    TextQuad* out = ARENA_PUSH_ARRAY(frameArena, TextQuad, quadCount ? quadCount : 1u);
+    if (!out) {
+        return result;
+    }
+    U64 slotIndex = (U64)(entry - text->runEntries);
+    const TextQuad* src = text->runQuads + slotIndex * TEXT_RUN_CACHE_SLOT_QUADS;
+    for (U32 at = 0u; at < quadCount; ++at) {
+        TextQuad quad = src[at];
+        quad.minX += desc->x;
+        quad.maxX += desc->x;
+        quad.minY += desc->y;
+        quad.maxY += desc->y;
+        quad.rgba8 = desc->rgba8;
+        out[at] = quad;
+    }
+    result.quads = out;
+    result.quadCount = quadCount;
+    result.width = entry->width;
+    result.height = entry->height;
+    return result;
 }
 
 static B32 text_atlas_alloc(TextContext* text, U32 width, U32 height, U32* outX, U32* outY) {
@@ -236,8 +361,7 @@ static TextGlyphCacheEntry* text_get_or_cache_glyph(TextContext* text,
     entry->pixelSize = pixelSize;
     text_insert_glyph_slot(text, font->index, glyphId, pixelSize, entryIndex);
 
-    FT_Error sizeError = FT_Set_Pixel_Sizes(font->ftFace, 0u, pixelSize);
-    if (sizeError != 0) {
+    if (!text_font_set_pixel_size(font, pixelSize)) {
         return entry;
     }
 
@@ -437,10 +561,13 @@ B32 text_context_create(const TextContextDesc* desc, TextContext** outText) {
     text->glyphSlotKeys = ARENA_PUSH_ARRAY(desc->arena, U64, glyphSlotCapacity);
     text->glyphSlotValues = ARENA_PUSH_ARRAY(desc->arena, U32, glyphSlotCapacity);
     text->atlasPixels = ARENA_PUSH_ARRAY(desc->arena, U8, (U64)text->atlasPitch * (U64)atlasHeight);
+    text->runEntries = ARENA_PUSH_ARRAY(desc->arena, TextRunEntry, TEXT_RUN_CACHE_SLOTS);
+    text->runQuads = ARENA_PUSH_ARRAY(desc->arena, TextQuad,
+                                      (U64)TEXT_RUN_CACHE_SLOTS * TEXT_RUN_CACHE_SLOT_QUADS);
     text->shapeContextMemorySize = (U32)(kbts_SizeOfShapeContext() + TEXT_SHAPE_CONTEXT_MEMORY_SIZE);
     text->shapeContextMemory = arena_push(desc->arena, text->shapeContextMemorySize, 16u);
     if (!text->fonts || !text->glyphs || !text->glyphSlotKeys || !text->glyphSlotValues ||
-        !text->atlasPixels || !text->shapeContextMemory) {
+        !text->atlasPixels || !text->runEntries || !text->runQuads || !text->shapeContextMemory) {
         return 0;
     }
 
@@ -449,6 +576,7 @@ B32 text_context_create(const TextContextDesc* desc, TextContext** outText) {
     MEMSET(text->glyphSlotKeys, 0, sizeof(U64) * glyphSlotCapacity);
     MEMSET(text->glyphSlotValues, 0, sizeof(U32) * glyphSlotCapacity);
     MEMSET(text->atlasPixels, 0, (U64)text->atlasPitch * (U64)atlasHeight);
+    MEMSET(text->runEntries, 0, sizeof(TextRunEntry) * TEXT_RUN_CACHE_SLOTS);
     MEMSET(text->shapeContextMemory, 0, text->shapeContextMemorySize);
 
     U32 whiteX = 0u;
@@ -569,25 +697,10 @@ TextFont text_font_load_memory(TextContext* text, const TextFontDesc* desc) {
     return result;
 }
 
-TextDrawData text_prepare_draw(TextContext* text, Arena* frameArena, const TextDrawDesc* desc) {
-    PROF_FUNCTION();
+static TextDrawData text_shape_run_origin(TextContext* text, Arena* frameArena, TextFontSlot* font,
+                                          StringU8 textBytes, U32 pixelSize, U32 rgba8) {
     TextDrawData result = text_draw_data_nil();
-    if (!text || !frameArena || !desc || desc->text.size == 0u || desc->pixelSize <= 0.0f) {
-        return result;
-    }
-
-    TextFontSlot* font = text_font_slot_from_handle(text, desc->font);
-    if (!font || !font->ftFace || !font->kbFontValid || !desc->text.data) {
-        return result;
-    }
-
-    U32 pixelSize = (U32)(desc->pixelSize + 0.5f);
-    if (pixelSize == 0u || pixelSize > 512u || desc->text.size > (U64)0x7fffffffu) {
-        return result;
-    }
-
-    FT_Error sizeError = FT_Set_Pixel_Sizes(font->ftFace, 0u, pixelSize);
-    if (sizeError != 0) {
+    if (!text_font_set_pixel_size(font, pixelSize)) {
         return result;
     }
 
@@ -597,7 +710,7 @@ TextDrawData text_prepare_draw(TextContext* text, Arena* frameArena, const TextD
         lineHeight = (F32)pixelSize * 1.25f;
     }
 
-    U32 capacity = (U32)desc->text.size + 1u;
+    U32 capacity = (U32)textBytes.size + 1u;
     TextQuad* quads = ARENA_PUSH_ARRAY(frameArena, TextQuad, capacity);
     TextAtlasUpload* uploads = ARENA_PUSH_ARRAY(frameArena, TextAtlasUpload, capacity);
     if (!quads || !uploads) {
@@ -610,15 +723,15 @@ TextDrawData text_prepare_draw(TextContext* text, Arena* frameArena, const TextD
     F32 maxLineWidth = 0.0f;
 
     U64 lineStart = 0u;
-    for (U64 at = 0u; at <= desc->text.size; ++at) {
-        B32 atEnd = (at == desc->text.size) ? 1 : 0;
-        B32 atNewline = (!atEnd && desc->text.data[at] == (U8)'\n') ? 1 : 0;
+    for (U64 at = 0u; at <= textBytes.size; ++at) {
+        B32 atEnd = (at == textBytes.size) ? 1 : 0;
+        B32 atNewline = (!atEnd && textBytes.data[at] == (U8)'\n') ? 1 : 0;
         if (!atEnd && !atNewline) {
             continue;
         }
 
         U64 lineEnd = at;
-        if (lineEnd > lineStart && desc->text.data[lineEnd - 1u] == (U8)'\r') {
+        if (lineEnd > lineStart && textBytes.data[lineEnd - 1u] == (U8)'\r') {
             lineEnd -= 1u;
         }
 
@@ -627,12 +740,12 @@ TextDrawData text_prepare_draw(TextContext* text, Arena* frameArena, const TextD
         if (lineSize64 > 0u && lineSize64 <= (U64)0x7fffffffu) {
             text_shape_line(text,
                             font,
-                            desc->text.data + lineStart,
+                            textBytes.data + lineStart,
                             (U32)lineSize64,
-                            desc->x,
-                            desc->y + ascender + (F32)lineCount * lineHeight,
+                            0.0f,
+                            ascender + (F32)lineCount * lineHeight,
                             pixelSize,
-                            desc->rgba8,
+                            rgba8,
                             quads,
                             capacity,
                             &quadCount,
@@ -655,6 +768,73 @@ TextDrawData text_prepare_draw(TextContext* text, Arena* frameArena, const TextD
     result.width = maxLineWidth;
     result.height = (F32)lineCount * lineHeight;
     return result;
+}
+
+TextDrawData text_prepare_draw(TextContext* text, Arena* frameArena, const TextDrawDesc* desc) {
+    PROF_FUNCTION();
+    TextDrawData result = text_draw_data_nil();
+    if (!text || !frameArena || !desc || desc->text.size == 0u || desc->pixelSize <= 0.0f) {
+        return result;
+    }
+
+    TextFontSlot* font = text_font_slot_from_handle(text, desc->font);
+    if (!font || !font->ftFace || !font->kbFontValid || !desc->text.data) {
+        return result;
+    }
+
+    U32 pixelSize = (U32)(desc->pixelSize + 0.5f);
+    if (pixelSize == 0u || pixelSize > 512u || desc->text.size > (U64)0x7fffffffu) {
+        return result;
+    }
+
+    U64 runKey = text_run_key(desc->text, font->index, font->generation, pixelSize);
+    TextRunEntry* cached = text_run_cache_find(text, runKey);
+    if (cached) {
+        cached->lastUsedFrame = text->runFrameIndex;
+        text->runHits += 1ull;
+#if TEXT_RUN_CACHE_VALIDATE
+        {
+            TextDrawData fresh = text_shape_run_origin(text, frameArena, font, desc->text, pixelSize,
+                                                       desc->rgba8);
+            ASSERT_ALWAYS(fresh.quadCount == cached->quadCount);
+            ASSERT_ALWAYS(fresh.width == cached->width);
+            ASSERT_ALWAYS(fresh.height == cached->height);
+            U64 slotIndex = (U64)(cached - text->runEntries);
+            const TextQuad* src = text->runQuads + slotIndex * TEXT_RUN_CACHE_SLOT_QUADS;
+            for (U32 at = 0u; at < fresh.quadCount; ++at) {
+                ASSERT_ALWAYS(fresh.quads[at].minX == src[at].minX);
+                ASSERT_ALWAYS(fresh.quads[at].minY == src[at].minY);
+                ASSERT_ALWAYS(fresh.quads[at].maxX == src[at].maxX);
+                ASSERT_ALWAYS(fresh.quads[at].maxY == src[at].maxY);
+                ASSERT_ALWAYS(fresh.quads[at].minU == src[at].minU);
+                ASSERT_ALWAYS(fresh.quads[at].minV == src[at].minV);
+                ASSERT_ALWAYS(fresh.quads[at].maxU == src[at].maxU);
+                ASSERT_ALWAYS(fresh.quads[at].maxV == src[at].maxV);
+            }
+        }
+#endif
+        return text_run_cache_emit(text, frameArena, cached, desc);
+    }
+    text->runMisses += 1ull;
+
+    result = text_shape_run_origin(text, frameArena, font, desc->text, pixelSize, desc->rgba8);
+    if (result.quads && !result.atlasOverflow && result.quadCount <= TEXT_RUN_CACHE_SLOT_QUADS) {
+        text_run_cache_insert(text, runKey, result.quads, result.quadCount, result.width, result.height);
+    }
+    for (U32 at = 0u; at < result.quadCount; ++at) {
+        result.quads[at].minX += desc->x;
+        result.quads[at].maxX += desc->x;
+        result.quads[at].minY += desc->y;
+        result.quads[at].maxY += desc->y;
+    }
+    return result;
+}
+
+void text_frame_advance(TextContext* text) {
+    if (!text) {
+        return;
+    }
+    text->runFrameIndex += 1u;
 }
 
 void text_white_uv(TextContext* text, F32* outU, F32* outV) {
