@@ -28,43 +28,49 @@ static B32 app_debug_project_point_(const ShdWorldFrameRecord* frame, F32 window
     return 1;
 }
 
+static void app_debug_draw_record_bounds_(APP_Context* ctx, const AppWorldState* world,
+                                          const ShdWorldRenderableRecord* record,
+                                          F32 windowWidth, F32 windowHeight) {
+    F32 cornerX[8];
+    F32 cornerY[8];
+    for (U32 corner = 0u; corner < 8u; ++corner) {
+        F32 x = record->boundsCenter[0] + ((corner & 1u) ? record->boundsExtents[0] : -record->boundsExtents[0]);
+        F32 y = record->boundsCenter[1] + ((corner & 2u) ? record->boundsExtents[1] : -record->boundsExtents[1]);
+        F32 z = record->boundsCenter[2] + ((corner & 4u) ? record->boundsExtents[2] : -record->boundsExtents[2]);
+        if (!app_debug_project_point_(&world->frameRecord, windowWidth, windowHeight,
+                                      x, y, z, cornerX + corner, cornerY + corner)) {
+            return;
+        }
+    }
+    static const U32 edges[12][2] = {
+        {0u, 1u}, {1u, 3u}, {3u, 2u}, {2u, 0u},
+        {4u, 5u}, {5u, 7u}, {7u, 6u}, {6u, 4u},
+        {0u, 4u}, {1u, 5u}, {2u, 6u}, {3u, 7u},
+    };
+    for (U32 edge = 0u; edge < 12u; ++edge) {
+        debug_draw_line(ctx, cornerX[edges[edge][0]], cornerY[edges[edge][0]],
+                        cornerX[edges[edge][1]], cornerY[edges[edge][1]], 1.0f, 0x4F8A6A90u);
+    }
+}
+
 static void app_debug_draw_world_bounds(APP_Context* ctx, U32 maxBounds) {
     AppCoreState* state = ctx->core;
     AppWorldState* world = &state->world;
-    if (!world->frameOpen || world->renderableCount == 0u) {
+    if (!world->frameOpen || world->laneCount == 0u) {
         return;
     }
 
     F32 windowWidth = (F32)state->windowWidth;
     F32 windowHeight = (F32)state->windowHeight;
-    U32 count = MIN(world->renderableCount, maxBounds);
-    for (U32 renderableIndex = 0u; renderableIndex < count; ++renderableIndex) {
-        const ShdWorldRenderableRecord* record = world->renderables + renderableIndex;
-        F32 cornerX[8];
-        F32 cornerY[8];
-        B32 allVisible = 1;
-        for (U32 corner = 0u; corner < 8u; ++corner) {
-            F32 x = record->boundsCenter[0] + ((corner & 1u) ? record->boundsExtents[0] : -record->boundsExtents[0]);
-            F32 y = record->boundsCenter[1] + ((corner & 2u) ? record->boundsExtents[1] : -record->boundsExtents[1]);
-            F32 z = record->boundsCenter[2] + ((corner & 4u) ? record->boundsExtents[2] : -record->boundsExtents[2]);
-            if (!app_debug_project_point_(&world->frameRecord, windowWidth, windowHeight,
-                                          x, y, z, cornerX + corner, cornerY + corner)) {
-                allVisible = 0;
-                break;
-            }
+    U32 drawn = 0u;
+    for (U32 lane = 0u; lane < world->laneCount && drawn < maxBounds; ++lane) {
+        const AppWorldLaneWriter* writer = world->laneWriters + lane;
+        U32 count = MIN(writer->count, maxBounds - drawn);
+        for (U32 renderableIndex = 0u; renderableIndex < count; ++renderableIndex) {
+            app_debug_draw_record_bounds_(ctx, world, writer->records + renderableIndex,
+                                          windowWidth, windowHeight);
         }
-        if (!allVisible) {
-            continue;
-        }
-        static const U32 edges[12][2] = {
-            {0u, 1u}, {1u, 3u}, {3u, 2u}, {2u, 0u},
-            {4u, 5u}, {5u, 7u}, {7u, 6u}, {6u, 4u},
-            {0u, 4u}, {1u, 5u}, {2u, 6u}, {3u, 7u},
-        };
-        for (U32 edge = 0u; edge < 12u; ++edge) {
-            debug_draw_line(ctx, cornerX[edges[edge][0]], cornerY[edges[edge][0]],
-                            cornerX[edges[edge][1]], cornerY[edges[edge][1]], 1.0f, 0x4F8A6A90u);
-        }
+        drawn += count;
     }
 }
 

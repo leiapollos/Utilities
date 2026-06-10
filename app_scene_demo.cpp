@@ -26,6 +26,60 @@ static Mat4x4F32 app_scene_object_transform_(U32 x, U32 z, U32 side, F32 time, B
     return transform;
 }
 
+struct AppSceneExtractParams {
+    AppWorldState* world;
+    U32 side;
+    F32 time;
+    B32 animate;
+};
+
+// Per-item extraction body; laneId/laneCount explicit so the single-threaded
+// path runs inline with no SPMD group.
+static void app_scene_extract_range_(const AppSceneExtractParams* params, U64 laneId, U64 laneCount) {
+    AppWorldState* world = params->world;
+    AppWorldLaneWriter* writer = world->laneWriters + laneId;
+    U32 side = params->side;
+    F32 time = params->time;
+    B32 animate = params->animate;
+    RangeU64 range = spmd_split_range_((U64)side * side, laneId, laneCount);
+
+    for (U64 item = range.min; item < range.max; ++item) {
+        U32 x = (U32)(item % side);
+        U32 z = (U32)(item / side);
+        U32 cellSeed = x * 31u + z * 17u;
+        Mat4x4F32 transform = app_scene_object_transform_(x, z, side, time, animate);
+
+        AppWorldMeshHandle mesh = ((cellSeed & 3u) == 0u) ? world->builtinMeshes[1]
+                                                          : world->builtinMeshes[0];
+        U32 lane = cellSeed % 11u;
+        if (lane == 9u && world->duckMesh.generation != 0u) {
+            F32 halfSide = (F32)(side - 1u) * 0.5f;
+            Mat4x4F32 duckTransform = mat4_scale(app_world_vec3_(0.012f, 0.012f, 0.012f));
+            QuatF32 duckSpin = quat_from_axis_angle(app_world_vec3_(0.0f, 1.0f, 0.0f),
+                                                    (F32)cellSeed * 0.7f);
+            duckTransform = duckTransform * quat_to_mat4(duckSpin);
+            duckTransform = duckTransform * mat4_translate(app_world_vec3_(
+                ((F32)x - halfSide) * APP_SCENE_GRID_SPACING, 0.0f,
+                ((F32)z - halfSide) * APP_SCENE_GRID_SPACING));
+            app_world_writer_push_(world, writer, world->duckMesh, 9u, AppWorldBin_Opaque, &duckTransform);
+            continue;
+        }
+        if (lane == 3u) {
+            app_world_writer_push_(world, writer, world->builtinMeshes[0], 6u, AppWorldBin_AlphaTest, &transform);
+        } else if (lane == 5u || lane == 7u) {
+            app_world_writer_push_(world, writer, mesh, (lane == 5u) ? 7u : 8u, AppWorldBin_Transparent, &transform);
+        } else {
+            app_world_writer_push_(world, writer, mesh, cellSeed % 6u, AppWorldBin_Opaque, &transform);
+        }
+    }
+}
+
+static void app_scene_extract_kernel_(void* kernelParameters) {
+    PROF_SCOPE("scene extract");
+    const AppSceneExtractParams* params = (const AppSceneExtractParams*)kernelParameters;
+    app_scene_extract_range_(params, spmd_lane_id(), spmd_lane_count());
+}
+
 static void app_demo_scene_submit(APP_Context* ctx, AppRendererFrame* rendererFrame) {
     AppCoreState* state = ctx->core;
     AppDemoState* demo = &state->demo;
@@ -35,13 +89,7 @@ static void app_demo_scene_submit(APP_Context* ctx, AppRendererFrame* rendererFr
     }
 
     F32 time = (F32)((F64)state->frameCounter / 60.0);
-    U32 side = demo->gridSide;
-    if (side < 4u) {
-        side = 4u;
-    }
-    if (side > 96u) {
-        side = 96u;
-    }
+    U32 side = CLAMP(demo->gridSide, APP_DEMO_GRID_MIN, APP_DEMO_GRID_MAX);
 
     F32 orbitRadius = (F32)side * APP_SCENE_GRID_SPACING * 0.62f;
     F32 yaw = time * 0.22f;
@@ -56,34 +104,25 @@ static void app_demo_scene_submit(APP_Context* ctx, AppRendererFrame* rendererFr
                                 mat4_translate(app_world_vec3_(0.0f, -0.05f, 0.0f));
     app_world_push(ctx, world->builtinMeshes[2], 5u, AppWorldBin_Opaque, &groundTransform);
 
-    for (U32 z = 0u; z < side; ++z) {
-        for (U32 x = 0u; x < side; ++x) {
-            U32 cellSeed = x * 31u + z * 17u;
-            Mat4x4F32 transform = app_scene_object_transform_(x, z, side, time, demo->animate);
+    AppSceneExtractParams extractParams = {};
+    extractParams.world = world;
+    extractParams.side = side;
+    extractParams.time = time;
+    extractParams.animate = demo->animate;
 
-            AppWorldMeshHandle mesh = ((cellSeed & 3u) == 0u) ? world->builtinMeshes[1]
-                                                              : world->builtinMeshes[0];
-            U32 lane = cellSeed % 11u;
-            if (lane == 9u && world->duckMesh.generation != 0u) {
-                F32 halfSide = (F32)(side - 1u) * 0.5f;
-                Mat4x4F32 duckTransform = mat4_scale(app_world_vec3_(0.012f, 0.012f, 0.012f));
-                QuatF32 duckSpin = quat_from_axis_angle(app_world_vec3_(0.0f, 1.0f, 0.0f),
-                                                        (F32)cellSeed * 0.7f);
-                duckTransform = duckTransform * quat_to_mat4(duckSpin);
-                duckTransform = duckTransform * mat4_translate(app_world_vec3_(
-                    ((F32)x - halfSide) * APP_SCENE_GRID_SPACING, 0.0f,
-                    ((F32)z - halfSide) * APP_SCENE_GRID_SPACING));
-                app_world_push(ctx, world->duckMesh, 9u, AppWorldBin_Opaque, &duckTransform);
-                continue;
-            }
-            if (lane == 3u) {
-                app_world_push(ctx, world->builtinMeshes[0], 6u, AppWorldBin_AlphaTest, &transform);
-            } else if (lane == 5u || lane == 7u) {
-                app_world_push(ctx, mesh, (lane == 5u) ? 7u : 8u, AppWorldBin_Transparent, &transform);
-            } else {
-                app_world_push(ctx, mesh, cellSeed % 6u, AppWorldBin_Opaque, &transform);
-            }
+    U32 itemCount = side * side;
+    U32 dispatchLanes = MIN(world->laneCount, MAX(1u, itemCount / 512u));
+    if (dispatchLanes > 1u && state->jobSystem) {
+        PROF_SCOPE("scene dispatch");
+        SPMDGroup* group = spmd_dispatch(state->jobSystem, ctx->host->frameArena,
+                                         .laneCount = dispatchLanes,
+                                         .kernel = app_scene_extract_kernel_,
+                                         .kernelParameters = &extractParams);
+        if (group) {
+            spmd_destroy_group(group);
         }
+    } else {
+        app_scene_extract_range_(&extractParams, 0u, 1u);
     }
 
     if (demo->showBounds) {

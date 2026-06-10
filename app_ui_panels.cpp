@@ -5,6 +5,27 @@
 #define app_ui_stat_line(ui, rgba8, fmt, ...) \
     ui_label_value((ui), (rgba8), fmt, __VA_ARGS__)
 
+static U32 app_demo_env_u32_(StringU8 name, U32 fallback, U32 minValue, U32 maxValue) {
+    U32 result = fallback;
+    Temp scratch = get_scratch(0, 0);
+    if (scratch.arena) {
+        StringU8 text = OS_get_environment_variable(scratch.arena, name);
+        if (text.data && text.size != 0u) {
+            U64 parsed = 0ull;
+            for (U64 at = 0u; at < text.size; ++at) {
+                U8 ch = text.data[at];
+                if (ch < (U8)'0' || ch > (U8)'9') {
+                    break;
+                }
+                parsed = parsed * 10ull + (U64)(ch - (U8)'0');
+            }
+            result = (U32)CLAMP(parsed, (U64)minValue, (U64)maxValue);
+        }
+        temp_end(&scratch);
+    }
+    return result;
+}
+
 static void app_demo_state_reset(AppDemoState* demo) {
     StringU8 title = str8("world: gpu-driven indirect draws");
     MEMSET(demo, 0, sizeof(*demo));
@@ -13,7 +34,11 @@ static void app_demo_state_reset(AppDemoState* demo) {
     demo->titleSize = 32.0f;
     demo->showBounds = 0;
     demo->animate = 1;
-    demo->gridSide = 48u;
+    demo->threadedExtract = (B32)app_demo_env_u32_(str8("UTILITIES_DEMO_THREADED"), 1u, 0u, 1u);
+    demo->maxLanes = app_demo_env_u32_(str8("UTILITIES_DEMO_MAX_LANES"), APP_WORLD_MAX_LANES,
+                                       1u, APP_WORLD_MAX_LANES);
+    demo->gridSide = app_demo_env_u32_(str8("UTILITIES_DEMO_GRID"), 48u,
+                                       APP_DEMO_GRID_MIN, APP_DEMO_GRID_MAX);
 }
 
 static void app_ui_controls_panel(APP_Context* ctx, UI_Context* ui) {
@@ -37,11 +62,12 @@ static void app_ui_controls_panel(APP_Context* ctx, UI_Context* ui) {
     ui_slider(ui, str8("size###title_size"), &demo->titleSize, 20.0f, 60.0f);
 
     F32 gridSide = (F32)demo->gridSide;
-    ui_slider(ui, str8("grid###world_grid"), &gridSide, 4.0f, 96.0f);
+    ui_slider(ui, str8("grid###world_grid"), &gridSide, (F32)APP_DEMO_GRID_MIN, (F32)APP_DEMO_GRID_MAX);
     demo->gridSide = (U32)(gridSide + 0.5f);
 
     ui_checkbox(ui, str8("cull bounds"), &demo->showBounds);
     ui_checkbox(ui, str8("animate"), &demo->animate);
+    ui_checkbox(ui, str8("threaded extract"), &demo->threadedExtract);
 
     ui_row_begin(ui, ui_grow(1.0f), ui_fit());
     if (ui_button(ui, str8("reset demo")).clicked) {
@@ -86,8 +112,9 @@ static void app_ui_stats_panel(APP_Context* ctx, UI_Context* ui) {
                      uiStats->retainedEvictCount, uiStats->duplicateKeyCount);
     app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "ui text  value hits {}  misses {}  uncached {}",
                      uiStats->valueRunHits, uiStats->valueRunMisses, uiStats->valueRunUninsertable);
-    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "world  renderables {}  meshes {}  cells {}",
-                     state->world.lastRenderableCount, state->world.meshCount,
+    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "world  renderables {}  dropped {}  lanes {}  meshes {}  cells {}",
+                     state->world.lastRenderableCount, state->world.lastDroppedCount,
+                     state->world.laneCount, state->world.meshCount,
                      APP_WORLD_BIN_COUNT * state->world.meshCount);
 
     if (state->resources.artifactCache) {

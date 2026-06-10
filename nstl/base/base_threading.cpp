@@ -170,7 +170,7 @@ U64 spmd_lane_count() {
     return (group != nullptr) ? group->laneCount : 0;
 }
 
-static RangeU64 spmd_split_range_(U64 totalCount, U64 laneId, U64 laneCount) {
+RangeU64 spmd_split_range_(U64 totalCount, U64 laneId, U64 laneCount) {
     RangeU64 range;
     range.min = 0;
     range.max = 0;

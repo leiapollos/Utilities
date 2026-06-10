@@ -64,11 +64,13 @@ struct AppRender2DState {
 struct AppCoreState;
 
 #define APP_WORLD_MAX_RENDERABLES 16384u
+#define APP_WORLD_MAX_TRANSPARENTS (APP_WORLD_MAX_RENDERABLES / 4u)
 #define APP_WORLD_MAX_MESHES 8u
 #define APP_WORLD_MAX_MATERIALS 16u
 #define APP_WORLD_BIN_COUNT 3u
 #define APP_WORLD_FRAME_BUFFER_COUNT 2u
 #define APP_WORLD_SHADER_COUNT 7u
+#define APP_WORLD_MAX_LANES 16u
 
 enum AppWorldBin {
     AppWorldBin_Opaque = 0,
@@ -99,6 +101,18 @@ struct AppWorldMesh {
 struct AppWorldArtifactBridge {
     GfxDevice* device;
     AppCoreState* state;
+};
+
+// One per extraction lane; slices of the per-frame arrays, no sharing.
+struct AppWorldLaneWriter {
+    ShdWorldRenderableRecord* records;
+    U32 count;
+    U32 cap;
+    ShdWorldRenderableRecord* transparents;
+    F32* transparentDepths;
+    U32 transparentCount;
+    U32 transparentCap;
+    U32 dropped;
 };
 
 struct AppWorldState {
@@ -158,14 +172,15 @@ struct AppWorldState {
     AppWorldArtifactBridge artifactBridge;
 
     ShdWorldFrameRecord frameRecord;
-    ShdWorldRenderableRecord* renderables;
-    ShdWorldRenderableRecord* transparents;
-    F32* transparentDepths;
-    U32 renderableCount;
-    U32 transparentCount;
+    AppWorldLaneWriter* laneWriters;
+    U32 laneCount;
     U32 lastRenderableCount;
+    U32 lastDroppedCount;
     B32 frameOpen;
 };
+
+#define APP_DEMO_GRID_MIN 4u
+#define APP_DEMO_GRID_MAX 120u
 
 struct AppDemoState {
     U8 titleBuffer[128];
@@ -173,6 +188,8 @@ struct AppDemoState {
     F32 titleSize;
     B32 showBounds;
     B32 animate;
+    B32 threadedExtract;
+    U32 maxLanes;
     U32 gridSide;
 };
 

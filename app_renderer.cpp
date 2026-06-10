@@ -1407,12 +1407,37 @@ static void app_world_frustum_planes_(const Mat4x4F32* m, F32* outPlanes) {
 static void app_world_begin_frame_(APP_Context* ctx) {
     AppCoreState* state = ctx->core;
     AppWorldState* world = &state->world;
-    world->renderables = ARENA_PUSH_ARRAY(ctx->host->frameArena, ShdWorldRenderableRecord, APP_WORLD_MAX_RENDERABLES);
-    world->transparents = ARENA_PUSH_ARRAY(ctx->host->frameArena, ShdWorldRenderableRecord, APP_WORLD_MAX_RENDERABLES / 4u);
-    world->transparentDepths = ARENA_PUSH_ARRAY(ctx->host->frameArena, F32, APP_WORLD_MAX_RENDERABLES / 4u);
-    world->renderableCount = 0u;
-    world->transparentCount = 0u;
-    world->frameOpen = (world->renderables != 0 && world->transparents != 0 && world->transparentDepths != 0);
+    Arena* arena = ctx->host->frameArena;
+
+    // spmd_dispatch lanes must not exceed worker count (debug-asserted).
+    U32 laneCount = 1u;
+    if (state->demo.threadedExtract && state->jobSystem && state->workerCount > 1u) {
+        laneCount = MIN(state->workerCount, MIN(state->demo.maxLanes, APP_WORLD_MAX_LANES));
+        laneCount = MAX(laneCount, 1u);
+    }
+    world->laneCount = laneCount;
+    world->laneWriters = ARENA_PUSH_ARRAY(arena, AppWorldLaneWriter, laneCount);
+    ShdWorldRenderableRecord* records = ARENA_PUSH_ARRAY(arena, ShdWorldRenderableRecord, APP_WORLD_MAX_RENDERABLES);
+    ShdWorldRenderableRecord* transparents = ARENA_PUSH_ARRAY(arena, ShdWorldRenderableRecord, APP_WORLD_MAX_TRANSPARENTS);
+    F32* depths = ARENA_PUSH_ARRAY(arena, F32, APP_WORLD_MAX_TRANSPARENTS);
+    world->frameOpen = (world->laneWriters != 0 && records != 0 && transparents != 0 && depths != 0);
+    if (!world->frameOpen) {
+        return;
+    }
+
+    U32 cap = APP_WORLD_MAX_RENDERABLES / laneCount;
+    U32 transparentCap = APP_WORLD_MAX_TRANSPARENTS / laneCount;
+    for (U32 lane = 0u; lane < laneCount; ++lane) {
+        AppWorldLaneWriter* writer = world->laneWriters + lane;
+        writer->records = records + (U64)lane * cap;
+        writer->count = 0u;
+        writer->cap = cap;
+        writer->transparents = transparents + (U64)lane * transparentCap;
+        writer->transparentDepths = depths + (U64)lane * transparentCap;
+        writer->transparentCount = 0u;
+        writer->transparentCap = transparentCap;
+        writer->dropped = 0u;
+    }
 }
 
 static void app_world_set_camera(APP_Context* ctx, Vec3F32 eye, Vec3F32 target, F32 fovYRadians,
@@ -1435,13 +1460,9 @@ static void app_world_set_camera(APP_Context* ctx, Vec3F32 eye, Vec3F32 target, 
     world->frameRecord.time = (F32)((F64)state->frameCounter / 60.0);
 }
 
-static void app_world_push(APP_Context* ctx, AppWorldMeshHandle meshHandle, U32 materialIndex,
-                           AppWorldBin bin, const Mat4x4F32* transform) {
-    AppCoreState* state = ctx->core;
-    AppWorldState* world = &state->world;
-    if (!world->frameOpen) {
-        return;
-    }
+static void app_world_writer_push_(AppWorldState* world, AppWorldLaneWriter* writer,
+                                   AppWorldMeshHandle meshHandle, U32 materialIndex,
+                                   AppWorldBin bin, const Mat4x4F32* transform) {
     AppWorldMesh* mesh = (AppWorldMesh*)slot_map_get(&world->meshes, meshHandle.index, meshHandle.generation);
     if (!mesh) {
         return;
@@ -1473,47 +1494,79 @@ static void app_world_push(APP_Context* ctx, AppWorldMeshHandle meshHandle, U32 
     record.flags = 0u;
 
     if (bin == AppWorldBin_Transparent) {
-        if (world->transparentCount >= APP_WORLD_MAX_RENDERABLES / 4u) {
+        if (writer->transparentCount >= writer->transparentCap) {
+            writer->dropped += 1u;
             return;
         }
         F32 dx = worldCenter.x - world->frameRecord.cameraPos[0];
         F32 dy = worldCenter.y - world->frameRecord.cameraPos[1];
         F32 dz = worldCenter.z - world->frameRecord.cameraPos[2];
-        world->transparents[world->transparentCount] = record;
-        world->transparentDepths[world->transparentCount] = dx * dx + dy * dy + dz * dz;
-        world->transparentCount += 1u;
+        writer->transparents[writer->transparentCount] = record;
+        writer->transparentDepths[writer->transparentCount] = dx * dx + dy * dy + dz * dz;
+        writer->transparentCount += 1u;
         return;
     }
 
-    if (world->renderableCount >= APP_WORLD_MAX_RENDERABLES) {
+    if (writer->count >= writer->cap) {
+        writer->dropped += 1u;
         return;
     }
-    world->renderables[world->renderableCount] = record;
-    world->renderableCount += 1u;
+    writer->records[writer->count] = record;
+    writer->count += 1u;
 }
 
-static void app_world_sort_transparents_(AppWorldState* world, Arena* frameArena) {
-    U32 count = world->transparentCount;
-    if (count < 2u) {
+static void app_world_push(APP_Context* ctx, AppWorldMeshHandle meshHandle, U32 materialIndex,
+                           AppWorldBin bin, const Mat4x4F32* transform) {
+    AppWorldState* world = &ctx->core->world;
+    if (!world->frameOpen) {
         return;
     }
-    U32* order = ARENA_PUSH_ARRAY(frameArena, U32, count);
-    U32* scratch = ARENA_PUSH_ARRAY(frameArena, U32, count);
+    app_world_writer_push_(world, world->laneWriters, meshHandle, materialIndex, bin, transform);
+}
+
+// Merges every lane's transparent slice, sorts back-to-front, and returns a
+// contiguous tail of uploadCount records ready for the renderable buffer.
+static ShdWorldRenderableRecord* app_world_sorted_transparents_(AppWorldState* world, Arena* frameArena,
+                                                                U32 total, U32 uploadCount) {
+    ShdWorldRenderableRecord* tail = ARENA_PUSH_ARRAY(frameArena, ShdWorldRenderableRecord, uploadCount);
+    F32* depths = ARENA_PUSH_ARRAY(frameArena, F32, total);
+    const ShdWorldRenderableRecord** sources = ARENA_PUSH_ARRAY(frameArena, const ShdWorldRenderableRecord*, total);
+    if (!tail || !depths || !sources) {
+        return 0;
+    }
+
+    U32 merged = 0u;
+    for (U32 lane = 0u; lane < world->laneCount; ++lane) {
+        const AppWorldLaneWriter* writer = world->laneWriters + lane;
+        for (U32 at = 0u; at < writer->transparentCount; ++at) {
+            depths[merged] = writer->transparentDepths[at];
+            sources[merged] = writer->transparents + at;
+            merged += 1u;
+        }
+    }
+
+    if (total == 1u) {
+        tail[0] = *sources[0];
+        return tail;
+    }
+
+    U32* order = ARENA_PUSH_ARRAY(frameArena, U32, total);
+    U32* scratch = ARENA_PUSH_ARRAY(frameArena, U32, total);
     if (!order || !scratch) {
-        return;
+        return 0;
     }
-    for (U32 at = 0u; at < count; ++at) {
+    for (U32 at = 0u; at < total; ++at) {
         order[at] = at;
     }
     // Back-to-front: descending squared distance; radix over flipped F32 bits,
-    // two 16-bit passes, then reversed copy-out.
+    // two 16-bit passes, then reversed copy-out (drops the nearest on overflow).
     for (U32 pass = 0u; pass < 2u; ++pass) {
         U32 shift = pass * 16u;
         U32 histogram[65536];
         MEMSET(histogram, 0, sizeof(histogram));
-        for (U32 at = 0u; at < count; ++at) {
+        for (U32 at = 0u; at < total; ++at) {
             union { F32 f; U32 u; } bits;
-            bits.f = world->transparentDepths[order[at]];
+            bits.f = depths[order[at]];
             U32 key = ((bits.u >> 31u) != 0u) ? ~bits.u : (bits.u | 0x80000000u);
             histogram[(key >> shift) & 0xFFFFu] += 1u;
         }
@@ -1523,9 +1576,9 @@ static void app_world_sort_transparents_(AppWorldState* world, Arena* frameArena
             histogram[bucket] = running;
             running += bucketCount;
         }
-        for (U32 at = 0u; at < count; ++at) {
+        for (U32 at = 0u; at < total; ++at) {
             union { F32 f; U32 u; } bits;
-            bits.f = world->transparentDepths[order[at]];
+            bits.f = depths[order[at]];
             U32 key = ((bits.u >> 31u) != 0u) ? ~bits.u : (bits.u | 0x80000000u);
             scratch[histogram[(key >> shift) & 0xFFFFu]++] = order[at];
         }
@@ -1533,15 +1586,10 @@ static void app_world_sort_transparents_(AppWorldState* world, Arena* frameArena
         order = scratch;
         scratch = swap;
     }
-    for (U32 at = 0u; at < count; ++at) {
-        U32 source = order[count - 1u - at];
-        if (world->renderableCount >= APP_WORLD_MAX_RENDERABLES) {
-            break;
-        }
-        world->renderables[world->renderableCount] = world->transparents[source];
-        world->renderableCount += 1u;
+    for (U32 at = 0u; at < uploadCount; ++at) {
+        tail[at] = *sources[order[total - 1u - at]];
     }
-    world->transparentCount = 0u;
+    return tail;
 }
 
 static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame) {
@@ -1555,17 +1603,22 @@ static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame
     }
     world->frameOpen = 0;
 
-    app_world_sort_transparents_(world, ctx->host->frameArena);
-    if (world->transparentCount != 0u) {
-        for (U32 at = 0u; at < world->transparentCount && world->renderableCount < APP_WORLD_MAX_RENDERABLES; ++at) {
-            world->renderables[world->renderableCount] = world->transparents[at];
-            world->renderableCount += 1u;
-        }
-        world->transparentCount = 0u;
+    U32 opaqueTotal = 0u;
+    U32 transparentTotal = 0u;
+    U32 dropped = 0u;
+    for (U32 lane = 0u; lane < world->laneCount; ++lane) {
+        const AppWorldLaneWriter* writer = world->laneWriters + lane;
+        opaqueTotal += writer->count;
+        transparentTotal += writer->transparentCount;
+        dropped += writer->dropped;
     }
+    U32 transparentUpload = MIN(transparentTotal, APP_WORLD_MAX_RENDERABLES - opaqueTotal);
+    dropped += transparentTotal - transparentUpload;
+    U32 renderableTotal = opaqueTotal + transparentUpload;
 
-    world->lastRenderableCount = world->renderableCount;
-    if (world->renderableCount == 0u ||
+    world->lastRenderableCount = renderableTotal;
+    world->lastDroppedCount = dropped;
+    if (renderableTotal == 0u ||
         !world->gpuResourcesCreated ||
         world->opaquePipeline.generation == 0u ||
         world->depthTexture.generation == 0u) {
@@ -1574,13 +1627,37 @@ static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame
     }
 
     U32 frameBufferIndex = (U32)(state->frameCounter & (APP_WORLD_FRAME_BUFFER_COUNT - 1u));
-    world->frameRecord.renderableCount = world->renderableCount;
+    world->frameRecord.renderableCount = renderableTotal;
     if (!gfx_upload_buffer(frame, world->frameRecordBuffers[frameBufferIndex], 0u,
-                           &world->frameRecord, sizeof(world->frameRecord)) ||
-        !gfx_upload_buffer(frame, world->renderableBuffers[frameBufferIndex], 0u,
-                           world->renderables, sizeof(ShdWorldRenderableRecord) * world->renderableCount)) {
+                           &world->frameRecord, sizeof(world->frameRecord))) {
         world->lastRenderableCount = 0u;
         return;
+    }
+    U32 uploadOffset = 0u;
+    for (U32 lane = 0u; lane < world->laneCount; ++lane) {
+        const AppWorldLaneWriter* writer = world->laneWriters + lane;
+        if (writer->count == 0u) {
+            continue;
+        }
+        if (!gfx_upload_buffer(frame, world->renderableBuffers[frameBufferIndex],
+                               uploadOffset * sizeof(ShdWorldRenderableRecord),
+                               writer->records, sizeof(ShdWorldRenderableRecord) * writer->count)) {
+            world->lastRenderableCount = 0u;
+            return;
+        }
+        uploadOffset += writer->count;
+    }
+    if (transparentUpload != 0u) {
+        PROF_SCOPE("world transparents");
+        ShdWorldRenderableRecord* tail = app_world_sorted_transparents_(world, ctx->host->frameArena,
+                                                                        transparentTotal, transparentUpload);
+        if (!tail ||
+            !gfx_upload_buffer(frame, world->renderableBuffers[frameBufferIndex],
+                               uploadOffset * sizeof(ShdWorldRenderableRecord),
+                               tail, sizeof(ShdWorldRenderableRecord) * transparentUpload)) {
+            world->lastRenderableCount = 0u;
+            return;
+        }
     }
 
     if (world->meshRecordsDirty) {
@@ -1622,7 +1699,7 @@ static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame
     cullRoot->visibleBuffer = world->visibleBufferId.index;
     cullRoot->argsBuffer = world->argsBufferId.index;
     cullRoot->meshBuffer = world->meshRecordBufferId.index;
-    cullRoot->renderableCount = world->renderableCount;
+    cullRoot->renderableCount = renderableTotal;
     cullRoot->cellCount = cellCount;
     cullRoot->meshCount = APP_WORLD_MAX_MESHES;
 
@@ -1631,7 +1708,7 @@ static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame
     };
     U32 groupCounts[5] = {
         (cellCount + APP_WORLD_CULL_GROUP_SIZE - 1u) / APP_WORLD_CULL_GROUP_SIZE,
-        (world->renderableCount + APP_WORLD_CULL_GROUP_SIZE - 1u) / APP_WORLD_CULL_GROUP_SIZE,
+        (renderableTotal + APP_WORLD_CULL_GROUP_SIZE - 1u) / APP_WORLD_CULL_GROUP_SIZE,
         1u,
         cellCount,
         (cellCount + APP_WORLD_CULL_GROUP_SIZE - 1u) / APP_WORLD_CULL_GROUP_SIZE,
