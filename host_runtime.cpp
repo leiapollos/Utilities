@@ -26,6 +26,7 @@
 #define HOST_MAX_MIN_SLEEP_MS 16u
 #define HOST_GFX_FRAMES_IN_FLIGHT 2u
 #define HOST_GFX_TEMP_BUFFER_SIZE MB(8)
+#define HOST_GFX_STAGING_BUFFER_SIZE MB(32)
 
 #if !defined(UTILITIES_STATIC_APP)
 #define UTILITIES_STATIC_APP 0
@@ -52,16 +53,18 @@ static const char* HOST_HOT_MODULE_INPUTS[] = {
     "nstl/artifact/artifact_include.cpp",
     "nstl/text/text.hpp",
     "nstl/text/text_include.hpp",
+    "nstl/draw2d/draw2d.hpp",
+    "nstl/draw2d/draw2d.cpp",
+    "nstl/draw2d/draw2d_include.hpp",
+    "nstl/draw2d/draw2d_include.cpp",
     "app/shaders/shader_manifest.h",
     "app/fonts/NotoSans-Regular.ttf",
 };
 
 static const char* HOST_SHADER_INPUTS[] = {
     "app/shaders/shader_manifest.h",
-    "app/shaders/demo.slang",
-    "app/shaders/text.slang",
+    "app/shaders/draw2d.slang",
     "app/shaders/gfx_shader_abi.slang",
-    "app/shaders/demo_shader_support.slang",
 };
 
 static const char* HOST_RESTART_REQUIRED_INPUTS[] = {
@@ -1074,9 +1077,11 @@ static B32 host_create_gfx_device(HostState* state) {
     desc.window = state->window;
     desc.framesInFlight = HOST_GFX_FRAMES_IN_FLIGHT;
     desc.tempBufferSize = HOST_GFX_TEMP_BUFFER_SIZE;
+    desc.stagingBufferSize = HOST_GFX_STAGING_BUFFER_SIZE;
     desc.validationFlags = GfxValidationFlags_Api |
                            GfxValidationFlags_Backend |
-                           GfxValidationFlags_GpuMarkers;
+                           GfxValidationFlags_GpuMarkers |
+                           GfxValidationFlags_GpuTimings;
 
     GfxDevice* device = 0;
     if (!gfx_device_create(&desc, state->programArena, &device)) {

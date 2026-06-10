@@ -1,7 +1,7 @@
-#define TEXT_DEFAULT_ATLAS_WIDTH 1024u
-#define TEXT_DEFAULT_ATLAS_HEIGHT 1024u
-#define TEXT_DEFAULT_MAX_FONTS 1u
-#define TEXT_DEFAULT_MAX_GLYPHS 4096u
+#define TEXT_DEFAULT_ATLAS_WIDTH 2048u
+#define TEXT_DEFAULT_ATLAS_HEIGHT 2048u
+#define TEXT_DEFAULT_MAX_FONTS 8u
+#define TEXT_DEFAULT_MAX_GLYPHS 16384u
 #define TEXT_SHAPE_CONTEXT_MEMORY_SIZE MB(4)
 #define TEXT_ATLAS_UPLOAD_PITCH_ALIGNMENT 256u
 
@@ -25,6 +25,7 @@ struct TextGlyphCacheEntry {
     U32 pixelSize;
     S32 bitmapLeft;
     S32 bitmapTop;
+    U32 page;
     U32 atlasX;
     U32 atlasY;
     U32 width;
@@ -49,6 +50,12 @@ struct TextContext {
     U32 maxGlyphs;
     U32 glyphCount;
 
+    // Open-addressed glyph lookup: key packs {fontIndex, pixelSize, glyphId},
+    // value is glyph entry index + 1 (0 = empty slot).
+    U64* glyphSlotKeys;
+    U32* glyphSlotValues;
+    U32 glyphSlotCapacity;
+
     U8* atlasPixels;
     U32 atlasWidth;
     U32 atlasHeight;
@@ -57,10 +64,17 @@ struct TextContext {
     U32 shelfY;
     U32 shelfHeight;
 
+    F32 whiteU;
+    F32 whiteV;
+
     B32 loggedAtlasOverflow;
     B32 loggedGlyphOverflow;
     B32 loggedShapeMemory;
 };
+
+static U64 text_glyph_key(U32 fontIndex, U32 glyphId, U32 pixelSize) {
+    return ((U64)fontIndex << 48u) | ((U64)pixelSize << 32u) | (U64)glyphId;
+}
 
 static TextDrawData text_draw_data_nil(void) {
     TextDrawData result = {};
@@ -129,20 +143,38 @@ static B32 text_atlas_alloc(TextContext* text, U32 width, U32 height, U32* outX,
 }
 
 static TextGlyphCacheEntry* text_find_glyph(TextContext* text, U32 fontIndex, U32 glyphId, U32 pixelSize) {
-    if (!text || !text->glyphs) {
+    if (!text || !text->glyphs || !text->glyphSlotKeys) {
         return 0;
     }
 
-    for (U32 glyphIndex = 0u; glyphIndex < text->glyphCount; ++glyphIndex) {
-        TextGlyphCacheEntry* entry = text->glyphs + glyphIndex;
-        if (entry->occupied &&
-            entry->fontIndex == fontIndex &&
-            entry->glyphId == glyphId &&
-            entry->pixelSize == pixelSize) {
-            return entry;
+    U64 key = text_glyph_key(fontIndex, glyphId, pixelSize);
+    U32 mask = text->glyphSlotCapacity - 1u;
+    U32 slot = (U32)((key * 0x9E3779B97F4A7C15ull) >> 32u) & mask;
+    for (U32 probe = 0u; probe < text->glyphSlotCapacity; ++probe) {
+        U64 slotKey = text->glyphSlotKeys[slot];
+        if (slotKey == 0u) {
+            return 0;
         }
+        if (slotKey == key) {
+            return text->glyphs + (text->glyphSlotValues[slot] - 1u);
+        }
+        slot = (slot + 1u) & mask;
     }
     return 0;
+}
+
+static void text_insert_glyph_slot(TextContext* text, U32 fontIndex, U32 glyphId, U32 pixelSize, U32 entryIndex) {
+    U64 key = text_glyph_key(fontIndex, glyphId, pixelSize);
+    U32 mask = text->glyphSlotCapacity - 1u;
+    U32 slot = (U32)((key * 0x9E3779B97F4A7C15ull) >> 32u) & mask;
+    for (U32 probe = 0u; probe < text->glyphSlotCapacity; ++probe) {
+        if (text->glyphSlotKeys[slot] == 0u) {
+            text->glyphSlotKeys[slot] = key;
+            text->glyphSlotValues[slot] = entryIndex + 1u;
+            return;
+        }
+        slot = (slot + 1u) & mask;
+    }
 }
 
 static void text_copy_ft_bitmap_to_atlas(TextContext* text, U32 atlasX, U32 atlasY, const FT_Bitmap* bitmap) {
@@ -196,13 +228,15 @@ static TextGlyphCacheEntry* text_get_or_cache_glyph(TextContext* text,
         return 0;
     }
 
-    entry = text->glyphs + text->glyphCount;
+    U32 entryIndex = text->glyphCount;
+    entry = text->glyphs + entryIndex;
     text->glyphCount += 1u;
     *entry = {};
     entry->occupied = 1;
     entry->fontIndex = font->index;
     entry->glyphId = glyphId;
     entry->pixelSize = pixelSize;
+    text_insert_glyph_slot(text, font->index, glyphId, pixelSize, entryIndex);
 
     FT_Error sizeError = FT_Set_Pixel_Sizes(font->ftFace, 0u, pixelSize);
     if (sizeError != 0) {
@@ -249,6 +283,7 @@ static TextGlyphCacheEntry* text_get_or_cache_glyph(TextContext* text,
     if (uploads && *uploadCount < uploadCapacity) {
         TextAtlasUpload* upload = uploads + *uploadCount;
         *upload = {};
+        upload->page = 0u;
         upload->x = atlasX;
         upload->y = atlasY;
         upload->width = entry->width;
@@ -390,19 +425,44 @@ B32 text_context_create(const TextContextDesc* desc, TextContext** outText) {
     text->maxGlyphs = maxGlyphs;
     text->nextFontGeneration = 1u;
 
+    U32 glyphSlotCapacity = 1u;
+    while (glyphSlotCapacity < maxGlyphs * 2u) {
+        glyphSlotCapacity <<= 1u;
+    }
+    text->glyphSlotCapacity = glyphSlotCapacity;
+
     text->fonts = ARENA_PUSH_ARRAY(desc->arena, TextFontSlot, maxFonts + 1u);
     text->glyphs = ARENA_PUSH_ARRAY(desc->arena, TextGlyphCacheEntry, maxGlyphs);
+    text->glyphSlotKeys = ARENA_PUSH_ARRAY(desc->arena, U64, glyphSlotCapacity);
+    text->glyphSlotValues = ARENA_PUSH_ARRAY(desc->arena, U32, glyphSlotCapacity);
     text->atlasPixels = ARENA_PUSH_ARRAY(desc->arena, U8, (U64)text->atlasPitch * (U64)atlasHeight);
     text->shapeContextMemorySize = (U32)(kbts_SizeOfShapeContext() + TEXT_SHAPE_CONTEXT_MEMORY_SIZE);
     text->shapeContextMemory = arena_push(desc->arena, text->shapeContextMemorySize, 16u);
-    if (!text->fonts || !text->glyphs || !text->atlasPixels || !text->shapeContextMemory) {
+    if (!text->fonts || !text->glyphs || !text->glyphSlotKeys || !text->glyphSlotValues ||
+        !text->atlasPixels || !text->shapeContextMemory) {
         return 0;
     }
 
     MEMSET(text->fonts, 0, sizeof(TextFontSlot) * (maxFonts + 1u));
     MEMSET(text->glyphs, 0, sizeof(TextGlyphCacheEntry) * maxGlyphs);
+    MEMSET(text->glyphSlotKeys, 0, sizeof(U64) * glyphSlotCapacity);
+    MEMSET(text->glyphSlotValues, 0, sizeof(U32) * glyphSlotCapacity);
     MEMSET(text->atlasPixels, 0, (U64)text->atlasPitch * (U64)atlasHeight);
     MEMSET(text->shapeContextMemory, 0, text->shapeContextMemorySize);
+
+    // Reserve a solid-white 2x2 block so untextured quads (rects, lines)
+    // can sample the atlas through the same pipeline as glyphs.
+    U32 whiteX = 0u;
+    U32 whiteY = 0u;
+    if (text_atlas_alloc(text, 2u, 2u, &whiteX, &whiteY)) {
+        for (U32 row = 0u; row < 2u; ++row) {
+            U8* dst = text->atlasPixels + (U64)(whiteY + row) * (U64)text->atlasPitch + whiteX;
+            dst[0] = 0xFFu;
+            dst[1] = 0xFFu;
+        }
+        text->whiteU = ((F32)whiteX + 1.0f) / (F32)atlasWidth;
+        text->whiteV = ((F32)whiteY + 1.0f) / (F32)atlasHeight;
+    }
 
     text->shapeContext = kbts_PlaceShapeContextFixedMemory2(text->shapeContextMemory,
                                                             (int)text->shapeContextMemorySize,
@@ -594,5 +654,29 @@ TextDrawData text_prepare_draw(TextContext* text, Arena* frameArena, const TextD
     result.uploadCount = uploadCount;
     result.width = maxLineWidth;
     result.height = (F32)lineCount * lineHeight;
+    return result;
+}
+
+void text_white_uv(TextContext* text, F32* outU, F32* outV) {
+    if (outU) {
+        *outU = text ? text->whiteU : 0.0f;
+    }
+    if (outV) {
+        *outV = text ? text->whiteV : 0.0f;
+    }
+}
+
+TextAtlasUpload text_atlas_full_upload(TextContext* text) {
+    TextAtlasUpload result = {};
+    if (!text || !text->atlasPixels) {
+        return result;
+    }
+    result.page = 0u;
+    result.x = 0u;
+    result.y = 0u;
+    result.width = text->atlasWidth;
+    result.height = text->atlasHeight;
+    result.pixels = text->atlasPixels;
+    result.pitch = text->atlasPitch;
     return result;
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #define GFX_MAX_COLOR_TARGETS 4u
+#define GFX_MAX_TIMED_PASSES 16u
 #define GFX_SHADER_SLOT_ROOT_DATA 8u
 #define GFX_SHADER_SLOT_RESOURCE_TABLE 9u
 #define GFX_TEXTURE_UPLOAD_BYTES_PER_ROW_ALIGNMENT 256u
@@ -57,6 +58,11 @@ enum GfxFormat {
     GfxFormat_RGBA8_UNorm,
     GfxFormat_RGBA16_Float,
     GfxFormat_D32_Float,
+    GfxFormat_BC1_RGBA_UNorm,
+    GfxFormat_BC3_RGBA_UNorm,
+    GfxFormat_BC4_R_UNorm,
+    GfxFormat_BC5_RG_UNorm,
+    GfxFormat_BC7_RGBA_UNorm,
 };
 
 enum GfxMemoryKind {
@@ -102,6 +108,8 @@ enum GfxIndexType {
     GfxIndexType_U16 = 0,
     GfxIndexType_U32,
 };
+// Draw kind is implicit: a draw with a nil indirect buffer is a direct
+// indexed draw; a non-nil indirect buffer makes it indirect indexed.
 
 enum GfxShaderFormat {
     GfxShaderFormat_MSL_Source = 0,
@@ -112,11 +120,6 @@ enum GfxShaderFormat {
 enum GfxPipelineKind {
     GfxPipelineKind_Graphics = 0,
     GfxPipelineKind_Compute,
-};
-
-enum GfxDrawKind {
-    GfxDrawKind_DirectIndexed = 0,
-    GfxDrawKind_IndirectIndexed,
 };
 
 enum GfxPrimitiveTopology {
@@ -199,6 +202,7 @@ enum GfxValidationFlags {
     GfxValidationFlags_Api        = (1u << 0),
     GfxValidationFlags_Backend    = (1u << 1),
     GfxValidationFlags_GpuMarkers = (1u << 2),
+    GfxValidationFlags_GpuTimings = (1u << 3),
 };
 
 struct GfxDeviceDesc {
@@ -206,6 +210,7 @@ struct GfxDeviceDesc {
     OS_WindowHandle window;
     U32 framesInFlight;
     U64 tempBufferSize;
+    U64 stagingBufferSize;
     U32 validationFlags;
 };
 
@@ -316,19 +321,25 @@ struct GfxRect {
     U32 height;
 };
 
+// Compact draw record: one cache line. Root data always lives in the frame
+// temp buffer (gfx_allocate_temp); rootDataOffset/rootDataSize address it.
+// rootDataSize == 0 skips the draw. A nil indirectBuffer means a direct
+// indexed draw; non-nil means indirect indexed via indirectByteOffset.
 struct GfxDraw {
-    GfxDrawKind kind;
     GfxPipeline pipeline;
     GfxBuffer indexBuffer;
-    U64 indexByteOffset;
+    GfxBuffer indirectBuffer;
+    U32 indexByteOffset;
     U32 indexCount;
     U32 instanceCount;
     S32 baseVertex;
     U32 firstInstance;
-    GfxIndexType indexType;
-    GfxGpuSlice rootData;
-    GfxGpuSlice indirectArgs;
+    U32 indirectByteOffset;
+    U32 rootDataOffset;
+    U32 rootDataSize;
+    U32 indexType;
 };
+static_assert(sizeof(GfxDraw) <= 64u, "GfxDraw must stay within one cache line");
 
 struct GfxDrawIndexedIndirectArgs {
     U32 indexCount;
@@ -347,24 +358,24 @@ struct GfxDrawArea {
 
 struct GfxDispatch {
     GfxPipeline pipeline;
-    GfxGpuSlice rootData;
+    U32 rootDataOffset;
+    U32 rootDataSize;
     U32 groupsX;
     U32 groupsY;
     U32 groupsZ;
 };
 
-struct GfxComputeWrite {
-    GfxGpuSlice slice;
-};
-
-// Declares shader-visible resources touched by a pass. Compute write visibility is
-// still declared explicitly through GfxComputeWrite.
+// Declares shader-visible resources touched by a pass, and — for buffer uses
+// carrying GfxResourceAccessFlags_ShaderWrite — the synchronization contract:
+// offset/size narrow the write barrier (size 0 = whole resource from offset).
 struct GfxResourceUse {
     GfxResourceUseKind kind;
     U32 accessFlags;
     U32 shaderStages;
     GfxBuffer buffer;
     GfxTexture texture;
+    U64 offset;
+    U64 size;
 };
 
 struct GfxColorTarget {
@@ -392,8 +403,6 @@ struct GfxRenderPassDesc {
 
 struct GfxComputePassDesc {
     const char* name;
-    const GfxComputeWrite* writes;
-    U32 writeCount;
     const GfxResourceUse* resourceUses;
     U32 resourceUseCount;
 };
@@ -405,7 +414,14 @@ struct GfxStats {
     U32 resourceTableCount;
     U32 tempOverflowCount;
     U64 tempBytesUsed;
+    U32 stagingOverflowCount;
+    U64 stagingBytesUsed;
     U64 frameIndex;
+    // GPU pass times for the most recently completed frame, in submission
+    // order. Only filled when GfxValidationFlags_GpuTimings is set and the
+    // device supports timestamp sampling.
+    F32 passGpuMs[GFX_MAX_TIMED_PASSES];
+    U32 passGpuCount;
 };
 
 UTILITIES_SHARED_API B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDevice);

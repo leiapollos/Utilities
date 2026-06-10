@@ -595,7 +595,8 @@ U64 OS_file_write(OS_Handle fileHandle, RangeU64 range, const void* src) {
 U64 OS_file_write(OS_Handle fileHandle, U64 size, const void* src) {
     OS_MACOS_Entity* entity = (OS_MACOS_Entity*) fileHandle.handle;
     ASSERT_DEBUG(entity && entity->type == OS_MACOS_EntityType_File);
-    ASSERT_DEBUG(!OS_is_seekable(entity->file.fd));
+    // write() streams at the current offset for any fd kind, including
+    // seekable ones (redirected stdout, LaunchServices launches, CI).
 
     const U8* sourceBytes = (const U8*) src;
     U64 totalTransferred = 0;

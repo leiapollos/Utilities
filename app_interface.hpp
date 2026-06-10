@@ -9,7 +9,7 @@
 #include "nstl/os/graphics/os_graphics.hpp"
 #include "nstl/gfx/gfx_include.hpp"
 
-#define APP_ABI_VERSION 20u
+#define APP_ABI_VERSION 21u
 #define APP_STATE_SCHEMA_VERSION 2u
 #if defined(PLATFORM_OS_WINDOWS)
 #define APP_MODULE_SOURCE_RELATIVE "hot/utilities_app.dll"

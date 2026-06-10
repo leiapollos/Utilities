@@ -4,6 +4,7 @@
 
 #define GFX_VULKAN_DEFAULT_FRAMES_IN_FLIGHT 2u
 #define GFX_VULKAN_DEFAULT_TEMP_BUFFER_SIZE MB(8)
+#define GFX_VULKAN_DEFAULT_STAGING_BUFFER_SIZE MB(32)
 #define GFX_VULKAN_RESOURCE_TABLE_CAPACITY 256u
 #define GFX_VULKAN_RESOURCE_BINDING_TEXTURES 0u
 #define GFX_VULKAN_RESOURCE_BINDING_SAMPLERS 1u
@@ -99,6 +100,12 @@ struct GfxFrame {
     void* tempCpu;
     U64 tempSize;
     U64 tempPos;
+    GfxBuffer stagingBuffer;
+    void* stagingCpu;
+    U64 stagingSize;
+    U64 stagingPos;
+    VkQueryPool timestampPool;
+    U32 timedPassCount;
     U32 imageIndex;
     B32 active;
     B32 submitted;
@@ -173,6 +180,10 @@ struct GfxDevice {
     VkImageView nilImageView;
     VkSampler nilSampler;
 
+    B32 bcSupported;
+    B32 gpuTimingsEnabled;
+    F64 timestampPeriodNs;
+
     GfxStats stats;
 };
 
@@ -237,9 +248,10 @@ static void gfx_vulkan_resource_table_clear(GfxDevice* device, GfxResourceId res
 static GfxResourceId gfx_vulkan_register_resource(GfxDevice* device, GfxResourceKind kind, U32 index, U32 generation);
 static B32 gfx_vulkan_create_pipeline_layout(GfxDevice* device);
 static B32 gfx_vulkan_create_temp_buffer(GfxDevice* device, GfxFrame* frame, U64 size);
+static B32 gfx_vulkan_create_staging_buffer(GfxDevice* device, GfxFrame* frame, U64 size);
 static void gfx_vulkan_destroy_swapchain(GfxDevice* device);
 static B32 gfx_vulkan_create_swapchain(GfxDevice* device, U32 width, U32 height);
-static B32 gfx_vulkan_create_frame_objects(GfxDevice* device, GfxFrame* frame, U64 tempSize);
+static B32 gfx_vulkan_create_frame_objects(GfxDevice* device, GfxFrame* frame, U64 tempSize, U64 stagingSize);
 static void gfx_vulkan_destroy_frame_objects(GfxDevice* device, GfxFrame* frame);
 static VkAttachmentLoadOp gfx_vulkan_load_op(GfxLoadOp op);
 static VkAttachmentStoreOp gfx_vulkan_store_op(GfxStoreOp op);
@@ -423,6 +435,11 @@ static VkFormat gfx_vulkan_format(GfxFormat format) {
         case GfxFormat_RGBA8_UNorm: return VK_FORMAT_R8G8B8A8_UNORM;
         case GfxFormat_RGBA16_Float: return VK_FORMAT_R16G16B16A16_SFLOAT;
         case GfxFormat_D32_Float: return VK_FORMAT_D32_SFLOAT;
+        case GfxFormat_BC1_RGBA_UNorm: return VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+        case GfxFormat_BC3_RGBA_UNorm: return VK_FORMAT_BC3_UNORM_BLOCK;
+        case GfxFormat_BC4_R_UNorm: return VK_FORMAT_BC4_UNORM_BLOCK;
+        case GfxFormat_BC5_RG_UNorm: return VK_FORMAT_BC5_UNORM_BLOCK;
+        case GfxFormat_BC7_RGBA_UNorm: return VK_FORMAT_BC7_UNORM_BLOCK;
         default: return VK_FORMAT_UNDEFINED;
     }
 }
@@ -1604,6 +1621,24 @@ static B32 gfx_vulkan_create_temp_buffer(GfxDevice* device, GfxFrame* frame, U64
     return 1;
 }
 
+static B32 gfx_vulkan_create_staging_buffer(GfxDevice* device, GfxFrame* frame, U64 size) {
+    GfxBufferDesc stagingDesc = {};
+    stagingDesc.name = "gfx staging buffer";
+    stagingDesc.size = size;
+    stagingDesc.usageFlags = GfxBufferUsageFlags_None;
+    stagingDesc.memoryKind = GfxMemoryKind_Upload;
+    frame->stagingBuffer = gfx_vulkan_create_buffer_internal(device, &stagingDesc, 1);
+
+    GfxVulkanBuffer* buffer = gfx_vulkan_resolve_buffer(device, frame->stagingBuffer);
+    if (!buffer->buffer || !buffer->mapped) {
+        return 0;
+    }
+
+    frame->stagingCpu = buffer->mapped;
+    frame->stagingSize = size;
+    return 1;
+}
+
 static void gfx_vulkan_destroy_swapchain(GfxDevice* device) {
     if (!device || !device->device) {
         return;
@@ -1752,7 +1787,7 @@ static B32 gfx_vulkan_create_swapchain(GfxDevice* device, U32 width, U32 height)
     return 1;
 }
 
-static B32 gfx_vulkan_create_frame_objects(GfxDevice* device, GfxFrame* frame, U64 tempSize) {
+static B32 gfx_vulkan_create_frame_objects(GfxDevice* device, GfxFrame* frame, U64 tempSize, U64 stagingSize) {
     frame->device = device;
     frame->commands.frame = frame;
 
@@ -1787,7 +1822,21 @@ static B32 gfx_vulkan_create_frame_objects(GfxDevice* device, GfxFrame* frame, U
         return 0;
     }
 
-    return gfx_vulkan_create_temp_buffer(device, frame, tempSize);
+    if (device->gpuTimingsEnabled) {
+        VkQueryPoolCreateInfo queryPoolInfo = {};
+        queryPoolInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        queryPoolInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        queryPoolInfo.queryCount = 2u * GFX_MAX_TIMED_PASSES;
+        if (vkCreateQueryPool(device->device, &queryPoolInfo, 0, &frame->timestampPool) != VK_SUCCESS) {
+            LOG_WARNING("gfx", "Vulkan timestamp query pool creation failed");
+            frame->timestampPool = 0;
+        }
+    }
+
+    if (!gfx_vulkan_create_temp_buffer(device, frame, tempSize)) {
+        return 0;
+    }
+    return gfx_vulkan_create_staging_buffer(device, frame, stagingSize);
 }
 
 static void gfx_vulkan_destroy_frame_objects(GfxDevice* device, GfxFrame* frame) {
@@ -1796,6 +1845,12 @@ static void gfx_vulkan_destroy_frame_objects(GfxDevice* device, GfxFrame* frame)
     }
     frame->tempCpu = 0;
     frame->tempBuffer = {};
+    frame->stagingCpu = 0;
+    frame->stagingBuffer = {};
+    if (frame->timestampPool) {
+        vkDestroyQueryPool(device->device, frame->timestampPool, 0);
+        frame->timestampPool = 0;
+    }
     if (frame->imageAvailableSemaphore) {
         vkDestroySemaphore(device->device, frame->imageAvailableSemaphore, 0);
     }
@@ -2000,6 +2055,23 @@ B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDe
         return 0;
     }
 
+    {
+        VkPhysicalDeviceFeatures supportedFeatures = {};
+        vkGetPhysicalDeviceFeatures(device->physicalDevice, &supportedFeatures);
+        device->bcSupported = supportedFeatures.textureCompressionBC ? 1 : 0;
+
+        VkPhysicalDeviceProperties properties = {};
+        vkGetPhysicalDeviceProperties(device->physicalDevice, &properties);
+        device->timestampPeriodNs = (F64)properties.limits.timestampPeriod;
+        if (FLAGS_HAS(device->validationFlags, GfxValidationFlags_GpuTimings)) {
+            device->gpuTimingsEnabled = (properties.limits.timestampComputeAndGraphics &&
+                                         device->timestampPeriodNs > 0.0) ? 1 : 0;
+            if (!device->gpuTimingsEnabled) {
+                LOG_WARNING("gfx", "GPU pass timings are unavailable on this device");
+            }
+        }
+    }
+
     F32 queuePriority = 1.0f;
     VkDeviceQueueCreateInfo queueInfo = {};
     queueInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
@@ -2118,8 +2190,9 @@ B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDe
     MEMSET(device->frames, 0, sizeof(GfxFrame) * device->framesInFlight);
 
     U64 tempSize = desc->tempBufferSize ? desc->tempBufferSize : GFX_VULKAN_DEFAULT_TEMP_BUFFER_SIZE;
+    U64 stagingSize = desc->stagingBufferSize ? desc->stagingBufferSize : GFX_VULKAN_DEFAULT_STAGING_BUFFER_SIZE;
     for (U32 i = 0u; i < device->framesInFlight; ++i) {
-        if (!gfx_vulkan_create_frame_objects(device, &device->frames[i], tempSize)) {
+        if (!gfx_vulkan_create_frame_objects(device, &device->frames[i], tempSize, stagingSize)) {
             LOG_ERROR("gfx", "Vulkan frame object creation failed");
             gfx_device_destroy(device);
             return 0;
@@ -2260,9 +2333,16 @@ GfxTexture gfx_create_texture(GfxDevice* device, const GfxTextureDesc* desc) {
     GfxTextureDescValidation descValidation = gfx_validate_texture_desc_storage(desc);
     if (!descValidation.storageKindValid ||
         !descValidation.transientAttachmentOnly ||
-        !descValidation.transientSingleMip) {
+        !descValidation.transientSingleMip ||
+        !descValidation.formatUsageValid) {
         if (gfx_vulkan_api_validation_enabled(device)) {
             LOG_ERROR("gfx", "Invalid texture storage descriptor");
+        }
+        return {};
+    }
+    if (gfx_format_is_block_compressed(desc->format) && !device->bcSupported) {
+        if (gfx_vulkan_api_validation_enabled(device)) {
+            LOG_ERROR("gfx", "BC texture formats are not supported on this device");
         }
         return {};
     }
@@ -2822,6 +2902,39 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
         return 0;
     }
 
+    // Resolve GPU pass timestamps from this slot's previously submitted
+    // frame. The fence check above guarantees that submission has completed.
+    F32 resolvedMs[GFX_MAX_TIMED_PASSES] = {};
+    U32 resolvedCount = 0u;
+    if (device->gpuTimingsEnabled && frame->timestampPool && frame->timedPassCount != 0u) {
+        U64 timestamps[2u * GFX_MAX_TIMED_PASSES] = {};
+        U32 queryCount = 2u * frame->timedPassCount;
+        if (queryCount > 2u * GFX_MAX_TIMED_PASSES) {
+            queryCount = 2u * GFX_MAX_TIMED_PASSES;
+        }
+        VkResult queryResult = vkGetQueryPoolResults(device->device,
+                                                     frame->timestampPool,
+                                                     0u,
+                                                     queryCount,
+                                                     sizeof(U64) * queryCount,
+                                                     timestamps,
+                                                     sizeof(U64),
+                                                     VK_QUERY_RESULT_64_BIT);
+        if (queryResult == VK_SUCCESS) {
+            U32 passCount = queryCount / 2u;
+            for (U32 passIndex = 0u; passIndex < passCount; ++passIndex) {
+                U64 beginTicks = timestamps[2u * passIndex];
+                U64 endTicks = timestamps[2u * passIndex + 1u];
+                if (endTicks >= beginTicks) {
+                    resolvedMs[passIndex] =
+                        (F32)((F64)(endTicks - beginTicks) * device->timestampPeriodNs / 1.0e6);
+                }
+            }
+            resolvedCount = passCount;
+        }
+    }
+    frame->timedPassCount = 0u;
+
     vkResetCommandPool(device->device, frame->commandPool, 0u);
 
     VkCommandBufferBeginInfo beginInfo = {};
@@ -2830,7 +2943,12 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
         return 0;
     }
 
+    if (device->gpuTimingsEnabled && frame->timestampPool) {
+        vkCmdResetQueryPool(frame->commandBuffer, frame->timestampPool, 0u, 2u * GFX_MAX_TIMED_PASSES);
+    }
+
     frame->tempPos = 0u;
+    frame->stagingPos = 0u;
     frame->active = 1;
     frame->submitted = 0;
     device->activeFrame = frame;
@@ -2841,8 +2959,12 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
     device->stats.pipelineSwitchCount = 0u;
     device->stats.tempOverflowCount = 0u;
     device->stats.tempBytesUsed = 0u;
+    device->stats.stagingOverflowCount = 0u;
+    device->stats.stagingBytesUsed = 0u;
     device->stats.resourceTableCount = device->resourceTable.liveCount;
     device->stats.frameIndex = device->frameSerial;
+    MEMCPY(device->stats.passGpuMs, resolvedMs, sizeof(resolvedMs));
+    device->stats.passGpuCount = resolvedCount;
     return frame;
 }
 
@@ -2888,6 +3010,34 @@ GfxTemp gfx_allocate_temp(GfxFrame* frame, U64 size, U64 alignment) {
     return result;
 }
 
+static GfxTemp gfx_vulkan_allocate_staging(GfxFrame* frame, U64 size, U64 alignment) {
+    GfxTemp result = {};
+    if (!frame || !frame->active || size == 0u) {
+        return result;
+    }
+    if (alignment == 0u) {
+        alignment = sizeof(void*);
+    }
+    if (!is_power_of_two(alignment)) {
+        return result;
+    }
+
+    U64 offset = align_pow2(frame->stagingPos, alignment);
+    U64 end = offset + size;
+    if (end > frame->stagingSize) {
+        frame->device->stats.stagingOverflowCount += 1u;
+        return result;
+    }
+
+    result.cpu = (U8*)frame->stagingCpu + offset;
+    result.gpu.buffer = frame->stagingBuffer;
+    result.gpu.offset = offset;
+    result.gpu.size = size;
+    frame->stagingPos = end;
+    frame->device->stats.stagingBytesUsed = frame->stagingPos;
+    return result;
+}
+
 B32 gfx_upload_buffer(GfxFrame* frame, GfxBuffer dst, U64 dstOffset, const void* src, U64 size) {
     if (!frame || !frame->device || !src || size == 0u) {
         return 0;
@@ -2911,10 +3061,10 @@ B32 gfx_upload_buffer(GfxFrame* frame, GfxBuffer dst, U64 dstOffset, const void*
         return 1;
     }
 
-    GfxTemp temp = gfx_allocate_temp(frame, size, 16u);
-    ASSERT_DEBUG(temp.cpu != 0 && "gfx_upload_buffer ran out of frame upload memory");
+    GfxTemp temp = gfx_vulkan_allocate_staging(frame, size, 16u);
+    ASSERT_DEBUG(temp.cpu != 0 && "gfx_upload_buffer ran out of frame staging memory");
     if (!temp.cpu) {
-        LOG_ERROR("gfx", "gfx_upload_buffer ran out of frame upload memory (size={})", size);
+        LOG_ERROR("gfx", "gfx_upload_buffer ran out of frame staging memory (size={})", size);
         return 0;
     }
 
@@ -2986,10 +3136,10 @@ B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRe
 
     U64 sourceBytesPerImage = validation.sourceBytesPerImage;
 
-    GfxTemp temp = gfx_allocate_temp(frame, sourceBytesPerImage, GFX_TEXTURE_UPLOAD_BYTES_PER_ROW_ALIGNMENT);
-    ASSERT_DEBUG(temp.cpu != 0 && "gfx_upload_texture ran out of frame upload memory");
+    GfxTemp temp = gfx_vulkan_allocate_staging(frame, sourceBytesPerImage, GFX_TEXTURE_UPLOAD_BYTES_PER_ROW_ALIGNMENT);
+    ASSERT_DEBUG(temp.cpu != 0 && "gfx_upload_texture ran out of frame staging memory");
     if (!temp.cpu) {
-        LOG_ERROR("gfx", "gfx_upload_texture ran out of frame upload memory (size={})", sourceBytesPerImage);
+        LOG_ERROR("gfx", "gfx_upload_texture ran out of frame staging memory (size={})", sourceBytesPerImage);
         return 0;
     }
 
@@ -3026,8 +3176,10 @@ B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRe
 
     VkBufferImageCopy copy = {};
     copy.bufferOffset = temp.gpu.offset;
-    copy.bufferRowLength = (U32)(region->bytesPerRow / validation.bytesPerPixel);
-    copy.bufferImageHeight = region->rowsPerImage;
+    // bufferRowLength/bufferImageHeight are in texels; for block-compressed
+    // formats convert from block rows back to texel dimensions.
+    copy.bufferRowLength = (U32)((region->bytesPerRow / validation.bytesPerBlock) * validation.blockWidth);
+    copy.bufferImageHeight = region->rowsPerImage * validation.blockHeight;
     copy.imageSubresource.aspectMask = aspect;
     copy.imageSubresource.mipLevel = region->mip;
     copy.imageSubresource.baseArrayLayer = region->layer;
@@ -3154,29 +3306,33 @@ static VkImageLayout gfx_vulkan_depth_target_final_layout_(GfxVulkanTexture* tex
 
 static void gfx_vulkan_barrier_compute_write_(GfxDevice* device,
                                               VkCommandBuffer commandBuffer,
-                                              const GfxComputeWrite* write) {
-    if (!device || !commandBuffer || !write) {
+                                              const GfxResourceUse* use) {
+    if (!device || !commandBuffer || !use) {
+        return;
+    }
+    if (use->kind != GfxResourceUseKind_Buffer ||
+        !FLAGS_HAS(use->accessFlags, GfxResourceAccessFlags_ShaderWrite)) {
         return;
     }
 
-    GfxVulkanBuffer* buffer = gfx_vulkan_resolve_buffer(device, write->slice.buffer);
+    GfxVulkanBuffer* buffer = gfx_vulkan_resolve_buffer(device, use->buffer);
     if (!buffer->buffer) {
         return;
     }
 
-    if (write->slice.offset >= buffer->size) {
-        gfx_vulkan_api_assert(device, write->slice.offset < buffer->size);
+    if (use->offset >= buffer->size) {
+        gfx_vulkan_api_assert(device, use->offset < buffer->size);
         return;
     }
 
-    U64 barrierSize = write->slice.size;
+    U64 barrierSize = use->size;
     if (barrierSize == 0u) {
-        barrierSize = buffer->size - write->slice.offset;
+        barrierSize = buffer->size - use->offset;
     }
     if (barrierSize == 0u ||
-        barrierSize > buffer->size - write->slice.offset) {
+        barrierSize > buffer->size - use->offset) {
         gfx_vulkan_api_assert(device, barrierSize != 0u);
-        gfx_vulkan_api_assert(device, barrierSize <= buffer->size - write->slice.offset);
+        gfx_vulkan_api_assert(device, barrierSize <= buffer->size - use->offset);
         return;
     }
 
@@ -3192,7 +3348,7 @@ static void gfx_vulkan_barrier_compute_write_(GfxDevice* device,
                             VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
                             VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
     barrier.buffer = buffer->buffer;
-    barrier.offset = write->slice.offset;
+    barrier.offset = use->offset;
     barrier.size = barrierSize;
 
     VkDependencyInfo dependency = {};
@@ -3391,8 +3547,22 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
     renderingInfo.pDepthAttachment = (depthTexture) ? &depthAttachment : 0;
 
     B32 pushedLabel = gfx_vulkan_cmd_begin_label(device, frame->commandBuffer, desc->name);
+
+    B32 timedPass = 0;
+    if (device->gpuTimingsEnabled &&
+        frame->timestampPool &&
+        frame->timedPassCount < GFX_MAX_TIMED_PASSES) {
+        vkCmdWriteTimestamp2(frame->commandBuffer,
+                             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                             frame->timestampPool,
+                             2u * frame->timedPassCount);
+        timedPass = 1;
+    }
+
     vkCmdBeginRendering(frame->commandBuffer, &renderingInfo);
 
+    GfxVulkanBuffer* rootTempBuffer = gfx_vulkan_resolve_buffer(device, frame->tempBuffer);
+    GfxResourceId rootTempId = rootTempBuffer->resourceId;
     GfxPipeline boundPipelineHandle = {};
     B32 resourceSetBound = 0;
 
@@ -3421,58 +3591,51 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
 
         for (U32 drawIndex = 0u; drawIndex < area->drawCount; ++drawIndex) {
             const GfxDraw* draw = &area->draws[drawIndex];
-            if (draw->kind != GfxDrawKind_DirectIndexed &&
-                draw->kind != GfxDrawKind_IndirectIndexed) {
-                gfx_vulkan_api_assert(device, 0 && "Invalid gfx draw kind");
+            B32 indirect = (draw->indirectBuffer.index != 0u ||
+                            draw->indirectBuffer.generation != 0u) ? 1 : 0;
+            if (!indirect && (draw->indexCount == 0u || draw->instanceCount == 0u)) {
                 continue;
             }
-            if (draw->kind == GfxDrawKind_DirectIndexed &&
-                (draw->indexCount == 0u || draw->instanceCount == 0u)) {
+            if (draw->rootDataSize == 0u) {
                 continue;
             }
-            if (draw->kind == GfxDrawKind_IndirectIndexed &&
-                draw->indirectArgs.size < sizeof(GfxDrawIndexedIndirectArgs)) {
-                gfx_vulkan_api_assert(device, draw->indirectArgs.size >= sizeof(GfxDrawIndexedIndirectArgs));
-                continue;
-            }
-            if (draw->rootData.offset > (U64)0xffffffffu) {
-                gfx_vulkan_api_assert(device, draw->rootData.offset <= (U64)0xffffffffu);
+            if ((U64)draw->rootDataOffset + (U64)draw->rootDataSize > frame->tempSize) {
+                gfx_vulkan_api_assert(device,
+                                      (U64)draw->rootDataOffset + (U64)draw->rootDataSize <= frame->tempSize);
                 continue;
             }
 
             GfxVulkanPipeline* pipeline = gfx_vulkan_resolve_pipeline(device, draw->pipeline);
             GfxVulkanBuffer* indexBuffer = gfx_vulkan_resolve_buffer(device, draw->indexBuffer);
-            GfxVulkanBuffer* rootDataBuffer = gfx_vulkan_resolve_buffer(device, draw->rootData.buffer);
-            GfxVulkanBuffer* indirectBuffer = (draw->kind == GfxDrawKind_IndirectIndexed) ?
-                                              gfx_vulkan_resolve_buffer(device, draw->indirectArgs.buffer) :
+            GfxVulkanBuffer* indirectBuffer = indirect ?
+                                              gfx_vulkan_resolve_buffer(device, draw->indirectBuffer) :
                                               &g_gfxVulkanNilBuffer;
 
             gfx_vulkan_api_assert(device, pipeline->kind == GfxPipelineKind_Graphics || pipeline->pipeline == 0);
             if (pipeline->kind != GfxPipelineKind_Graphics ||
                 !pipeline->pipeline ||
                 !indexBuffer->buffer ||
-                !rootDataBuffer->buffer ||
-                (draw->kind == GfxDrawKind_IndirectIndexed && !indirectBuffer->buffer)) {
+                !rootTempBuffer->buffer ||
+                (indirect && !indirectBuffer->buffer)) {
                 continue;
             }
-            if (draw->kind == GfxDrawKind_IndirectIndexed &&
+            if (indirect &&
                 !FLAGS_HAS(indirectBuffer->usageFlags, GfxBufferUsageFlags_Indirect)) {
                 gfx_vulkan_api_assert(device, FLAGS_HAS(indirectBuffer->usageFlags, GfxBufferUsageFlags_Indirect));
                 continue;
             }
-            if (draw->kind == GfxDrawKind_IndirectIndexed) {
-                U64 indirectRemaining = (draw->indirectArgs.offset < indirectBuffer->size) ?
-                                        (indirectBuffer->size - draw->indirectArgs.offset) :
+            if (indirect) {
+                U64 indirectRemaining = ((U64)draw->indirectByteOffset < indirectBuffer->size) ?
+                                        (indirectBuffer->size - draw->indirectByteOffset) :
                                         0u;
                 if (indirectRemaining < sizeof(GfxDrawIndexedIndirectArgs)) {
-                    gfx_vulkan_api_assert(device, draw->indirectArgs.offset < indirectBuffer->size);
+                    gfx_vulkan_api_assert(device, (U64)draw->indirectByteOffset < indirectBuffer->size);
                     gfx_vulkan_api_assert(device, indirectRemaining >= sizeof(GfxDrawIndexedIndirectArgs));
                     continue;
                 }
             }
 
-            GfxResourceId rootDataId = rootDataBuffer->resourceId;
-            if (rootDataId.index == 0u) {
+            if (rootTempId.index == 0u) {
                 continue;
             }
 
@@ -3494,19 +3657,19 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
                 device->stats.pipelineSwitchCount += 1u;
             }
 
-            U32 indexSize = (draw->indexType == GfxIndexType_U16) ? 2u : 4u;
+            U32 indexSize = (draw->indexType == (U32)GfxIndexType_U16) ? 2u : 4u;
             if ((draw->indexByteOffset % indexSize) != 0u) {
                 gfx_vulkan_api_assert(device, (draw->indexByteOffset % indexSize) == 0u);
                 continue;
             }
             vkCmdBindIndexBuffer(frame->commandBuffer,
                                  indexBuffer->buffer,
-                                 draw->indexByteOffset,
-                                 gfx_vulkan_index_type(draw->indexType));
+                                 (U64)draw->indexByteOffset,
+                                 gfx_vulkan_index_type((GfxIndexType)draw->indexType));
 
             GfxVulkanPushConstants push = {};
-            push.rootByteOffset = (U32)draw->rootData.offset;
-            push.rootResource = rootDataId.index;
+            push.rootByteOffset = draw->rootDataOffset;
+            push.rootResource = rootTempId.index;
             vkCmdPushConstants(frame->commandBuffer,
                                device->pipelineLayout,
                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT,
@@ -3514,10 +3677,10 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
                                sizeof(push),
                                &push);
 
-            if (draw->kind == GfxDrawKind_IndirectIndexed) {
+            if (indirect) {
                 vkCmdDrawIndexedIndirect(frame->commandBuffer,
                                          indirectBuffer->buffer,
-                                         draw->indirectArgs.offset,
+                                         (U64)draw->indirectByteOffset,
                                          1u,
                                          sizeof(GfxDrawIndexedIndirectArgs));
             } else {
@@ -3533,6 +3696,14 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
     }
 
     vkCmdEndRendering(frame->commandBuffer);
+
+    if (timedPass) {
+        vkCmdWriteTimestamp2(frame->commandBuffer,
+                             VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                             frame->timestampPool,
+                             2u * frame->timedPassCount + 1u);
+        frame->timedPassCount += 1u;
+    }
 
     if (postBarrierCount != 0u) {
         VkDependencyInfo dependency = {};
@@ -3563,15 +3734,27 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
     }
 
     gfx_vulkan_api_assert(device, dispatchCount == 0u || dispatches != 0);
-    gfx_vulkan_api_assert(device, desc->writeCount == 0u || desc->writes != 0);
     gfx_vulkan_api_assert(device, desc->resourceUseCount == 0u || desc->resourceUses != 0);
     if ((dispatchCount != 0u && !dispatches) ||
-        (desc->writeCount != 0u && !desc->writes) ||
         (desc->resourceUseCount != 0u && !desc->resourceUses)) {
         return;
     }
 
     B32 pushedLabel = gfx_vulkan_cmd_begin_label(device, frame->commandBuffer, desc->name);
+
+    B32 timedPass = 0;
+    if (device->gpuTimingsEnabled &&
+        frame->timestampPool &&
+        frame->timedPassCount < GFX_MAX_TIMED_PASSES) {
+        vkCmdWriteTimestamp2(frame->commandBuffer,
+                             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                             frame->timestampPool,
+                             2u * frame->timedPassCount);
+        timedPass = 1;
+    }
+
+    GfxVulkanBuffer* rootTempBuffer = gfx_vulkan_resolve_buffer(device, frame->tempBuffer);
+    GfxResourceId rootTempId = rootTempBuffer->resourceId;
     GfxPipeline boundPipelineHandle = {};
     B32 resourceSetBound = 0;
 
@@ -3583,23 +3766,25 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
             dispatch->groupsZ == 0u) {
             continue;
         }
-        if (dispatch->rootData.offset > (U64)0xffffffffu) {
-            gfx_vulkan_api_assert(device, dispatch->rootData.offset <= (U64)0xffffffffu);
+        if (dispatch->rootDataSize == 0u) {
+            continue;
+        }
+        if ((U64)dispatch->rootDataOffset + (U64)dispatch->rootDataSize > frame->tempSize) {
+            gfx_vulkan_api_assert(device,
+                                  (U64)dispatch->rootDataOffset + (U64)dispatch->rootDataSize <= frame->tempSize);
             continue;
         }
 
         GfxVulkanPipeline* pipeline = gfx_vulkan_resolve_pipeline(device, dispatch->pipeline);
-        GfxVulkanBuffer* rootDataBuffer = gfx_vulkan_resolve_buffer(device, dispatch->rootData.buffer);
 
         gfx_vulkan_api_assert(device, pipeline->kind == GfxPipelineKind_Compute || pipeline->pipeline == 0);
         if (pipeline->kind != GfxPipelineKind_Compute ||
             !pipeline->pipeline ||
-            !rootDataBuffer->buffer) {
+            !rootTempBuffer->buffer) {
             continue;
         }
 
-        GfxResourceId rootDataId = rootDataBuffer->resourceId;
-        if (rootDataId.index == 0u) {
+        if (rootTempId.index == 0u) {
             continue;
         }
 
@@ -3622,8 +3807,8 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
         }
 
         GfxVulkanPushConstants push = {};
-        push.rootByteOffset = (U32)dispatch->rootData.offset;
-        push.rootResource = rootDataId.index;
+        push.rootByteOffset = dispatch->rootDataOffset;
+        push.rootResource = rootTempId.index;
         vkCmdPushConstants(frame->commandBuffer,
                            device->pipelineLayout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT,
@@ -3637,11 +3822,19 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
     }
 
     if (dispatched) {
-        for (U32 writeIndex = 0u; writeIndex < desc->writeCount; ++writeIndex) {
+        for (U32 useIndex = 0u; useIndex < desc->resourceUseCount; ++useIndex) {
             gfx_vulkan_barrier_compute_write_(device,
                                               frame->commandBuffer,
-                                              desc->writes + writeIndex);
+                                              desc->resourceUses + useIndex);
         }
+    }
+
+    if (timedPass) {
+        vkCmdWriteTimestamp2(frame->commandBuffer,
+                             VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                             frame->timestampPool,
+                             2u * frame->timedPassCount + 1u);
+        frame->timedPassCount += 1u;
     }
     gfx_vulkan_cmd_end_label(device, frame->commandBuffer, pushedLabel);
 }

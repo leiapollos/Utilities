@@ -22,7 +22,9 @@ struct GfxResourceTable {
 };
 
 struct GfxTextureUploadValidation {
-    U32 bytesPerPixel;
+    U32 blockWidth;
+    U32 blockHeight;
+    U32 bytesPerBlock;
     U32 mipWidth;
     U32 mipHeight;
     U64 rowBytes;
@@ -37,6 +39,7 @@ struct GfxTextureDescValidation {
     B32 storageKindValid;
     B32 transientAttachmentOnly;
     B32 transientSingleMip;
+    B32 formatUsageValid;
 };
 
 FORCE_INLINE B32 gfx_buffer_handle_equal(GfxBuffer a, GfxBuffer b) {
@@ -51,25 +54,48 @@ FORCE_INLINE B32 gfx_pipeline_handle_equal(GfxPipeline a, GfxPipeline b) {
     return (a.index == b.index && a.generation == b.generation) ? 1 : 0;
 }
 
-static U32 gfx_format_bytes_per_pixel(GfxFormat format) {
+FORCE_INLINE B32 gfx_sampler_handle_equal(GfxSampler a, GfxSampler b) {
+    return (a.index == b.index && a.generation == b.generation) ? 1 : 0;
+}
+
+struct GfxFormatInfo {
+    U32 blockWidth;
+    U32 blockHeight;
+    U32 bytesPerBlock;
+};
+
+static GfxFormatInfo gfx_format_info(GfxFormat format) {
+    GfxFormatInfo result = {};
     switch (format) {
         case GfxFormat_R8_UNorm: {
-            return 1u;
-        }
+            result = {1u, 1u, 1u};
+        } break;
         case GfxFormat_BGRA8_UNorm:
-        case GfxFormat_RGBA8_UNorm: {
-            return 4u;
-        }
-        case GfxFormat_RGBA16_Float: {
-            return 8u;
-        }
+        case GfxFormat_RGBA8_UNorm:
         case GfxFormat_D32_Float: {
-            return 4u;
-        }
+            result = {1u, 1u, 4u};
+        } break;
+        case GfxFormat_RGBA16_Float: {
+            result = {1u, 1u, 8u};
+        } break;
+        case GfxFormat_BC1_RGBA_UNorm:
+        case GfxFormat_BC4_R_UNorm: {
+            result = {4u, 4u, 8u};
+        } break;
+        case GfxFormat_BC3_RGBA_UNorm:
+        case GfxFormat_BC5_RG_UNorm:
+        case GfxFormat_BC7_RGBA_UNorm: {
+            result = {4u, 4u, 16u};
+        } break;
         default: {
-            return 0u;
-        }
+        } break;
     }
+    return result;
+}
+
+static B32 gfx_format_is_block_compressed(GfxFormat format) {
+    GfxFormatInfo info = gfx_format_info(format);
+    return (info.blockWidth > 1u || info.blockHeight > 1u) ? 1 : 0;
 }
 
 static B32 gfx_texture_is_transient_storage_kind(GfxTextureStorageKind storageKind) {
@@ -86,6 +112,7 @@ static GfxTextureDescValidation gfx_validate_texture_desc_storage(const GfxTextu
                                desc->storageKind == GfxTextureStorageKind_Transient) ? 1 : 0;
     result.transientAttachmentOnly = 1;
     result.transientSingleMip = 1;
+    result.formatUsageValid = 1;
 
     if (desc->storageKind == GfxTextureStorageKind_Transient) {
         U32 attachmentFlags = GfxTextureUsageFlags_ColorTarget | GfxTextureUsageFlags_DepthTarget;
@@ -95,6 +122,13 @@ static GfxTextureDescValidation gfx_validate_texture_desc_storage(const GfxTextu
         result.transientAttachmentOnly = ((desc->usageFlags & attachmentFlags) != 0u &&
                                           (desc->usageFlags & forbiddenFlags) == 0u) ? 1 : 0;
         result.transientSingleMip = (desc->mipCount == 0u || desc->mipCount == 1u) ? 1 : 0;
+    }
+
+    if (gfx_format_is_block_compressed(desc->format)) {
+        U32 forbiddenBlockFlags = GfxTextureUsageFlags_ColorTarget |
+                                  GfxTextureUsageFlags_DepthTarget |
+                                  GfxTextureUsageFlags_Storage;
+        result.formatUsageValid = ((desc->usageFlags & forbiddenBlockFlags) == 0u) ? 1 : 0;
     }
 
     return result;
@@ -114,7 +148,10 @@ static B32 gfx_validate_texture_upload_region(GfxFormat format,
     }
 
     GfxTextureUploadValidation result = {};
-    result.bytesPerPixel = gfx_format_bytes_per_pixel(format);
+    GfxFormatInfo info = gfx_format_info(format);
+    result.blockWidth = info.blockWidth;
+    result.blockHeight = info.blockHeight;
+    result.bytesPerBlock = info.bytesPerBlock;
 
     U32 mipCount = textureMipCount ? textureMipCount : 1u;
     result.mipWidth = textureWidth;
@@ -125,11 +162,23 @@ static B32 gfx_validate_texture_upload_region(GfxFormat format,
         result.mipHeight = (result.mipHeight > 1u) ? (result.mipHeight >> 1u) : 1u;
     }
 
-    result.supported = result.bytesPerPixel != 0u &&
+    result.supported = result.bytesPerBlock != 0u &&
                        region->layer == 0u &&
                        region->layerCount == 1u &&
                        region->z == 0u &&
                        region->depth == 1u;
+
+    // Block-compressed regions must be block-aligned; partial blocks are only
+    // legal against the mip edge.
+    B32 blockAligned = 1;
+    if (result.supported && (info.blockWidth > 1u || info.blockHeight > 1u)) {
+        blockAligned = (region->x % info.blockWidth) == 0u &&
+                       (region->y % info.blockHeight) == 0u &&
+                       ((region->width % info.blockWidth) == 0u ||
+                        (region->x + region->width) == result.mipWidth) &&
+                       ((region->height % info.blockHeight) == 0u ||
+                        (region->y + region->height) == result.mipHeight);
+    }
 
     result.inBounds = region->mip < mipCount &&
                       region->width != 0u &&
@@ -137,17 +186,24 @@ static B32 gfx_validate_texture_upload_region(GfxFormat format,
                       region->x <= result.mipWidth &&
                       region->y <= result.mipHeight &&
                       region->width <= (result.mipWidth - region->x) &&
-                      region->height <= (result.mipHeight - region->y);
+                      region->height <= (result.mipHeight - region->y) &&
+                      blockAligned;
 
-    if (result.bytesPerPixel != 0u &&
-        (U64)region->width <= ((U64)-1) / (U64)result.bytesPerPixel) {
-        result.rowBytes = (U64)region->width * (U64)result.bytesPerPixel;
+    // Row layout is measured in block rows: bytesPerRow covers one row of
+    // blocks; rowsPerImage counts block rows (texel rows for linear formats).
+    U64 blocksWide = (info.blockWidth != 0u) ?
+                     (((U64)region->width + info.blockWidth - 1u) / info.blockWidth) : 0u;
+    U64 blockRows = (info.blockHeight != 0u) ?
+                    (((U64)region->height + info.blockHeight - 1u) / info.blockHeight) : 0u;
+    if (result.bytesPerBlock != 0u &&
+        blocksWide <= ((U64)-1) / (U64)result.bytesPerBlock) {
+        result.rowBytes = blocksWide * (U64)result.bytesPerBlock;
     }
 
     result.rowLayout = result.rowBytes != 0u &&
                        region->bytesPerRow >= result.rowBytes &&
                        (region->bytesPerRow % GFX_TEXTURE_UPLOAD_BYTES_PER_ROW_ALIGNMENT) == 0u &&
-                       region->rowsPerImage >= region->height;
+                       (U64)region->rowsPerImage >= blockRows;
 
     if (region->rowsPerImage != 0u &&
         region->bytesPerRow <= ((U64)-1) / (U64)region->rowsPerImage) {

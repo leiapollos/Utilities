@@ -5,5 +5,6 @@
 #include "nstl/file_stream/file_stream_include.hpp"
 #include "nstl/artifact/artifact_include.hpp"
 #include "nstl/text/text_include.hpp"
+#include "nstl/draw2d/draw2d_include.hpp"
 #include "app_state.hpp"
 #include "app/shaders/shader_manifest.h"
