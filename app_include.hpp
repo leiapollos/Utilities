@@ -7,4 +7,7 @@
 #include "nstl/text/text_include.hpp"
 #include "nstl/draw2d/draw2d_include.hpp"
 #include "app_state.hpp"
+#include "app_renderer.hpp"
+#include "app_debug_draw.hpp"
 #include "app/shaders/shader_manifest.h"
+#include "app/shaders/shader_records.generated.hpp"

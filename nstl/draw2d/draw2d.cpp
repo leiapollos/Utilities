@@ -33,8 +33,6 @@ static Draw2DQuad* draw2d_push_quad(Draw2DContext* ctx, Draw2DLayer layer) {
     return quad;
 }
 
-// Clamp a quad to the current clip rect, scaling UVs proportionally.
-// Returns 0 if fully clipped.
 static B32 draw2d_clip_quad(Draw2DContext* ctx, Draw2DQuad* quad) {
     const F32* clip = draw2d_current_clip(ctx);
     F32 minX = MAX(quad->minX, clip[0]);
@@ -201,8 +199,6 @@ void draw2d_line(Draw2DContext* ctx, Draw2DLayer layer, F32 x0, F32 y0, F32 x1, 
         F32 maxY = MAX(y0, y1);
         draw2d_append_solid(ctx, layer, x0 - half, minY, x0 + half, maxY, rgba8);
     }
-    // Angled lines are not representable by the axis-aligned quad record;
-    // they become an additive feature when something needs them.
 }
 
 void draw2d_box(Draw2DContext* ctx, Draw2DLayer layer, F32 minX, F32 minY, F32 maxX, F32 maxY, F32 thickness, U32 rgba8) {

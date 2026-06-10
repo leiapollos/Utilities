@@ -31,9 +31,6 @@ struct AppGfxShaderBuildState {
     B32 initialized;
 };
 
-// The 2D rendering state: text shaping/caching (CPU) plus the renderer-owned
-// GPU resources that execute draw2d batches. This is the whole current app;
-// the demo scene is a thin producer on top.
 struct AppRender2DState {
     TextContext* textContext;
     TextFont font;
@@ -57,6 +54,8 @@ struct AppRender2DState {
     B32 atlasSeeded;
 
     Draw2DContext draw2d;
+    GfxStats lastGfxStats;
+    Draw2DStats lastDraw2DStats;
 
     B32 initialized;
     U32 loadLogMask;
@@ -67,6 +66,9 @@ struct AppCoreState {
     U32 windowHeight;
     U64 frameCounter;
     U32 reloadCount;
+    F32 lastDeltaSeconds;
+    F32 averageDeltaSeconds;
+    B32 debugOverlayVisible;
 
     JobSystem* jobSystem;
     U32 workerCount;

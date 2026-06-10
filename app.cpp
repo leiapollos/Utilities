@@ -2,7 +2,7 @@
 // Created by André Leite on 31/10/2025.
 //
 
-#define APP_CORE_STATE_VERSION 48u
+#define APP_CORE_STATE_VERSION 50u
 
 #if defined(PLATFORM_BUILD_DEBUG)
 #define APP_GFX_DEV_SHADER_SOURCE_ENTRY(name, source) source,
@@ -28,11 +28,8 @@ static ArtifactKey app_artifact_key_from_label(const char* label);
 static ArtifactKey app_artifact_key_from_content(const char* label, ContentHash hash);
 static ContentHash app_content_hash_from_value(ArtifactValue value);
 static ArtifactValue app_content_hash_to_value(ContentHash hash);
-static B32 app_gfx_demo_register_artifact_types(APP_Context* ctx);
-static void app_gfx_demo_watch_files(APP_Context* ctx);
-static void app_gfx_demo_resource_cache_reset(APP_Context* ctx);
-static void app_gfx_demo_shutdown(APP_Context* ctx);
-static void app_gfx_demo_frame(APP_Context* ctx, F32 deltaSeconds);
+static void app_demo_scene_submit(APP_Context* ctx, AppRendererFrame* rendererFrame);
+static void app_debug_overlay_submit(APP_Context* ctx, AppRendererFrame* rendererFrame);
 #if defined(PLATFORM_BUILD_DEBUG)
 static U64 app_gfx_newest_shader_source_timestamp(void);
 static void app_gfx_try_build_dev_shaders(APP_Context* ctx);
@@ -95,6 +92,10 @@ static void app_frame(AppHost* host, HOT_StateStore* store, const AppInput* inpu
     state->windowWidth = host->windowWidth;
     state->windowHeight = host->windowHeight;
     state->frameCounter += 1ull;
+    state->lastDeltaSeconds = input->deltaSeconds;
+    state->averageDeltaSeconds = (state->averageDeltaSeconds <= 0.0f)
+        ? input->deltaSeconds
+        : state->averageDeltaSeconds * 0.95f + input->deltaSeconds * 0.05f;
     for (U32 eventIndex = 0; eventIndex < input->eventCount; ++eventIndex) {
         const OS_GraphicsEvent* event = input->events + eventIndex;
         ASSERT_ALWAYS(event != 0);
@@ -104,9 +105,19 @@ static void app_frame(AppHost* host, HOT_StateStore* store, const AppInput* inpu
             !event->keyDown.isRepeat) {
             host->shouldQuit = 1;
         }
+        if (event->tag == OS_GraphicsEvent_Tag_KeyDown &&
+            event->keyDown.keyCode == OS_KeyCode_F1 &&
+            !event->keyDown.isRepeat) {
+            state->debugOverlayVisible = !state->debugOverlayVisible;
+        }
     }
 
-    app_gfx_demo_frame(&ctx, input->deltaSeconds);
+    AppRendererFrame* rendererFrame = app_renderer_begin_frame(&ctx);
+    if (rendererFrame) {
+        app_demo_scene_submit(&ctx, rendererFrame);
+        app_debug_overlay_submit(&ctx, rendererFrame);
+        app_renderer_end_frame(&ctx, rendererFrame);
+    }
 }
 
 static void app_shutdown(AppHost* host, HOT_StateStore* store) {
@@ -118,7 +129,7 @@ static void app_shutdown(AppHost* host, HOT_StateStore* store) {
         return;
     }
 
-    app_gfx_demo_shutdown(&ctx);
+    app_renderer_shutdown(&ctx);
 
     if (ctx.core->jobSystem) {
         job_system_destroy(ctx.core->jobSystem);
@@ -218,7 +229,7 @@ static void app_resource_cache_shutdown(APP_Context* ctx) {
         state->resources.arena = 0;
     }
 
-    app_gfx_demo_resource_cache_reset(ctx);
+    app_renderer_resource_cache_reset(ctx);
 }
 
 static B32 app_bind_current_module(APP_Context* ctx) {
@@ -236,11 +247,11 @@ static B32 app_bind_current_module(APP_Context* ctx) {
 }
 
 static B32 app_register_artifact_types(APP_Context* ctx) {
-    return app_gfx_demo_register_artifact_types(ctx);
+    return app_renderer_register_artifact_types(ctx);
 }
 
 static void app_watch_demo_files(APP_Context* ctx) {
-    app_gfx_demo_watch_files(ctx);
+    app_renderer_watch_files(ctx);
 }
 
 #if defined(PLATFORM_BUILD_DEBUG)
@@ -382,6 +393,7 @@ static void app_state_init(APP_Context* ctx, APP_StateKind kind, void* memory) {
             MEMSET(core, 0, sizeof(*core));
             core->windowWidth = ctx->host->windowWidth;
             core->windowHeight = ctx->host->windowHeight;
+            core->debugOverlayVisible = 1;
 
             StringU8 eventsDomain = str8((const char*) "events", 6);
             set_log_domain_level(eventsDomain, LogLevel_Debug);

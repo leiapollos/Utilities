@@ -5,6 +5,7 @@
 
 #define APP_SHADER_SLANG_DRAW2D_SOURCE "app/shaders/draw2d.slang"
 #define APP_SHADER_SLANG_ABI_SOURCE "app/shaders/gfx_shader_abi.slang"
+#define APP_SHADER_SLANG_RECORDS_SOURCE "app/shaders/shader_records.generated.hpp"
 
 #define APP_SHADER_DRAW2D_VERTEX_ENTRY "draw2d_vertex"
 #define APP_SHADER_DRAW2D_FRAGMENT_ENTRY "draw2d_fragment"
@@ -17,7 +18,8 @@
 
 #define APP_SHADER_SOURCE_LIST(X) \
     X(Draw2dSlang, APP_SHADER_SLANG_DRAW2D_SOURCE) \
-    X(GfxShaderAbiSlang, APP_SHADER_SLANG_ABI_SOURCE)
+    X(GfxShaderAbiSlang, APP_SHADER_SLANG_ABI_SOURCE) \
+    X(ShaderRecordsSlang, APP_SHADER_SLANG_RECORDS_SOURCE)
 
 #define APP_SHADER_VULKAN_OUTPUT_LIST(X) \
     X(Draw2dVertex, APP_SHADER_SLANG_DRAW2D_SOURCE, APP_SHADER_VK_DRAW2D_VERTEX_OUTPUT, APP_SHADER_DRAW2D_VERTEX_ENTRY, vertex, graphics) \

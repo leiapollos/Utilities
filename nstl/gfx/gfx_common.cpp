@@ -168,8 +168,6 @@ static B32 gfx_validate_texture_upload_region(GfxFormat format,
                        region->z == 0u &&
                        region->depth == 1u;
 
-    // Block-compressed regions must be block-aligned; partial blocks are only
-    // legal against the mip edge.
     B32 blockAligned = 1;
     if (result.supported && (info.blockWidth > 1u || info.blockHeight > 1u)) {
         blockAligned = (region->x % info.blockWidth) == 0u &&
@@ -189,8 +187,6 @@ static B32 gfx_validate_texture_upload_region(GfxFormat format,
                       region->height <= (result.mipHeight - region->y) &&
                       blockAligned;
 
-    // Row layout is measured in block rows: bytesPerRow covers one row of
-    // blocks; rowsPerImage counts block rows (texel rows for linear formats).
     U64 blocksWide = (info.blockWidth != 0u) ?
                      (((U64)region->width + info.blockWidth - 1u) / info.blockWidth) : 0u;
     U64 blockRows = (info.blockHeight != 0u) ?

@@ -2902,8 +2902,6 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
         return 0;
     }
 
-    // Resolve GPU pass timestamps from this slot's previously submitted
-    // frame. The fence check above guarantees that submission has completed.
     F32 resolvedMs[GFX_MAX_TIMED_PASSES] = {};
     U32 resolvedCount = 0u;
     if (device->gpuTimingsEnabled && frame->timestampPool && frame->timedPassCount != 0u) {
@@ -3176,8 +3174,6 @@ B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRe
 
     VkBufferImageCopy copy = {};
     copy.bufferOffset = temp.gpu.offset;
-    // bufferRowLength/bufferImageHeight are in texels; for block-compressed
-    // formats convert from block rows back to texel dimensions.
     copy.bufferRowLength = (U32)((region->bytesPerRow / validation.bytesPerBlock) * validation.blockWidth);
     copy.bufferImageHeight = region->rowsPerImage * validation.blockHeight;
     copy.imageSubresource.aspectMask = aspect;

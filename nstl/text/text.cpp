@@ -50,8 +50,6 @@ struct TextContext {
     U32 maxGlyphs;
     U32 glyphCount;
 
-    // Open-addressed glyph lookup: key packs {fontIndex, pixelSize, glyphId},
-    // value is glyph entry index + 1 (0 = empty slot).
     U64* glyphSlotKeys;
     U32* glyphSlotValues;
     U32 glyphSlotCapacity;
@@ -450,8 +448,6 @@ B32 text_context_create(const TextContextDesc* desc, TextContext** outText) {
     MEMSET(text->atlasPixels, 0, (U64)text->atlasPitch * (U64)atlasHeight);
     MEMSET(text->shapeContextMemory, 0, text->shapeContextMemorySize);
 
-    // Reserve a solid-white 2x2 block so untextured quads (rects, lines)
-    // can sample the atlas through the same pipeline as glyphs.
     U32 whiteX = 0u;
     U32 whiteY = 0u;
     if (text_atlas_alloc(text, 2u, 2u, &whiteX, &whiteY)) {

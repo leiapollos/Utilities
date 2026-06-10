@@ -30,9 +30,11 @@
     X_CHAR(Ampersand,    '&')
 
 #define KEYWORD_TOKENS \
-    X(KW_SumType,   "sum_type") \
-    X(KW_Common,    "common")   \
-    X(KW_NoMatch,   "no_match")
+    X(KW_SumType,      "sum_type") \
+    X(KW_Common,       "common")   \
+    X(KW_NoMatch,      "no_match") \
+    X(KW_ShaderRecord, "shader_record") \
+    X(KW_RootData,     "root_data")
 
 enum TokenKind {
 #define X(name, str) TokenKind_##name,

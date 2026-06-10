@@ -1,0 +1,26 @@
+//
+// Shader ABI records, single source of truth.
+// metagen emits app/shaders/shader_records.generated.hpp with a Slang half
+// (structs + loaders) and a C half (structs + offset asserts).
+//
+
+@shader_record @root_data Draw2DRootData {
+    quadBuffer: U32,
+    quadByteOffset: U32,
+    atlasTexture: U32,
+    atlasSampler: U32,
+    targetWidth: F32,
+    targetHeight: F32,
+}
+
+@shader_record Draw2DQuadRecord {
+    minX: F32,
+    minY: F32,
+    maxX: F32,
+    maxY: F32,
+    minU: F32,
+    minV: F32,
+    maxU: F32,
+    maxV: F32,
+    rgba8: U32,
+}

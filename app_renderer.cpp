@@ -1,43 +1,26 @@
 //
-// Created by André Leite on 31/10/2025.
+// Created by André Leite on 10/06/2026.
 //
-// The whole current app: text + draw2d rendered through one 2D overlay pass.
-// The demo scene at the bottom is deliberately tiny and disposable.
 
-#define APP_RENDER2D_FONT_PATH "app/fonts/NotoSans-Regular.ttf"
-#define APP_RENDER2D_MAX_QUADS (DRAW2D_DEFAULT_MAX_QUADS_PER_LAYER * Draw2DLayer_COUNT)
-#define APP_RENDER2D_FRAME_BUFFER_COUNT 2u
-#define APP_RENDER2D_MAX_FRAME_DELTA_SECONDS 0.05f
+#define APP_RENDERER_FONT_PATH "app/fonts/NotoSans-Regular.ttf"
+#define APP_RENDERER_MAX_QUADS (DRAW2D_DEFAULT_MAX_QUADS_PER_LAYER * Draw2DLayer_COUNT)
+#define APP_RENDERER_FRAME_BUFFER_COUNT 2u
 
-// Shader ABI
-struct AppDraw2DRootData {
-    U32 quadBuffer;
-    U32 quadByteOffset;
-    U32 atlasTexture;
-    U32 atlasSampler;
-    F32 targetWidth;
-    F32 targetHeight;
-    U32 _padding[10];
+static_assert(sizeof(Draw2DQuad) == sizeof(ShdDraw2DQuadRecord), "Draw2DQuad shader ABI mismatch");
+static_assert(sizeof(Draw2DQuad) == SHD_Draw2DQuadRecord_STRIDE_WORDS * 4u, "Draw2DQuad stride mismatch");
+static_assert(sizeof(TextQuad) == sizeof(ShdDraw2DQuadRecord), "TextQuad shader ABI mismatch");
+
+enum AppRendererLoadLog {
+    AppRendererLoadLog_Started = (1u << 0u),
+    AppRendererLoadLog_Ready = (1u << 1u),
 };
 
-#define APP_SHADER_ABI_OFFSET(type, member, byteOffset) \
-    static_assert(offsetof(type, member) == (byteOffset), #type "." #member " shader ABI offset mismatch")
-APP_SHADER_ABI_OFFSET(AppDraw2DRootData, quadBuffer, 0u);
-APP_SHADER_ABI_OFFSET(AppDraw2DRootData, quadByteOffset, 4u);
-APP_SHADER_ABI_OFFSET(AppDraw2DRootData, atlasTexture, 8u);
-APP_SHADER_ABI_OFFSET(AppDraw2DRootData, atlasSampler, 12u);
-APP_SHADER_ABI_OFFSET(AppDraw2DRootData, targetWidth, 16u);
-APP_SHADER_ABI_OFFSET(AppDraw2DRootData, targetHeight, 20u);
-static_assert(sizeof(AppDraw2DRootData) == 64u, "Draw2D root data shader ABI mismatch");
-static_assert(sizeof(Draw2DQuad) == sizeof(TextQuad), "Draw2DQuad must stay bit-identical to TextQuad");
-static_assert(sizeof(Draw2DQuad) == 36u, "Draw2DQuad shader ABI mismatch");
-
-enum AppRender2DLoadLog {
-    AppRender2DLoadLog_Started = (1u << 0u),
-    AppRender2DLoadLog_Ready = (1u << 1u),
+struct AppRendererFrame {
+    GfxFrame* frame;
+    GfxCommandBuffer* commands;
 };
 
-struct AppRender2DPacket {
+struct AppRendererPacket {
     GfxRenderPassDesc pass;
     GfxColorTarget colorTarget;
     GfxResourceUse resourceUses[2];
@@ -46,7 +29,9 @@ struct AppRender2DPacket {
     U32 drawCount;
 };
 
-static void app_render2d_log_once(AppCoreState* state, U32 bit, const char* message) {
+static AppRendererFrame g_appRendererFrame;
+
+static void app_renderer_log_once(AppCoreState* state, U32 bit, const char* message) {
     if (state == 0 || message == 0 || FLAGS_HAS(state->render2d.loadLogMask, bit)) {
         return;
     }
@@ -55,13 +40,12 @@ static void app_render2d_log_once(AppCoreState* state, U32 bit, const char* mess
     state->render2d.loadLogMask |= bit;
 }
 
-// Resource cache hooks (called from app.cpp)
-static B32 app_gfx_demo_register_artifact_types(APP_Context* ctx) {
+static B32 app_renderer_register_artifact_types(APP_Context* ctx) {
     ASSERT_ALWAYS(ctx != 0);
     return 1;
 }
 
-static void app_gfx_demo_resource_cache_reset(APP_Context* ctx) {
+static void app_renderer_resource_cache_reset(APP_Context* ctx) {
     ASSERT_ALWAYS(ctx != 0);
     ASSERT_ALWAYS(ctx->core != 0);
 
@@ -74,7 +58,7 @@ static void app_gfx_demo_resource_cache_reset(APP_Context* ctx) {
     render->failedFontGeneration = 0u;
 }
 
-static void app_gfx_demo_watch_files(APP_Context* ctx) {
+static void app_renderer_watch_files(APP_Context* ctx) {
     ASSERT_ALWAYS(ctx != 0);
     ASSERT_ALWAYS(ctx->core != 0);
 
@@ -92,15 +76,14 @@ static void app_gfx_demo_watch_files(APP_Context* ctx) {
     StringU8 exeDir = OS_get_executable_directory(scratch.arena);
     StringU8 vertexPath = str8_concat(scratch.arena, exeDir, str8("/../" APP_SHADER_DRAW2D_VERTEX_RUNTIME_PATH));
     StringU8 fragmentPath = str8_concat(scratch.arena, exeDir, str8("/../" APP_SHADER_DRAW2D_FRAGMENT_RUNTIME_PATH));
-    StringU8 fontPath = str8_concat(scratch.arena, exeDir, str8("/../" APP_RENDER2D_FONT_PATH));
+    StringU8 fontPath = str8_concat(scratch.arena, exeDir, str8("/../" APP_RENDERER_FONT_PATH));
 
     state->render2d.vertexShaderFile = file_watch(state->resources.fileStream, vertexPath, 0u);
     state->render2d.fragmentShaderFile = file_watch(state->resources.fileStream, fragmentPath, 0u);
     state->render2d.fontFile = file_watch(state->resources.fileStream, fontPath, 0u);
 }
 
-// Text + pipeline + GPU resources
-static B32 app_render2d_ensure_text_context(APP_Context* ctx) {
+static B32 app_renderer_ensure_text_context(APP_Context* ctx) {
     AppCoreState* state = ctx->core;
     if (state->render2d.textContext != 0) {
         return 1;
@@ -118,7 +101,7 @@ static B32 app_render2d_ensure_text_context(APP_Context* ctx) {
     return 1;
 }
 
-static void app_render2d_try_load_font(APP_Context* ctx) {
+static void app_renderer_try_load_font(APP_Context* ctx) {
     AppCoreState* state = ctx->core;
     if (state->render2d.font.generation != 0u ||
         state->render2d.textContext == 0 ||
@@ -147,7 +130,7 @@ static void app_render2d_try_load_font(APP_Context* ctx) {
     state->render2d.font = font;
 }
 
-static B32 app_render2d_create_pipeline(APP_Context* ctx, ContentHash vertexHash, ContentHash fragmentHash, GfxPipeline* outPipeline) {
+static B32 app_renderer_create_pipeline(APP_Context* ctx, ContentHash vertexHash, ContentHash fragmentHash, GfxPipeline* outPipeline) {
     *outPipeline = {};
     if (ctx->host->gfxDevice == 0 || ctx->core->resources.contentStore == 0) {
         return 0;
@@ -208,7 +191,7 @@ static B32 app_render2d_create_pipeline(APP_Context* ctx, ContentHash vertexHash
     return 1;
 }
 
-static void app_render2d_try_update_pipeline(APP_Context* ctx) {
+static void app_renderer_try_update_pipeline(APP_Context* ctx) {
     AppCoreState* state = ctx->core;
     if (state->resources.fileStream == 0 ||
         state->resources.contentStore == 0 ||
@@ -232,7 +215,7 @@ static void app_render2d_try_update_pipeline(APP_Context* ctx) {
     }
 
     GfxPipeline newPipeline = {};
-    if (!app_render2d_create_pipeline(ctx, vertexView.hash, fragmentView.hash, &newPipeline)) {
+    if (!app_renderer_create_pipeline(ctx, vertexView.hash, fragmentView.hash, &newPipeline)) {
         return;
     }
 
@@ -245,7 +228,7 @@ static void app_render2d_try_update_pipeline(APP_Context* ctx) {
     }
 }
 
-static void app_render2d_try_create_gpu_resources(APP_Context* ctx) {
+static void app_renderer_try_create_gpu_resources(APP_Context* ctx) {
     AppCoreState* state = ctx->core;
     AppRender2DState* render = &state->render2d;
     if (render->gpuResourcesCreated ||
@@ -285,12 +268,12 @@ static void app_render2d_try_create_gpu_resources(APP_Context* ctx) {
     GfxSampler atlasSampler = gfx_create_sampler(device, &samplerDesc);
     GfxResourceId atlasSamplerId = gfx_register_sampler(device, atlasSampler);
 
-    U32 indexCount = APP_RENDER2D_MAX_QUADS * 6u;
+    U32 indexCount = APP_RENDERER_MAX_QUADS * 6u;
     U32* indices = ARENA_PUSH_ARRAY(scratch.arena, U32, indexCount);
     if (indices == 0) {
         return;
     }
-    for (U32 quadIndex = 0u; quadIndex < APP_RENDER2D_MAX_QUADS; ++quadIndex) {
+    for (U32 quadIndex = 0u; quadIndex < APP_RENDERER_MAX_QUADS; ++quadIndex) {
         U32 baseVertex = quadIndex * 4u;
         U32 baseIndex = quadIndex * 6u;
         indices[baseIndex + 0u] = baseVertex + 0u;
@@ -309,12 +292,12 @@ static void app_render2d_try_create_gpu_resources(APP_Context* ctx) {
     indexDesc.initialData = indices;
     GfxBuffer indexBuffer = gfx_create_buffer(device, &indexDesc);
 
-    GfxBuffer quadBuffers[APP_RENDER2D_FRAME_BUFFER_COUNT] = {};
-    GfxResourceId quadBufferIds[APP_RENDER2D_FRAME_BUFFER_COUNT] = {};
-    for (U32 bufferIndex = 0u; bufferIndex < APP_RENDER2D_FRAME_BUFFER_COUNT; ++bufferIndex) {
+    GfxBuffer quadBuffers[APP_RENDERER_FRAME_BUFFER_COUNT] = {};
+    GfxResourceId quadBufferIds[APP_RENDERER_FRAME_BUFFER_COUNT] = {};
+    for (U32 bufferIndex = 0u; bufferIndex < APP_RENDERER_FRAME_BUFFER_COUNT; ++bufferIndex) {
         GfxBufferDesc quadDesc = {};
         quadDesc.name = "draw2d quads";
-        quadDesc.size = sizeof(Draw2DQuad) * APP_RENDER2D_MAX_QUADS;
+        quadDesc.size = sizeof(Draw2DQuad) * APP_RENDERER_MAX_QUADS;
         quadDesc.usageFlags = GfxBufferUsageFlags_Storage | GfxBufferUsageFlags_CopyDst;
         quadDesc.memoryKind = GfxMemoryKind_Device;
         quadBuffers[bufferIndex] = gfx_create_buffer(device, &quadDesc);
@@ -326,7 +309,7 @@ static void app_render2d_try_create_gpu_resources(APP_Context* ctx) {
                   atlasSampler.generation != 0u &&
                   atlasSamplerId.index != 0u &&
                   indexBuffer.generation != 0u;
-    for (U32 bufferIndex = 0u; bufferIndex < APP_RENDER2D_FRAME_BUFFER_COUNT; ++bufferIndex) {
+    for (U32 bufferIndex = 0u; bufferIndex < APP_RENDERER_FRAME_BUFFER_COUNT; ++bufferIndex) {
         created = created &&
                   quadBuffers[bufferIndex].generation != 0u &&
                   quadBufferIds[bufferIndex].index != 0u;
@@ -336,7 +319,7 @@ static void app_render2d_try_create_gpu_resources(APP_Context* ctx) {
         gfx_destroy_buffer(device, indexBuffer);
         gfx_destroy_sampler(device, atlasSampler);
         gfx_destroy_texture(device, atlasTexture);
-        for (U32 bufferIndex = 0u; bufferIndex < APP_RENDER2D_FRAME_BUFFER_COUNT; ++bufferIndex) {
+        for (U32 bufferIndex = 0u; bufferIndex < APP_RENDERER_FRAME_BUFFER_COUNT; ++bufferIndex) {
             gfx_destroy_buffer(device, quadBuffers[bufferIndex]);
         }
         return;
@@ -347,7 +330,7 @@ static void app_render2d_try_create_gpu_resources(APP_Context* ctx) {
     render->atlasSampler = atlasSampler;
     render->atlasSamplerId = atlasSamplerId;
     render->indexBuffer = indexBuffer;
-    for (U32 bufferIndex = 0u; bufferIndex < APP_RENDER2D_FRAME_BUFFER_COUNT; ++bufferIndex) {
+    for (U32 bufferIndex = 0u; bufferIndex < APP_RENDERER_FRAME_BUFFER_COUNT; ++bufferIndex) {
         render->quadBuffers[bufferIndex] = quadBuffers[bufferIndex];
         render->quadBufferIds[bufferIndex] = quadBufferIds[bufferIndex];
     }
@@ -355,7 +338,7 @@ static void app_render2d_try_create_gpu_resources(APP_Context* ctx) {
     render->atlasSeeded = 0;
 }
 
-static void app_render2d_upload_atlas(APP_Context* ctx, GfxFrame* frame, const TextAtlasUpload* upload) {
+static void app_renderer_upload_atlas(APP_Context* ctx, GfxFrame* frame, const TextAtlasUpload* upload) {
     GfxTextureUploadRegion region = {};
     region.layerCount = 1u;
     region.x = upload->x;
@@ -368,9 +351,7 @@ static void app_render2d_upload_atlas(APP_Context* ctx, GfxFrame* frame, const T
     gfx_upload_texture(frame, ctx->core->render2d.atlasTexture, &region, upload->pixels);
 }
 
-// GPU texture memory is undefined until written; seed the whole atlas once
-// after creation so the gutters between glyph rects sample as zero.
-static void app_render2d_try_seed_atlas(APP_Context* ctx, GfxFrame* frame) {
+static void app_renderer_try_seed_atlas(APP_Context* ctx, GfxFrame* frame) {
     AppRender2DState* render = &ctx->core->render2d;
     if (render->atlasSeeded || !render->gpuResourcesCreated || render->textContext == 0) {
         return;
@@ -380,16 +361,16 @@ static void app_render2d_try_seed_atlas(APP_Context* ctx, GfxFrame* frame) {
     if (fullUpload.width == 0u) {
         return;
     }
-    app_render2d_upload_atlas(ctx, frame, &fullUpload);
+    app_renderer_upload_atlas(ctx, frame, &fullUpload);
     render->atlasSeeded = 1;
 }
 
-// Batch execution: upload the frame's quads, emit one draw per batch.
-static void app_render2d_execute(APP_Context* ctx, GfxCommandBuffer* commands, GfxFrame* frame, Draw2DResult result) {
+static void app_renderer_execute_2d(APP_Context* ctx, AppRendererFrame* rendererFrame, Draw2DResult result) {
     AppCoreState* state = ctx->core;
     AppRender2DState* render = &state->render2d;
+    GfxFrame* frame = rendererFrame->frame;
 
-    AppRender2DPacket packet = {};
+    AppRendererPacket packet = {};
     packet.colorTarget.texture = gfx_get_backbuffer(frame);
     packet.colorTarget.loadOp = GfxLoadOp_Clear;
     packet.colorTarget.storeOp = GfxStoreOp_Store;
@@ -401,9 +382,9 @@ static void app_render2d_execute(APP_Context* ctx, GfxCommandBuffer* commands, G
     packet.pass.colorTargets = &packet.colorTarget;
     packet.pass.colorTargetCount = 1u;
 
-    U32 frameBufferIndex = (U32)(state->frameCounter & (APP_RENDER2D_FRAME_BUFFER_COUNT - 1u));
+    U32 frameBufferIndex = (U32)(state->frameCounter & (APP_RENDERER_FRAME_BUFFER_COUNT - 1u));
     B32 drawsReady = result.quadCount != 0u &&
-                     result.quadCount <= APP_RENDER2D_MAX_QUADS &&
+                     result.quadCount <= APP_RENDERER_MAX_QUADS &&
                      render->gpuResourcesCreated &&
                      render->pipeline.generation != 0u &&
                      gfx_upload_buffer(frame,
@@ -416,11 +397,11 @@ static void app_render2d_execute(APP_Context* ctx, GfxCommandBuffer* commands, G
         for (U32 batchIndex = 0u; batchIndex < result.batchCount && batchIndex < ARRAY_COUNT(packet.draws); ++batchIndex) {
             const Draw2DBatch* batch = result.batches + batchIndex;
 
-            GfxTemp rootTemp = gfx_allocate_temp(frame, sizeof(AppDraw2DRootData), 16u);
+            GfxTemp rootTemp = gfx_allocate_temp(frame, sizeof(ShdDraw2DRootData), 16u);
             if (rootTemp.cpu == 0) {
                 break;
             }
-            AppDraw2DRootData* rootData = (AppDraw2DRootData*)rootTemp.cpu;
+            ShdDraw2DRootData* rootData = (ShdDraw2DRootData*)rootTemp.cpu;
             *rootData = {};
             rootData->quadBuffer = render->quadBufferIds[frameBufferIndex].index;
             rootData->quadByteOffset = batch->firstQuad * (U32)sizeof(Draw2DQuad);
@@ -441,12 +422,10 @@ static void app_render2d_execute(APP_Context* ctx, GfxCommandBuffer* commands, G
             packet.drawCount += 1u;
         }
 
-        packet.resourceUses[0] = {};
         packet.resourceUses[0].kind = GfxResourceUseKind_Buffer;
         packet.resourceUses[0].accessFlags = GfxResourceAccessFlags_ShaderRead;
         packet.resourceUses[0].shaderStages = GfxShaderStageFlags_Vertex;
         packet.resourceUses[0].buffer = render->quadBuffers[frameBufferIndex];
-        packet.resourceUses[1] = {};
         packet.resourceUses[1].kind = GfxResourceUseKind_Texture;
         packet.resourceUses[1].accessFlags = GfxResourceAccessFlags_ShaderRead;
         packet.resourceUses[1].shaderStages = GfxShaderStageFlags_Fragment;
@@ -465,92 +444,14 @@ static void app_render2d_execute(APP_Context* ctx, GfxCommandBuffer* commands, G
     packet.area.draws = packet.draws;
     packet.area.drawCount = packet.drawCount;
 
-    gfx_render_pass(commands, &packet.pass, &packet.area, 1u);
+    gfx_render_pass(rendererFrame->commands, &packet.pass, &packet.area, 1u);
 
     if (packet.drawCount != 0u) {
-        app_render2d_log_once(state, AppRender2DLoadLog_Ready, "Draw2d overlay ready");
+        app_renderer_log_once(state, AppRendererLoadLog_Ready, "Renderer 2d overlay ready");
     }
 }
 
-// The demo scene. Temporary by design: a panel, some shapes, a clip
-// showcase, and the text corpus. Delete freely.
-static void app_demo_scene_submit(APP_Context* ctx, Draw2DContext* draw2d, GfxFrame* frame) {
-    AppCoreState* state = ctx->core;
-    if (state->render2d.textContext == 0 || state->render2d.font.generation == 0u) {
-        return;
-    }
-
-    F32 panelMinX = 40.0f;
-    F32 panelMinY = 40.0f;
-    F32 panelMaxX = 980.0f;
-    F32 panelMaxY = 420.0f;
-    draw2d_rect(draw2d, Draw2DLayer_UI, panelMinX, panelMinY, panelMaxX, panelMaxY, 0x14181CF0u);
-    draw2d_box(draw2d, Draw2DLayer_UI, panelMinX, panelMinY, panelMaxX, panelMaxY, 2.0f, 0x3A4148FFu);
-    draw2d_line(draw2d, Draw2DLayer_UI, panelMinX + 24.0f, 132.0f, panelMaxX - 24.0f, 132.0f, 2.0f, 0x3A4148FFu);
-
-    Temp scratch = get_scratch(0, 0);
-    if (scratch.arena == 0) {
-        return;
-    }
-    DEFER_REF(temp_end(&scratch));
-
-    TextDrawDesc titleDesc = {};
-    titleDesc.font = state->render2d.font;
-    titleDesc.text = str8("draw2d + kb_text_shape + FreeType");
-    titleDesc.x = panelMinX + 24.0f;
-    titleDesc.y = panelMinY + 24.0f;
-    titleDesc.pixelSize = 40.0f;
-    titleDesc.rgba8 = 0xF4F1E8FFu;
-    TextDrawData title = text_prepare_draw(state->render2d.textContext, scratch.arena, &titleDesc);
-
-    TextDrawDesc bodyDesc = {};
-    bodyDesc.font = state->render2d.font;
-    bodyDesc.text = str8("Hello, text\nOla, acao, coracao\nOl\xC3\xA1, a\xC3\xA7\xC3\xA3o, cora\xC3\xA7\xC3\xA3o\nAVATAR ToYo office ffi fi fl");
-    bodyDesc.x = panelMinX + 24.0f;
-    bodyDesc.y = 156.0f;
-    bodyDesc.pixelSize = 28.0f;
-    bodyDesc.rgba8 = 0xD9D4C7FFu;
-    TextDrawData body = text_prepare_draw(state->render2d.textContext, scratch.arena, &bodyDesc);
-
-    for (U32 uploadIndex = 0u; uploadIndex < title.uploadCount; ++uploadIndex) {
-        app_render2d_upload_atlas(ctx, frame, title.uploads + uploadIndex);
-    }
-    for (U32 uploadIndex = 0u; uploadIndex < body.uploadCount; ++uploadIndex) {
-        app_render2d_upload_atlas(ctx, frame, body.uploads + uploadIndex);
-    }
-
-    draw2d_glyph_quads(draw2d, Draw2DLayer_UI, (const Draw2DQuad*)title.quads, title.quadCount);
-    draw2d_glyph_quads(draw2d, Draw2DLayer_UI, (const Draw2DQuad*)body.quads, body.quadCount);
-
-    // Clip showcase: the rect and text are clipped to the marked box.
-    F32 clipMinX = panelMinX + 24.0f;
-    F32 clipMinY = 320.0f;
-    F32 clipMaxX = clipMinX + 360.0f;
-    F32 clipMaxY = clipMinY + 72.0f;
-    draw2d_box(draw2d, Draw2DLayer_UI, clipMinX, clipMinY, clipMaxX, clipMaxY, 1.0f, 0x6B7480FFu);
-    draw2d_push_clip(draw2d, clipMinX, clipMinY, clipMaxX, clipMaxY);
-    draw2d_rect(draw2d, Draw2DLayer_UI, clipMinX - 40.0f, clipMinY + 12.0f, clipMaxX + 40.0f, clipMinY + 28.0f, 0x4F8A6AFFu);
-
-    TextDrawDesc clippedDesc = {};
-    clippedDesc.font = state->render2d.font;
-    clippedDesc.text = str8("clipped text runs past the box edge and gets cut");
-    clippedDesc.x = clipMinX + 8.0f;
-    clippedDesc.y = clipMinY + 34.0f;
-    clippedDesc.pixelSize = 24.0f;
-    clippedDesc.rgba8 = 0xB9C4D1FFu;
-    TextDrawData clipped = text_prepare_draw(state->render2d.textContext, scratch.arena, &clippedDesc);
-    for (U32 uploadIndex = 0u; uploadIndex < clipped.uploadCount; ++uploadIndex) {
-        app_render2d_upload_atlas(ctx, frame, clipped.uploads + uploadIndex);
-    }
-    draw2d_glyph_quads(draw2d, Draw2DLayer_UI, (const Draw2DQuad*)clipped.quads, clipped.quadCount);
-    draw2d_pop_clip(draw2d);
-
-    // Debug layer renders above UI.
-    draw2d_box(draw2d, Draw2DLayer_Debug, panelMaxX - 56.0f, panelMinY + 16.0f, panelMaxX - 16.0f, panelMinY + 56.0f, 2.0f, 0xE2574BFFu);
-}
-
-// App hooks
-static B32 app_render2d_init(APP_Context* ctx) {
+static B32 app_renderer_init(APP_Context* ctx) {
     AppCoreState* state = ctx->core;
     if (state->render2d.initialized) {
         return 1;
@@ -562,16 +463,16 @@ static B32 app_render2d_init(APP_Context* ctx) {
     if (!app_resource_cache_init(ctx)) {
         return 0;
     }
-    if (!app_render2d_ensure_text_context(ctx)) {
+    if (!app_renderer_ensure_text_context(ctx)) {
         return 0;
     }
 
     state->render2d.initialized = 1;
-    app_render2d_log_once(state, AppRender2DLoadLog_Started, "Draw2d resources requested");
+    app_renderer_log_once(state, AppRendererLoadLog_Started, "Renderer resources requested");
     return 1;
 }
 
-static void app_gfx_demo_shutdown(APP_Context* ctx) {
+static void app_renderer_shutdown(APP_Context* ctx) {
     ASSERT_ALWAYS(ctx != 0);
     ASSERT_ALWAYS(ctx->core != 0);
 
@@ -585,7 +486,7 @@ static void app_gfx_demo_shutdown(APP_Context* ctx) {
     app_resource_cache_shutdown(ctx);
 
     if (device != 0) {
-        for (U32 bufferIndex = 0u; bufferIndex < APP_RENDER2D_FRAME_BUFFER_COUNT; ++bufferIndex) {
+        for (U32 bufferIndex = 0u; bufferIndex < APP_RENDERER_FRAME_BUFFER_COUNT; ++bufferIndex) {
             gfx_destroy_buffer(device, render->quadBuffers[bufferIndex]);
         }
         gfx_destroy_buffer(device, render->indexBuffer);
@@ -597,20 +498,18 @@ static void app_gfx_demo_shutdown(APP_Context* ctx) {
     *render = {};
 }
 
-static void app_gfx_demo_frame(APP_Context* ctx, F32 deltaSeconds) {
+static AppRendererFrame* app_renderer_begin_frame(APP_Context* ctx) {
     ASSERT_ALWAYS(ctx != 0);
     ASSERT_ALWAYS(ctx->host != 0);
     ASSERT_ALWAYS(ctx->core != 0);
-    (void)deltaSeconds;
 
-    if (!ctx->host->gfxDevice) {
-        return;
+    if (!ctx->host->gfxDevice ||
+        ctx->host->windowWidth == 0u ||
+        ctx->host->windowHeight == 0u) {
+        return 0;
     }
-    if (ctx->host->windowWidth == 0u || ctx->host->windowHeight == 0u) {
-        return;
-    }
-    if (!app_render2d_init(ctx)) {
-        return;
+    if (!app_renderer_init(ctx)) {
+        return 0;
     }
 
 #if defined(PLATFORM_BUILD_DEBUG)
@@ -625,27 +524,60 @@ static void app_gfx_demo_frame(APP_Context* ctx, F32 deltaSeconds) {
 
     GfxFrame* frame = gfx_begin_frame(ctx->host->gfxDevice);
     if (!frame) {
-        return;
+        return 0;
     }
-    GfxCommandBuffer* commands = gfx_get_command_buffer(frame);
 
-    app_render2d_try_load_font(ctx);
-    app_render2d_try_update_pipeline(ctx);
-    app_render2d_try_create_gpu_resources(ctx);
-    app_render2d_try_seed_atlas(ctx, frame);
+    g_appRendererFrame.frame = frame;
+    g_appRendererFrame.commands = gfx_get_command_buffer(frame);
+
+    app_renderer_try_load_font(ctx);
+    app_renderer_try_update_pipeline(ctx);
+    app_renderer_try_create_gpu_resources(ctx);
+    app_renderer_try_seed_atlas(ctx, frame);
 
     F32 whiteU = 0.0f;
     F32 whiteV = 0.0f;
     text_white_uv(ctx->core->render2d.textContext, &whiteU, &whiteV);
     draw2d_begin(&ctx->core->render2d.draw2d, ctx->host->frameArena, whiteU, whiteV);
-    app_demo_scene_submit(ctx, &ctx->core->render2d.draw2d, frame);
-    Draw2DResult draw2dResult = draw2d_end(&ctx->core->render2d.draw2d);
 
-    app_render2d_execute(ctx, commands, frame, draw2dResult);
+    return &g_appRendererFrame;
+}
 
-    gfx_submit(commands);
-    gfx_end_frame(frame);
+static void app_renderer_submit_text(APP_Context* ctx, AppRendererFrame* rendererFrame, const TextDrawData* drawData, Draw2DLayer layer) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    if (rendererFrame == 0 || drawData == 0) {
+        return;
+    }
+
+    if (ctx->core->render2d.gpuResourcesCreated) {
+        for (U32 uploadIndex = 0u; uploadIndex < drawData->uploadCount; ++uploadIndex) {
+            app_renderer_upload_atlas(ctx, rendererFrame->frame, drawData->uploads + uploadIndex);
+        }
+    }
+    draw2d_glyph_quads(&ctx->core->render2d.draw2d, layer, (const Draw2DQuad*)drawData->quads, drawData->quadCount);
+}
+
+static void app_renderer_end_frame(APP_Context* ctx, AppRendererFrame* rendererFrame) {
+    ASSERT_ALWAYS(ctx != 0);
+    ASSERT_ALWAYS(ctx->core != 0);
+
+    if (rendererFrame == 0 || rendererFrame->frame == 0) {
+        return;
+    }
+
+    Draw2DResult result = draw2d_end(&ctx->core->render2d.draw2d);
+    app_renderer_execute_2d(ctx, rendererFrame, result);
+
+    ctx->core->render2d.lastDraw2DStats = ctx->core->render2d.draw2d.stats;
+    ctx->core->render2d.lastGfxStats = gfx_get_stats(ctx->host->gfxDevice);
+
+    gfx_submit(rendererFrame->commands);
+    gfx_end_frame(rendererFrame->frame);
     if (ctx->core->resources.artifactCache) {
         artifact_cache_evict(ctx->core->resources.artifactCache, ctx->core->frameCounter, 128u);
     }
+
+    g_appRendererFrame = {};
 }

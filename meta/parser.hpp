@@ -28,15 +28,26 @@ struct ASTSumType {
     ASTVariant* variants;
     U32 variantCount;
     B32 generateMatch;
-    
+
     ASTSumType* next;
+};
+
+struct ASTShaderRecord {
+    StringU8 name;
+    ASTField* fields;
+    U32 fieldCount;
+    B32 isRootData;
+
+    ASTShaderRecord* next;
 };
 
 struct ASTFile {
     StringU8 filename;
     ASTSumType* sumTypes;
     U32 sumTypeCount;
-    
+    ASTShaderRecord* shaderRecords;
+    U32 shaderRecordCount;
+
     B32 hasError;
     StringU8 errorMessage;
 };

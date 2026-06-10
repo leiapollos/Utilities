@@ -281,6 +281,100 @@ static void generate_sum_type(Generator* gen, ASTSumType* sumType) {
     generate_main_struct(gen, sumType);
 }
 
+static B32 shader_record_field_is_f32(ASTField* field) {
+    return str8_equal(field->typeName, str8("F32"));
+}
+
+static void generate_shader_record_slang(Generator* gen, ASTShaderRecord* record) {
+    gen_line(gen, "struct {} {{", record->name);
+    gen->indentLevel++;
+    for (ASTField* field = record->fields; field; field = field->next) {
+        gen_line(gen, "{} {};", str8(shader_record_field_is_f32(field) ? "float" : "uint"), field->name);
+    }
+    gen->indentLevel--;
+    gen_line_(gen, str8("};"));
+    gen_newline(gen);
+
+    if (record->isRootData) {
+        gen_line(gen, "{} shd_load_{}_root() {{", record->name, record->name);
+        gen->indentLevel++;
+        gen_line(gen, "{} result;", record->name);
+        U32 wordIndex = 0;
+        for (ASTField* field = record->fields; field; field = field->next, ++wordIndex) {
+            if (shader_record_field_is_f32(field)) {
+                gen_line(gen, "result.{} = asfloat(gfx_load_root_word({}u));", field->name, wordIndex);
+            } else {
+                gen_line(gen, "result.{} = gfx_load_root_word({}u);", field->name, wordIndex);
+            }
+        }
+        gen_line_(gen, str8("return result;"));
+        gen->indentLevel--;
+        gen_line_(gen, str8("}"));
+    } else {
+        gen_line(gen, "static const uint SHD_{}_STRIDE_WORDS = {}u;", record->name, record->fieldCount);
+        gen_line(gen, "{} shd_load_{}(uint bufferIndex, uint byteOffset, uint elementIndex) {{", record->name, record->name);
+        gen->indentLevel++;
+        gen_line(gen, "uint wordOffset = elementIndex * SHD_{}_STRIDE_WORDS;", record->name);
+        gen_line(gen, "{} result;", record->name);
+        U32 wordIndex = 0;
+        for (ASTField* field = record->fields; field; field = field->next, ++wordIndex) {
+            if (shader_record_field_is_f32(field)) {
+                gen_line(gen, "result.{} = asfloat(gfx_load_buffer_word(bufferIndex, byteOffset, wordOffset + {}u));", field->name, wordIndex);
+            } else {
+                gen_line(gen, "result.{} = gfx_load_buffer_word(bufferIndex, byteOffset, wordOffset + {}u);", field->name, wordIndex);
+            }
+        }
+        gen_line_(gen, str8("return result;"));
+        gen->indentLevel--;
+        gen_line_(gen, str8("}"));
+    }
+    gen_newline(gen);
+}
+
+static void generate_shader_record_c(Generator* gen, ASTShaderRecord* record) {
+    U32 paddedWordCount = record->isRootData ? 16u : record->fieldCount;
+
+    gen_line(gen, "struct Shd{} {{", record->name);
+    gen->indentLevel++;
+    for (ASTField* field = record->fields; field; field = field->next) {
+        gen_line(gen, "{} {};", field->typeName, field->name);
+    }
+    for (U32 padIndex = record->fieldCount; padIndex < paddedWordCount; ++padIndex) {
+        gen_line(gen, "U32 _pad{};", padIndex);
+    }
+    gen->indentLevel--;
+    gen_line_(gen, str8("};"));
+
+    U32 wordIndex = 0;
+    for (ASTField* field = record->fields; field; field = field->next, ++wordIndex) {
+        gen_line(gen, "static_assert(offsetof(Shd{}, {}) == {}u, \"Shd{}.{} shader ABI offset mismatch\");",
+                 record->name, field->name, wordIndex * 4u, record->name, field->name);
+    }
+    gen_line(gen, "static_assert(sizeof(Shd{}) == {}u, \"Shd{} shader ABI size mismatch\");",
+             record->name, paddedWordCount * 4u, record->name);
+    if (!record->isRootData) {
+        gen_line(gen, "static const U32 SHD_{}_STRIDE_WORDS = {}u;", record->name, record->fieldCount);
+    }
+    gen_newline(gen);
+}
+
+static void generate_shader_records(Generator* gen, ASTFile* file) {
+    gen_line_(gen, str8("// ////////////////////////"));
+    gen_line_(gen, str8("// Shader Records"));
+    gen_newline(gen);
+    gen_line_(gen, str8("#if defined(GFX_SHADER_ABI_SLANG)"));
+    gen_newline(gen);
+    for (ASTShaderRecord* record = file->shaderRecords; record; record = record->next) {
+        generate_shader_record_slang(gen, record);
+    }
+    gen_line_(gen, str8("#else"));
+    gen_newline(gen);
+    for (ASTShaderRecord* record = file->shaderRecords; record; record = record->next) {
+        generate_shader_record_c(gen, record);
+    }
+    gen_line_(gen, str8("#endif"));
+}
+
 void generator_generate_file(Generator* gen, ASTFile* file) {
     gen_line_(gen, str8("//"));
     gen_line_(gen, str8("// AUTO-GENERATED FILE - DO NOT EDIT"));
@@ -289,9 +383,12 @@ void generator_generate_file(Generator* gen, ASTFile* file) {
     gen_newline(gen);
     gen_line_(gen, str8("#pragma once"));
     gen_newline(gen);
-    
+
     for (ASTSumType* st = file->sumTypes; st; st = st->next) {
         generate_sum_type(gen, st);
+    }
+    if (file->shaderRecordCount != 0) {
+        generate_shader_records(gen, file);
     }
 }
 

@@ -37,7 +37,12 @@ static const char* HOST_HOT_MODULE_INPUTS[] = {
     "app_include.hpp",
     "app_include.cpp",
     "app.cpp",
-    "app_gfx_demo.cpp",
+    "app_renderer.hpp",
+    "app_renderer.cpp",
+    "app_debug_draw.hpp",
+    "app_debug_draw.cpp",
+    "app_debug_overlay.cpp",
+    "app_scene_demo.cpp",
     "app_state.hpp",
     "nstl/content/content.hpp",
     "nstl/content/content.cpp",
@@ -58,6 +63,7 @@ static const char* HOST_HOT_MODULE_INPUTS[] = {
     "nstl/draw2d/draw2d_include.hpp",
     "nstl/draw2d/draw2d_include.cpp",
     "app/shaders/shader_manifest.h",
+    "app/shaders/shader_records.generated.hpp",
     "app/fonts/NotoSans-Regular.ttf",
 };
 
@@ -65,6 +71,7 @@ static const char* HOST_SHADER_INPUTS[] = {
     "app/shaders/shader_manifest.h",
     "app/shaders/draw2d.slang",
     "app/shaders/gfx_shader_abi.slang",
+    "app/shaders/shader_records.generated.hpp",
 };
 
 static const char* HOST_RESTART_REQUIRED_INPUTS[] = {

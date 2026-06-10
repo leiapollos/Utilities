@@ -108,8 +108,6 @@ enum GfxIndexType {
     GfxIndexType_U16 = 0,
     GfxIndexType_U32,
 };
-// Draw kind is implicit: a draw with a nil indirect buffer is a direct
-// indexed draw; a non-nil indirect buffer makes it indirect indexed.
 
 enum GfxShaderFormat {
     GfxShaderFormat_MSL_Source = 0,
@@ -321,10 +319,8 @@ struct GfxRect {
     U32 height;
 };
 
-// Compact draw record: one cache line. Root data always lives in the frame
-// temp buffer (gfx_allocate_temp); rootDataOffset/rootDataSize address it.
-// rootDataSize == 0 skips the draw. A nil indirectBuffer means a direct
-// indexed draw; non-nil means indirect indexed via indirectByteOffset.
+// rootDataOffset/rootDataSize address frame temp memory; nil indirectBuffer
+// means direct indexed.
 struct GfxDraw {
     GfxPipeline pipeline;
     GfxBuffer indexBuffer;
@@ -365,9 +361,7 @@ struct GfxDispatch {
     U32 groupsZ;
 };
 
-// Declares shader-visible resources touched by a pass, and — for buffer uses
-// carrying GfxResourceAccessFlags_ShaderWrite — the synchronization contract:
-// offset/size narrow the write barrier (size 0 = whole resource from offset).
+// offset/size narrow write barriers; size 0 means whole resource.
 struct GfxResourceUse {
     GfxResourceUseKind kind;
     U32 accessFlags;
@@ -417,9 +411,7 @@ struct GfxStats {
     U32 stagingOverflowCount;
     U64 stagingBytesUsed;
     U64 frameIndex;
-    // GPU pass times for the most recently completed frame, in submission
-    // order. Only filled when GfxValidationFlags_GpuTimings is set and the
-    // device supports timestamp sampling.
+    // most recently completed frame, submission order, GpuTimings flag only
     F32 passGpuMs[GFX_MAX_TIMED_PASSES];
     U32 passGpuCount;
 };

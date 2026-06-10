@@ -1981,8 +1981,6 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
         backbuffer->usageFlags = GfxTextureUsageFlags_ColorTarget;
     }
 
-    // Resolve GPU pass timestamps from this slot's previously submitted
-    // frame. The frame semaphore guarantees that submission has completed.
     F32 resolvedMs[GFX_MAX_TIMED_PASSES] = {};
     U32 resolvedCount = 0u;
     if (device->gpuTimingsEnabled && frame->timestampSamples && frame->timedPassCount != 0u) {

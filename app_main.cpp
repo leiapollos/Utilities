@@ -1,4 +1,7 @@
 #include "app_include.hpp"
 #include "app_include.cpp"
 #include "app.cpp"
-#include "app_gfx_demo.cpp"
+#include "app_renderer.cpp"
+#include "app_debug_draw.cpp"
+#include "app_debug_overlay.cpp"
+#include "app_scene_demo.cpp"

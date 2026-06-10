@@ -69,12 +69,5 @@ UTILITIES_SHARED_API void text_context_destroy(TextContext* text);
 UTILITIES_SHARED_API TextFont text_font_load_memory(TextContext* text, const TextFontDesc* desc);
 UTILITIES_SHARED_API TextDrawData text_prepare_draw(TextContext* text, Arena* frameArena, const TextDrawDesc* desc);
 
-// The atlas reserves a small solid-white block so untextured 2D quads can
-// sample it through the same pipeline as glyphs. Returns the UV at its center.
 UTILITIES_SHARED_API void text_white_uv(TextContext* text, F32* outU, F32* outV);
-
-// Full-atlas upload record for seeding the GPU texture after (re)creation.
-// GPU texture memory is undefined until written; glyph uploads only cover
-// glyph rects, so the gutters between glyphs must be seeded once or bilinear
-// sampling at glyph edges reads garbage.
 UTILITIES_SHARED_API TextAtlasUpload text_atlas_full_upload(TextContext* text);
