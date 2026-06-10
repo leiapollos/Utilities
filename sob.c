@@ -1150,7 +1150,33 @@ static int build_slang_shaders(Sob_Arena* arena) {
     return 0;
 }
 
-static int configure_runtime_executable(Sob_Arena* arena, Sob_Target* target, BuildMode mode) {
+static Sob_Target* configure_vendor_lib(Sob_BuildContext* ctx) {
+    Sob_Target* vendor = sob_target_create(ctx, "utilities_vendor", Sob_TargetKind_StaticLib,
+                                           .outputDir = BUILD_DIR,
+                                           .outputName = "utilities_vendor");
+    if (!vendor) {
+        return 0;
+    }
+    sob_target_add_source(vendor, "third_party/freetype_v0/freetype_v0.cpp");
+    sob_target_add_source(vendor, "third_party/kb/kb_text_shape_impl.cpp");
+    sob_target_add_include(vendor, "third_party/freetype_local/include");
+    sob_target_add_include(vendor, "third_party/freetype/include");
+    sob_target_set_standard(vendor, Sob_Standard_Cpp20);
+    apply_cpp_runtime_flags(vendor);
+    apply_common_warning_flags(vendor);
+    apply_third_party_warning_flags(vendor);
+    sob_target_define(vendor, "NDEBUG", .value = "1");
+#if SOB_WINDOWS
+    sob_target_add_cflags(vendor, "/O2");
+#else
+    sob_target_add_cflags(vendor, "-O2");
+    sob_target_add_cflags(vendor, "-g0");
+#endif
+    return vendor;
+}
+
+static int configure_runtime_executable(Sob_Arena* arena, Sob_Target* target, BuildMode mode,
+                                        Sob_Target* vendor) {
 #if !SOB_WINDOWS
     (void)arena;
 #endif
@@ -1160,7 +1186,7 @@ static int configure_runtime_executable(Sob_Arena* arena, Sob_Target* target, Bu
 #else
     sob_target_add_source(target, "main.mm");
 #endif
-    sob_target_add_source(target, "third_party/freetype_v0/freetype_v0.cpp");
+    sob_target_link_target(target, vendor);
     configure_common_includes(target);
     sob_target_add_include(target, "third_party/freetype_local/include");
     sob_target_add_include(target, "third_party/freetype/include");
@@ -1374,7 +1400,8 @@ static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
             return 1;
         }
 
-        if (!configure_runtime_executable(arena, hostTarget, mode)) {
+        Sob_Target* vendorTarget = configure_vendor_lib(ctx);
+        if (!vendorTarget || !configure_runtime_executable(arena, hostTarget, mode, vendorTarget)) {
             sob_arena_destroy(arena);
             return 1;
         }
@@ -1397,7 +1424,8 @@ static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
             return 1;
         }
 
-        if (!configure_runtime_executable(arena, shipTarget, mode)) {
+        Sob_Target* shipVendor = configure_vendor_lib(ctx);
+        if (!shipVendor || !configure_runtime_executable(arena, shipTarget, mode, shipVendor)) {
             sob_arena_destroy(arena);
             return 1;
         }

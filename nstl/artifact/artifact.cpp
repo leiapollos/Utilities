@@ -85,10 +85,12 @@ struct ArtifactCache {
     U32 requestDataSize;
     U64 activeJobCount;
     U64 shuttingDown;
+    U32 workingCount;
     ArtifactStats stats;
 };
 
 static void artifact_build_job_(void* params);
+static void artifact_set_status_locked_(ArtifactCache* cache, ArtifactNode* node, ArtifactStatus status);
 
 static U64 artifact_hash_bytes_(const void* data, U64 size, U64 seed) {
     const U8* bytes = (const U8*)data;
@@ -429,7 +431,7 @@ static B32 artifact_queue_node_locked_(ArtifactCache* cache,
     node->workingGeneration = generation;
     node->requestedGeneration = generation;
     node->cancelFlag = 0u;
-    node->status = ArtifactStatus_Queued;
+    artifact_set_status_locked_(cache, node, ArtifactStatus_Queued);
     cache->stats.queued += 1u;
     return 1;
 }
@@ -466,6 +468,16 @@ static B32 artifact_status_is_working_(ArtifactStatus status) {
     return (status == ArtifactStatus_Queued ||
             status == ArtifactStatus_Building ||
             status == ArtifactStatus_Publishing) ? 1 : 0;
+}
+
+static void artifact_set_status_locked_(ArtifactCache* cache, ArtifactNode* node, ArtifactStatus status) {
+    if (artifact_status_is_working_(node->status)) {
+        cache->workingCount -= 1u;
+    }
+    node->status = status;
+    if (artifact_status_is_working_(status)) {
+        cache->workingCount += 1u;
+    }
 }
 
 static void artifact_destroy_value_(ArtifactTypeDesc* type, ArtifactValue value) {
@@ -692,7 +704,7 @@ static ArtifactResult artifact_get_once_(ArtifactCache* cache,
     if (FLAGS_HAS(flags, ArtifactGetFlags_InvalidateFailed)) {
         node->failedGeneration = 0u;
         if (node->status == ArtifactStatus_Error) {
-            node->status = (node->readyGeneration != 0u) ? ArtifactStatus_Ready : ArtifactStatus_Null;
+            artifact_set_status_locked_(cache, node, (node->readyGeneration != 0u) ? ArtifactStatus_Ready : ArtifactStatus_Null);
         }
     }
 
@@ -707,7 +719,7 @@ static ArtifactResult artifact_get_once_(ArtifactCache* cache,
             result = artifact_result_from_node_(node, generation, ArtifactResultFlags_Queued);
         } else {
             node->failedGeneration = generation;
-            node->status = (node->readyGeneration != 0u) ? ArtifactStatus_Ready : ArtifactStatus_Error;
+            artifact_set_status_locked_(cache, node, (node->readyGeneration != 0u) ? ArtifactStatus_Ready : ArtifactStatus_Error);
             result = artifact_result_from_node_(node, generation, ArtifactResultFlags_None);
         }
     } else {
@@ -836,7 +848,7 @@ static B32 artifact_prepare_submit_locked_(ArtifactCache* cache, ArtifactQueuedJ
         return 0;
     }
 
-    node->status = ArtifactStatus_Building;
+    artifact_set_status_locked_(cache, node, ArtifactStatus_Building);
     cache->activeJobCount += 1u;
     if (outJob) {
         *outJob = job;
@@ -860,13 +872,13 @@ static void artifact_publish_completed_(ArtifactCache* cache, ArtifactCompletedJ
     ArtifactTypeDesc* typePtr = artifact_type_from_id_locked_(cache, node->typeId);
     if (!typePtr) {
         node->failedGeneration = completed.generation;
-        node->status = (node->readyGeneration != 0u) ? ArtifactStatus_Ready : ArtifactStatus_Error;
+        artifact_set_status_locked_(cache, node, (node->readyGeneration != 0u) ? ArtifactStatus_Ready : ArtifactStatus_Error);
         artifact_unlock_(cache);
         return;
     }
 
     if (completed.cancelled) {
-        node->status = (node->readyGeneration != 0u) ? ArtifactStatus_Ready : ArtifactStatus_Cancelled;
+        artifact_set_status_locked_(cache, node, (node->readyGeneration != 0u) ? ArtifactStatus_Ready : ArtifactStatus_Cancelled);
         cache->stats.cancelled += 1u;
         artifact_unlock_(cache);
         return;
@@ -874,7 +886,7 @@ static void artifact_publish_completed_(ArtifactCache* cache, ArtifactCompletedJ
 
     if (!completed.succeeded) {
         node->failedGeneration = completed.generation;
-        node->status = (node->readyGeneration != 0u) ? ArtifactStatus_Ready : ArtifactStatus_Error;
+        artifact_set_status_locked_(cache, node, (node->readyGeneration != 0u) ? ArtifactStatus_Ready : ArtifactStatus_Error);
         cache->stats.failed += 1u;
         artifact_unlock_(cache);
         return;
@@ -886,7 +898,7 @@ static void artifact_publish_completed_(ArtifactCache* cache, ArtifactCompletedJ
     if (requestDataSize != 0u) {
         MEMCPY(requestData, node->requestData, requestDataSize);
     }
-    node->status = ArtifactStatus_Publishing;
+    artifact_set_status_locked_(cache, node, ArtifactStatus_Publishing);
     artifact_unlock_(cache);
 
     ArtifactValue finalValue = completed.buildValue;
@@ -930,7 +942,7 @@ static void artifact_publish_completed_(ArtifactCache* cache, ArtifactCompletedJ
         node->requestedGeneration = completed.generation;
         node->workingGeneration = 0u;
         node->failedGeneration = 0u;
-        node->status = ArtifactStatus_Ready;
+        artifact_set_status_locked_(cache, node, ArtifactStatus_Ready);
         if (finalBytes == 0u) {
             finalBytes = completed.bytes;
         }
@@ -947,7 +959,7 @@ static void artifact_publish_completed_(ArtifactCache* cache, ArtifactCompletedJ
     } else {
         node->failedGeneration = completed.generation;
         node->workingGeneration = 0u;
-        node->status = (node->readyGeneration != 0u) ? ArtifactStatus_Ready : ArtifactStatus_Error;
+        artifact_set_status_locked_(cache, node, (node->readyGeneration != 0u) ? ArtifactStatus_Ready : ArtifactStatus_Error);
         cache->stats.failed += 1u;
     }
     artifact_unlock_(cache);
@@ -1077,16 +1089,7 @@ ArtifactStats artifact_cache_stats(ArtifactCache* cache) {
     artifact_lock_(cache);
     result = cache->stats;
     result.liveCount = cache->slots.count;
-    for (U32 slot = 0u; slot < cache->slots.capacity; ++slot) {
-        if (!slot_map_is_occupied(&cache->slots, slot)) {
-            continue;
-        }
-
-        ArtifactNode* node = (ArtifactNode*)slot_map_item_at(&cache->slots, slot);
-        if (node && artifact_status_is_working_(node->status)) {
-            result.workingCount += 1u;
-        }
-    }
+    result.workingCount = cache->workingCount;
     artifact_unlock_(cache);
     return result;
 }
@@ -1149,7 +1152,7 @@ static void artifact_build_job_(void* params) {
     ArtifactTypeDesc* typePtr = artifact_type_from_id_locked_(cache, node->typeId);
     if (!typePtr || !typePtr->buildProc) {
         node->failedGeneration = job.generation;
-        node->status = (node->readyGeneration != 0u) ? ArtifactStatus_Ready : ArtifactStatus_Error;
+        artifact_set_status_locked_(cache, node, (node->readyGeneration != 0u) ? ArtifactStatus_Ready : ArtifactStatus_Error);
         if (cache->activeJobCount != 0u) {
             cache->activeJobCount -= 1u;
         }
@@ -1202,7 +1205,7 @@ static void artifact_build_job_(void* params) {
         node = (ArtifactNode*)slot_map_get(&cache->slots, job.slot, job.slotGeneration);
         if (node && node->workingGeneration == job.generation) {
             node->failedGeneration = job.generation;
-            node->status = (node->readyGeneration != 0u) ? ArtifactStatus_Ready : ArtifactStatus_Error;
+            artifact_set_status_locked_(cache, node, (node->readyGeneration != 0u) ? ArtifactStatus_Ready : ArtifactStatus_Error);
         }
         cache->stats.failed += 1u;
     }

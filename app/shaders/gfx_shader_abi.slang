@@ -55,6 +55,13 @@ void gfx_store_buffer_word(uint resourceIndex, uint byteOffset, uint wordOffset,
     gfxBuffers[resourceIndex][base] = value;
 }
 
+uint gfx_atomic_add_buffer_word(uint resourceIndex, uint byteOffset, uint wordOffset, uint value) {
+    uint base = byteOffset / 4u + wordOffset;
+    uint original;
+    InterlockedAdd(gfxBuffers[resourceIndex][base], value, original);
+    return original;
+}
+
 float4 gfx_load_buffer_float4(uint resourceIndex, uint byteOffset, uint wordOffset) {
     return asfloat(uint4(gfx_load_buffer_word(resourceIndex, byteOffset, wordOffset + 0u),
                          gfx_load_buffer_word(resourceIndex, byteOffset, wordOffset + 1u),
@@ -161,6 +168,13 @@ uint gfx_load_buffer_word(uint resourceIndex, uint byteOffset, uint wordOffset) 
 void gfx_store_buffer_word(uint resourceIndex, uint byteOffset, uint wordOffset, uint value) {
     uint base = byteOffset / 4u + wordOffset;
     gfxResources.buffers[resourceIndex][base] = value;
+}
+
+uint gfx_atomic_add_buffer_word(uint resourceIndex, uint byteOffset, uint wordOffset, uint value) {
+    uint base = byteOffset / 4u + wordOffset;
+    uint original;
+    InterlockedAdd(gfxResources.buffers[resourceIndex][base], value, original);
+    return original;
 }
 
 float4 gfx_load_buffer_float4(uint resourceIndex, uint byteOffset, uint wordOffset) {

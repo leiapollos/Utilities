@@ -61,12 +61,91 @@ struct AppRender2DState {
     U32 loadLogMask;
 };
 
+#define APP_WORLD_MAX_RENDERABLES 16384u
+#define APP_WORLD_MAX_MESHES 8u
+#define APP_WORLD_MAX_MATERIALS 16u
+#define APP_WORLD_BIN_COUNT 3u
+#define APP_WORLD_FRAME_BUFFER_COUNT 2u
+#define APP_WORLD_SHADER_COUNT 7u
+
+enum AppWorldBin {
+    AppWorldBin_Opaque = 0,
+    AppWorldBin_AlphaTest,
+    AppWorldBin_Transparent,
+};
+
+struct AppWorldMeshHandle {
+    U32 index;
+    U32 generation;
+};
+
+struct AppWorldMesh {
+    U32 indexCount;
+    U32 firstIndex;
+    U32 baseVertex;
+    Vec3F32 boundsCenter;
+    Vec3F32 boundsExtents;
+    F32 boundsRadius;
+};
+
+struct AppWorldState {
+    B32 gpuResourcesCreated;
+
+    SlotMap meshes;
+    U32 meshCount;
+    U32 materialCount;
+
+    GfxBuffer vertexBuffer;
+    GfxResourceId vertexBufferId;
+    GfxBuffer indexBuffer;
+    GfxBuffer meshRecordBuffer;
+    GfxResourceId meshRecordBufferId;
+    GfxBuffer materialBuffer;
+    GfxResourceId materialBufferId;
+    GfxBuffer frameRecordBuffers[APP_WORLD_FRAME_BUFFER_COUNT];
+    GfxResourceId frameRecordBufferIds[APP_WORLD_FRAME_BUFFER_COUNT];
+    GfxBuffer renderableBuffers[APP_WORLD_FRAME_BUFFER_COUNT];
+    GfxResourceId renderableBufferIds[APP_WORLD_FRAME_BUFFER_COUNT];
+    GfxBuffer flagsBuffer;
+    GfxResourceId flagsBufferId;
+    GfxBuffer cellCountBuffer;
+    GfxResourceId cellCountBufferId;
+    GfxBuffer cellOffsetBuffer;
+    GfxResourceId cellOffsetBufferId;
+    GfxBuffer visibleBuffer;
+    GfxResourceId visibleBufferId;
+    GfxBuffer argsBuffer;
+    GfxResourceId argsBufferId;
+
+    GfxTexture depthTexture;
+    U32 depthWidth;
+    U32 depthHeight;
+
+    FileHandle shaderFiles[APP_WORLD_SHADER_COUNT];
+    ContentHash shaderHashes[APP_WORLD_SHADER_COUNT];
+    GfxPipeline opaquePipeline;
+    GfxPipeline transparentPipeline;
+    GfxPipeline computePipelines[5];
+
+    AppWorldMeshHandle builtinMeshes[3];
+
+    ShdWorldFrameRecord frameRecord;
+    ShdWorldRenderableRecord* renderables;
+    ShdWorldRenderableRecord* transparents;
+    F32* transparentDepths;
+    U32 renderableCount;
+    U32 transparentCount;
+    U32 lastRenderableCount;
+    B32 frameOpen;
+};
+
 struct AppDemoState {
     U8 titleBuffer[128];
     U32 titleLength;
     F32 titleSize;
-    B32 showClipDemo;
-    B32 showMarker;
+    B32 showBounds;
+    B32 animate;
+    U32 gridSide;
 };
 
 struct AppCoreState {
@@ -87,6 +166,7 @@ struct AppCoreState {
     AppResourceState resources;
     AppGfxShaderBuildState gfxShaderBuild;
     AppRender2DState render2d;
+    AppWorldState world;
     AppDemoState demo;
     UI_State ui;
 };

@@ -31,6 +31,27 @@ struct AppRendererPacket {
 
 static AppRendererFrame g_appRendererFrame;
 
+enum AppWorldShaderSlot {
+    AppWorldShaderSlot_Vertex = 0,
+    AppWorldShaderSlot_Fragment,
+    AppWorldShaderSlot_Reset,
+    AppWorldShaderSlot_Cull,
+    AppWorldShaderSlot_Prefix,
+    AppWorldShaderSlot_Compact,
+    AppWorldShaderSlot_Args,
+};
+
+static const char* APP_WORLD_SHADER_PATHS[APP_WORLD_SHADER_COUNT] = {
+    APP_SHADER_WORLD_VERTEX_RUNTIME_PATH,
+    APP_SHADER_WORLD_FRAGMENT_RUNTIME_PATH,
+    APP_SHADER_WORLD_RESET_RUNTIME_PATH,
+    APP_SHADER_WORLD_CULL_RUNTIME_PATH,
+    APP_SHADER_WORLD_PREFIX_RUNTIME_PATH,
+    APP_SHADER_WORLD_COMPACT_RUNTIME_PATH,
+    APP_SHADER_WORLD_ARGS_RUNTIME_PATH,
+};
+
+
 static void app_renderer_log_once(AppCoreState* state, U32 bit, const char* message) {
     if (state == 0 || message == 0 || FLAGS_HAS(state->render2d.loadLogMask, bit)) {
         return;
@@ -56,6 +77,12 @@ static void app_renderer_resource_cache_reset(APP_Context* ctx) {
     render->vertexShaderHash = CONTENT_HASH_ZERO;
     render->fragmentShaderHash = CONTENT_HASH_ZERO;
     render->failedFontGeneration = 0u;
+
+    AppWorldState* world = &ctx->core->world;
+    for (U32 shaderIndex = 0u; shaderIndex < APP_WORLD_SHADER_COUNT; ++shaderIndex) {
+        world->shaderFiles[shaderIndex] = FILE_HANDLE_ZERO;
+        world->shaderHashes[shaderIndex] = CONTENT_HASH_ZERO;
+    }
 }
 
 static void app_renderer_watch_files(APP_Context* ctx) {
@@ -81,6 +108,12 @@ static void app_renderer_watch_files(APP_Context* ctx) {
     state->render2d.vertexShaderFile = file_watch(state->resources.fileStream, vertexPath, 0u);
     state->render2d.fragmentShaderFile = file_watch(state->resources.fileStream, fragmentPath, 0u);
     state->render2d.fontFile = file_watch(state->resources.fileStream, fontPath, 0u);
+
+    for (U32 shaderIndex = 0u; shaderIndex < APP_WORLD_SHADER_COUNT; ++shaderIndex) {
+        StringU8 worldPath = str8_concat(scratch.arena, exeDir, str8("/../"));
+        worldPath = str8_concat(scratch.arena, worldPath, str8(APP_WORLD_SHADER_PATHS[shaderIndex]));
+        state->world.shaderFiles[shaderIndex] = file_watch(state->resources.fileStream, worldPath, 0u);
+    }
 }
 
 static B32 app_renderer_ensure_text_context(APP_Context* ctx) {
@@ -372,7 +405,7 @@ static void app_renderer_execute_2d(APP_Context* ctx, AppRendererFrame* renderer
 
     AppRendererPacket packet = {};
     packet.colorTarget.texture = gfx_get_backbuffer(frame);
-    packet.colorTarget.loadOp = GfxLoadOp_Clear;
+    packet.colorTarget.loadOp = (state->world.lastRenderableCount != 0u) ? GfxLoadOp_Load : GfxLoadOp_Clear;
     packet.colorTarget.storeOp = GfxStoreOp_Store;
     packet.colorTarget.clearColor[0] = 0.06f;
     packet.colorTarget.clearColor[1] = 0.08f;
@@ -451,6 +484,943 @@ static void app_renderer_execute_2d(APP_Context* ctx, AppRendererFrame* renderer
     }
 }
 
+// ////////////////////////
+// World renderer (U5)
+
+#define APP_WORLD_CULL_GROUP_SIZE 64u
+#define APP_WORLD_COMPACT_GROUP_SIZE 256u
+#define APP_WORLD_MATERIAL_FLAG_ALPHA_TEST 1u
+
+static const char* APP_WORLD_COMPUTE_ENTRIES[5] = {
+    APP_SHADER_WORLD_RESET_ENTRY,
+    APP_SHADER_WORLD_CULL_ENTRY,
+    APP_SHADER_WORLD_PREFIX_ENTRY,
+    APP_SHADER_WORLD_COMPACT_ENTRY,
+    APP_SHADER_WORLD_ARGS_ENTRY,
+};
+
+static const U32 APP_WORLD_COMPUTE_GROUP_SIZES[5] = {
+    APP_WORLD_CULL_GROUP_SIZE,
+    APP_WORLD_CULL_GROUP_SIZE,
+    1u,
+    APP_WORLD_COMPACT_GROUP_SIZE,
+    APP_WORLD_CULL_GROUP_SIZE,
+};
+
+static U32 app_world_cell_count_(const AppWorldState* world) {
+    return APP_WORLD_BIN_COUNT * world->meshCount;
+}
+
+static Vec3F32 app_world_vec3_(F32 x, F32 y, F32 z) {
+    Vec3F32 result;
+    result.x = x;
+    result.y = y;
+    result.z = z;
+    return result;
+}
+
+struct AppWorldMeshBuilder {
+    ShdWorldVertexRecord* vertices;
+    U32* indices;
+    U32 vertexCount;
+    U32 indexCount;
+    U32 vertexCapacity;
+    U32 indexCapacity;
+};
+
+static void app_world_builder_vertex_(AppWorldMeshBuilder* builder, F32 px, F32 py, F32 pz,
+                                      F32 nx, F32 ny, F32 nz, F32 u, F32 v) {
+    if (builder->vertexCount >= builder->vertexCapacity) {
+        return;
+    }
+    ShdWorldVertexRecord* vertex = builder->vertices + builder->vertexCount;
+    builder->vertexCount += 1u;
+    vertex->position[0] = px;
+    vertex->position[1] = py;
+    vertex->position[2] = pz;
+    vertex->normal[0] = nx;
+    vertex->normal[1] = ny;
+    vertex->normal[2] = nz;
+    vertex->uv[0] = u;
+    vertex->uv[1] = v;
+}
+
+static void app_world_builder_index_(AppWorldMeshBuilder* builder, U32 a, U32 b, U32 c) {
+    if (builder->indexCount + 3u > builder->indexCapacity) {
+        return;
+    }
+    builder->indices[builder->indexCount + 0u] = a;
+    builder->indices[builder->indexCount + 1u] = b;
+    builder->indices[builder->indexCount + 2u] = c;
+    builder->indexCount += 3u;
+}
+
+static AppWorldMeshHandle app_world_register_mesh_(AppWorldState* world, U32 firstIndex, U32 indexCount,
+                                                   U32 baseVertex, Vec3F32 center, Vec3F32 extents) {
+    AppWorldMeshHandle handle = {};
+    void* item = 0;
+    U32 slot = 0u;
+    U32 generation = 0u;
+    if (!slot_map_alloc(&world->meshes, &item, &slot, &generation)) {
+        return handle;
+    }
+    AppWorldMesh* mesh = (AppWorldMesh*)item;
+    mesh->indexCount = indexCount;
+    mesh->firstIndex = firstIndex;
+    mesh->baseVertex = baseVertex;
+    mesh->boundsCenter = center;
+    mesh->boundsExtents = extents;
+    mesh->boundsRadius = vec3_length(extents);
+    handle.index = slot;
+    handle.generation = generation;
+    world->meshCount += 1u;
+    return handle;
+}
+
+static void app_world_build_cube_(AppWorldMeshBuilder* builder) {
+    static const F32 faces[6][3] = {
+        {1.0f, 0.0f, 0.0f}, {-1.0f, 0.0f, 0.0f},
+        {0.0f, 1.0f, 0.0f}, {0.0f, -1.0f, 0.0f},
+        {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, -1.0f},
+    };
+    for (U32 face = 0u; face < 6u; ++face) {
+        F32 nx = faces[face][0];
+        F32 ny = faces[face][1];
+        F32 nz = faces[face][2];
+        F32 ux = ny;
+        F32 uy = nz;
+        F32 uz = nx;
+        F32 vx = ny * uz - nz * uy;
+        F32 vy = nz * ux - nx * uz;
+        F32 vz = nx * uy - ny * ux;
+        U32 base = builder->vertexCount;
+        for (U32 corner = 0u; corner < 4u; ++corner) {
+            F32 s = (corner == 1u || corner == 2u) ? 0.5f : -0.5f;
+            F32 t = (corner >= 2u) ? 0.5f : -0.5f;
+            app_world_builder_vertex_(builder,
+                                      nx * 0.5f + ux * s + vx * t,
+                                      ny * 0.5f + uy * s + vy * t,
+                                      nz * 0.5f + uz * s + vz * t,
+                                      nx, ny, nz,
+                                      (corner == 1u || corner == 2u) ? 1.0f : 0.0f,
+                                      (corner >= 2u) ? 1.0f : 0.0f);
+        }
+        app_world_builder_index_(builder, base + 0u, base + 1u, base + 2u);
+        app_world_builder_index_(builder, base + 0u, base + 2u, base + 3u);
+    }
+}
+
+static void app_world_build_sphere_(AppWorldMeshBuilder* builder, U32 rings, U32 sectors) {
+    U32 base = builder->vertexCount;
+    for (U32 ring = 0u; ring <= rings; ++ring) {
+        F32 v = (F32)ring / (F32)rings;
+        F32 phi = v * 3.14159265f;
+        F32 y = COS_F32(phi);
+        F32 r = SIN_F32(phi);
+        for (U32 sector = 0u; sector <= sectors; ++sector) {
+            F32 u = (F32)sector / (F32)sectors;
+            F32 theta = u * 2.0f * 3.14159265f;
+            F32 x = r * COS_F32(theta);
+            F32 z = r * SIN_F32(theta);
+            app_world_builder_vertex_(builder, x * 0.5f, y * 0.5f, z * 0.5f, x, y, z, u, v);
+        }
+    }
+    for (U32 ring = 0u; ring < rings; ++ring) {
+        for (U32 sector = 0u; sector < sectors; ++sector) {
+            U32 a = base + ring * (sectors + 1u) + sector;
+            U32 b = a + sectors + 1u;
+            app_world_builder_index_(builder, a, b, a + 1u);
+            app_world_builder_index_(builder, a + 1u, b, b + 1u);
+        }
+    }
+}
+
+static void app_world_build_plane_(AppWorldMeshBuilder* builder) {
+    U32 base = builder->vertexCount;
+    app_world_builder_vertex_(builder, -0.5f, 0.0f, -0.5f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f);
+    app_world_builder_vertex_(builder, 0.5f, 0.0f, -0.5f, 0.0f, 1.0f, 0.0f, 4.0f, 0.0f);
+    app_world_builder_vertex_(builder, 0.5f, 0.0f, 0.5f, 0.0f, 1.0f, 0.0f, 4.0f, 4.0f);
+    app_world_builder_vertex_(builder, -0.5f, 0.0f, 0.5f, 0.0f, 1.0f, 0.0f, 0.0f, 4.0f);
+    app_world_builder_index_(builder, base + 0u, base + 2u, base + 1u);
+    app_world_builder_index_(builder, base + 0u, base + 3u, base + 2u);
+}
+
+static B32 app_world_try_create_resources_(APP_Context* ctx) {
+    AppCoreState* state = ctx->core;
+    AppWorldState* world = &state->world;
+    if (world->gpuResourcesCreated || ctx->host->gfxDevice == 0 || state->resources.arena == 0) {
+        return world->gpuResourcesCreated;
+    }
+
+    GfxDevice* device = ctx->host->gfxDevice;
+    Temp scratch = get_scratch(0, 0);
+    if (!scratch.arena) {
+        return 0;
+    }
+    DEFER_REF(temp_end(&scratch));
+
+    if (world->meshes.items == 0 &&
+        !slot_map_init(&world->meshes, state->resources.arena, sizeof(AppWorldMesh), APP_WORLD_MAX_MESHES)) {
+        return 0;
+    }
+
+    AppWorldMeshBuilder builder = {};
+    builder.vertexCapacity = 4096u;
+    builder.indexCapacity = 16384u;
+    builder.vertices = ARENA_PUSH_ARRAY(scratch.arena, ShdWorldVertexRecord, builder.vertexCapacity);
+    builder.indices = ARENA_PUSH_ARRAY(scratch.arena, U32, builder.indexCapacity);
+    if (!builder.vertices || !builder.indices) {
+        return 0;
+    }
+
+    U32 cubeFirstIndex = builder.indexCount;
+    app_world_build_cube_(&builder);
+    U32 cubeIndexCount = builder.indexCount - cubeFirstIndex;
+
+    U32 sphereFirstIndex = builder.indexCount;
+    app_world_build_sphere_(&builder, 12u, 18u);
+    U32 sphereIndexCount = builder.indexCount - sphereFirstIndex;
+
+    U32 planeFirstIndex = builder.indexCount;
+    app_world_build_plane_(&builder);
+    U32 planeIndexCount = builder.indexCount - planeFirstIndex;
+
+    // Builder indices are pool-absolute, so builtin records carry baseVertex 0;
+    // cooked meshes (U6) bring mesh-relative indices with real bases.
+    world->meshCount = 0u;
+    world->builtinMeshes[0] = app_world_register_mesh_(world, cubeFirstIndex, cubeIndexCount, 0u,
+                                                       app_world_vec3_(0.0f, 0.0f, 0.0f), app_world_vec3_(0.5f, 0.5f, 0.5f));
+    world->builtinMeshes[1] = app_world_register_mesh_(world, sphereFirstIndex, sphereIndexCount, 0u,
+                                                       app_world_vec3_(0.0f, 0.0f, 0.0f), app_world_vec3_(0.5f, 0.5f, 0.5f));
+    world->builtinMeshes[2] = app_world_register_mesh_(world, planeFirstIndex, planeIndexCount, 0u,
+                                                       app_world_vec3_(0.0f, 0.0f, 0.0f), app_world_vec3_(0.5f, 0.02f, 0.5f));
+
+    GfxBufferDesc vertexDesc = {};
+    vertexDesc.name = "world vertices";
+    vertexDesc.size = sizeof(ShdWorldVertexRecord) * builder.vertexCount;
+    vertexDesc.usageFlags = GfxBufferUsageFlags_Storage;
+    vertexDesc.memoryKind = GfxMemoryKind_Upload;
+    vertexDesc.initialData = builder.vertices;
+    world->vertexBuffer = gfx_create_buffer(device, &vertexDesc);
+    world->vertexBufferId = gfx_register_buffer(device, world->vertexBuffer);
+
+    GfxBufferDesc indexDesc = {};
+    indexDesc.name = "world indices";
+    indexDesc.size = sizeof(U32) * builder.indexCount;
+    indexDesc.usageFlags = GfxBufferUsageFlags_Index;
+    indexDesc.memoryKind = GfxMemoryKind_Upload;
+    indexDesc.initialData = builder.indices;
+    world->indexBuffer = gfx_create_buffer(device, &indexDesc);
+
+    ShdWorldMeshRecord meshRecords[APP_WORLD_MAX_MESHES] = {};
+    for (U32 meshIndex = 0u; meshIndex < world->meshCount; ++meshIndex) {
+        AppWorldMesh* mesh = (AppWorldMesh*)slot_map_item_at(&world->meshes, meshIndex);
+        if (!mesh) {
+            continue;
+        }
+        meshRecords[meshIndex].indexCount = mesh->indexCount;
+        meshRecords[meshIndex].firstIndex = mesh->firstIndex;
+        meshRecords[meshIndex].baseVertex = mesh->baseVertex;
+    }
+    GfxBufferDesc meshRecordDesc = {};
+    meshRecordDesc.name = "world mesh records";
+    meshRecordDesc.size = sizeof(meshRecords);
+    meshRecordDesc.usageFlags = GfxBufferUsageFlags_Storage;
+    meshRecordDesc.memoryKind = GfxMemoryKind_Upload;
+    meshRecordDesc.initialData = meshRecords;
+    world->meshRecordBuffer = gfx_create_buffer(device, &meshRecordDesc);
+    world->meshRecordBufferId = gfx_register_buffer(device, world->meshRecordBuffer);
+
+    ShdWorldMaterialRecord materials[APP_WORLD_MAX_MATERIALS] = {};
+    static const F32 palette[][4] = {
+        {0.80f, 0.34f, 0.26f, 1.0f},
+        {0.30f, 0.62f, 0.85f, 1.0f},
+        {0.92f, 0.78f, 0.32f, 1.0f},
+        {0.42f, 0.78f, 0.45f, 1.0f},
+        {0.72f, 0.52f, 0.86f, 1.0f},
+        {0.34f, 0.36f, 0.42f, 1.0f},
+    };
+    for (U32 materialIndex = 0u; materialIndex < 6u; ++materialIndex) {
+        materials[materialIndex].baseColor[0] = palette[materialIndex][0];
+        materials[materialIndex].baseColor[1] = palette[materialIndex][1];
+        materials[materialIndex].baseColor[2] = palette[materialIndex][2];
+        materials[materialIndex].baseColor[3] = palette[materialIndex][3];
+    }
+    materials[6].baseColor[0] = 0.95f;
+    materials[6].baseColor[1] = 0.95f;
+    materials[6].baseColor[2] = 0.95f;
+    materials[6].baseColor[3] = 1.0f;
+    materials[6].flags = APP_WORLD_MATERIAL_FLAG_ALPHA_TEST;
+    materials[7].baseColor[0] = 0.35f;
+    materials[7].baseColor[1] = 0.65f;
+    materials[7].baseColor[2] = 0.95f;
+    materials[7].baseColor[3] = 0.38f;
+    materials[8].baseColor[0] = 0.95f;
+    materials[8].baseColor[1] = 0.45f;
+    materials[8].baseColor[2] = 0.55f;
+    materials[8].baseColor[3] = 0.42f;
+    world->materialCount = 9u;
+
+    GfxBufferDesc materialDesc = {};
+    materialDesc.name = "world materials";
+    materialDesc.size = sizeof(materials);
+    materialDesc.usageFlags = GfxBufferUsageFlags_Storage;
+    materialDesc.memoryKind = GfxMemoryKind_Upload;
+    materialDesc.initialData = materials;
+    world->materialBuffer = gfx_create_buffer(device, &materialDesc);
+    world->materialBufferId = gfx_register_buffer(device, world->materialBuffer);
+
+    for (U32 bufferIndex = 0u; bufferIndex < APP_WORLD_FRAME_BUFFER_COUNT; ++bufferIndex) {
+        GfxBufferDesc frameDesc = {};
+        frameDesc.name = "world frame record";
+        frameDesc.size = sizeof(ShdWorldFrameRecord);
+        frameDesc.usageFlags = GfxBufferUsageFlags_Storage | GfxBufferUsageFlags_CopyDst;
+        frameDesc.memoryKind = GfxMemoryKind_Device;
+        world->frameRecordBuffers[bufferIndex] = gfx_create_buffer(device, &frameDesc);
+        world->frameRecordBufferIds[bufferIndex] = gfx_register_buffer(device, world->frameRecordBuffers[bufferIndex]);
+
+        GfxBufferDesc renderableDesc = {};
+        renderableDesc.name = "world renderables";
+        renderableDesc.size = sizeof(ShdWorldRenderableRecord) * APP_WORLD_MAX_RENDERABLES;
+        renderableDesc.usageFlags = GfxBufferUsageFlags_Storage | GfxBufferUsageFlags_CopyDst;
+        renderableDesc.memoryKind = GfxMemoryKind_Device;
+        world->renderableBuffers[bufferIndex] = gfx_create_buffer(device, &renderableDesc);
+        world->renderableBufferIds[bufferIndex] = gfx_register_buffer(device, world->renderableBuffers[bufferIndex]);
+    }
+
+    GfxBufferDesc flagsDesc = {};
+    flagsDesc.name = "world visibility flags";
+    flagsDesc.size = sizeof(U32) * APP_WORLD_MAX_RENDERABLES;
+    flagsDesc.usageFlags = GfxBufferUsageFlags_Storage;
+    flagsDesc.memoryKind = GfxMemoryKind_Device;
+    world->flagsBuffer = gfx_create_buffer(device, &flagsDesc);
+    world->flagsBufferId = gfx_register_buffer(device, world->flagsBuffer);
+
+    U32 maxCells = APP_WORLD_BIN_COUNT * APP_WORLD_MAX_MESHES;
+    GfxBufferDesc cellDesc = {};
+    cellDesc.name = "world cell counts";
+    cellDesc.size = sizeof(U32) * maxCells;
+    cellDesc.usageFlags = GfxBufferUsageFlags_Storage;
+    cellDesc.memoryKind = GfxMemoryKind_Device;
+    world->cellCountBuffer = gfx_create_buffer(device, &cellDesc);
+    world->cellCountBufferId = gfx_register_buffer(device, world->cellCountBuffer);
+    cellDesc.name = "world cell offsets";
+    world->cellOffsetBuffer = gfx_create_buffer(device, &cellDesc);
+    world->cellOffsetBufferId = gfx_register_buffer(device, world->cellOffsetBuffer);
+
+    GfxBufferDesc visibleDesc = {};
+    visibleDesc.name = "world visible list";
+    visibleDesc.size = sizeof(U32) * APP_WORLD_MAX_RENDERABLES;
+    visibleDesc.usageFlags = GfxBufferUsageFlags_Storage;
+    visibleDesc.memoryKind = GfxMemoryKind_Device;
+    world->visibleBuffer = gfx_create_buffer(device, &visibleDesc);
+    world->visibleBufferId = gfx_register_buffer(device, world->visibleBuffer);
+
+    GfxBufferDesc argsDesc = {};
+    argsDesc.name = "world indirect args";
+    argsDesc.size = sizeof(GfxDrawIndexedIndirectArgs) * maxCells;
+    argsDesc.usageFlags = GfxBufferUsageFlags_Storage | GfxBufferUsageFlags_Indirect;
+    argsDesc.memoryKind = GfxMemoryKind_Device;
+    world->argsBuffer = gfx_create_buffer(device, &argsDesc);
+    world->argsBufferId = gfx_register_buffer(device, world->argsBuffer);
+
+    B32 created = world->vertexBuffer.generation != 0u &&
+                  world->indexBuffer.generation != 0u &&
+                  world->meshRecordBuffer.generation != 0u &&
+                  world->materialBuffer.generation != 0u &&
+                  world->flagsBuffer.generation != 0u &&
+                  world->cellCountBuffer.generation != 0u &&
+                  world->cellOffsetBuffer.generation != 0u &&
+                  world->visibleBuffer.generation != 0u &&
+                  world->argsBuffer.generation != 0u;
+    for (U32 bufferIndex = 0u; bufferIndex < APP_WORLD_FRAME_BUFFER_COUNT; ++bufferIndex) {
+        created = created &&
+                  world->frameRecordBuffers[bufferIndex].generation != 0u &&
+                  world->renderableBuffers[bufferIndex].generation != 0u;
+    }
+    if (!created) {
+        LOG_ERROR("gfx", "Failed to create world GPU resources");
+        return 0;
+    }
+
+    world->gpuResourcesCreated = 1;
+    LOG_INFO("gfx", "World renderer resources ready (meshes {}, vertices {}, indices {})",
+             world->meshCount, builder.vertexCount, builder.indexCount);
+    return 1;
+}
+
+static B32 app_world_create_graphics_pipeline_(APP_Context* ctx, ContentHash vertexHash, ContentHash fragmentHash,
+                                               B32 transparent, GfxPipeline* outPipeline) {
+    *outPipeline = {};
+    ContentView vertexView = content_view_hash(ctx->core->resources.contentStore, vertexHash);
+    ContentView fragmentView = content_view_hash(ctx->core->resources.contentStore, fragmentHash);
+    if (!vertexView.valid || vertexView.size == 0u || !fragmentView.valid || fragmentView.size == 0u) {
+        return 0;
+    }
+
+    GfxFormat colorFormats[1] = {GfxFormat_BGRA8_UNorm};
+    GfxColorBlendState blendStates[1] = {};
+    blendStates[0].writeFlags = GfxColorWriteFlags_RGBA;
+    if (transparent) {
+        blendStates[0].blendEnabled = 1;
+        blendStates[0].srcColorFactor = GfxBlendFactor_SrcAlpha;
+        blendStates[0].dstColorFactor = GfxBlendFactor_OneMinusSrcAlpha;
+        blendStates[0].colorOp = GfxBlendOp_Add;
+        blendStates[0].srcAlphaFactor = GfxBlendFactor_One;
+        blendStates[0].dstAlphaFactor = GfxBlendFactor_OneMinusSrcAlpha;
+        blendStates[0].alphaOp = GfxBlendOp_Add;
+    }
+
+    GfxGraphicsPipelineDesc desc = {};
+    desc.name = transparent ? "world transparent" : "world opaque";
+#if defined(PLATFORM_OS_WINDOWS)
+    desc.vertexShader.format = GfxShaderFormat_SPIRV;
+    desc.fragmentShader.format = GfxShaderFormat_SPIRV;
+#else
+    desc.vertexShader.format = GfxShaderFormat_MSL_Source;
+    desc.fragmentShader.format = GfxShaderFormat_MSL_Source;
+#endif
+    desc.vertexShader.entry = APP_SHADER_WORLD_VERTEX_ENTRY;
+    desc.vertexShader.data = vertexView.data;
+    desc.vertexShader.size = vertexView.size;
+    desc.fragmentShader.entry = APP_SHADER_WORLD_FRAGMENT_ENTRY;
+    desc.fragmentShader.data = fragmentView.data;
+    desc.fragmentShader.size = fragmentView.size;
+    desc.topology = GfxPrimitiveTopology_TriangleList;
+    desc.raster.cullMode = GfxCullMode_None;
+    desc.raster.frontFace = GfxFrontFace_CCW;
+    desc.depth.depthTestEnabled = 1;
+    desc.depth.depthWriteEnabled = transparent ? 0 : 1;
+    desc.depth.compareOp = GfxCompareOp_Less;
+    desc.colorFormats = colorFormats;
+    desc.colorFormatCount = 1u;
+    desc.blendStates = blendStates;
+    desc.blendStateCount = 1u;
+    desc.depthFormat = GfxFormat_D32_Float;
+
+    GfxPipeline pipeline = gfx_create_graphics_pipeline(ctx->host->gfxDevice, &desc);
+    if (pipeline.generation == 0u) {
+        return 0;
+    }
+    *outPipeline = pipeline;
+    return 1;
+}
+
+static void app_world_try_update_pipelines_(APP_Context* ctx) {
+    AppCoreState* state = ctx->core;
+    AppWorldState* world = &state->world;
+    if (state->resources.fileStream == 0 || state->resources.contentStore == 0 || ctx->host->gfxDevice == 0) {
+        return;
+    }
+
+    FileView views[APP_WORLD_SHADER_COUNT];
+    B32 allReady = 1;
+    B32 anyChanged = 0;
+    for (U32 shaderIndex = 0u; shaderIndex < APP_WORLD_SHADER_COUNT; ++shaderIndex) {
+        views[shaderIndex] = file_view(state->resources.fileStream, world->shaderFiles[shaderIndex]);
+        if (views[shaderIndex].status != FileStatus_Ready || content_hash_is_zero(views[shaderIndex].hash)) {
+            allReady = 0;
+            break;
+        }
+        if (!content_hash_equal(world->shaderHashes[shaderIndex], views[shaderIndex].hash)) {
+            anyChanged = 1;
+        }
+    }
+    if (!allReady || (!anyChanged && world->opaquePipeline.generation != 0u)) {
+        return;
+    }
+
+    GfxPipeline newOpaque = {};
+    GfxPipeline newTransparent = {};
+    if (!app_world_create_graphics_pipeline_(ctx, views[AppWorldShaderSlot_Vertex].hash,
+                                             views[AppWorldShaderSlot_Fragment].hash, 0, &newOpaque) ||
+        !app_world_create_graphics_pipeline_(ctx, views[AppWorldShaderSlot_Vertex].hash,
+                                             views[AppWorldShaderSlot_Fragment].hash, 1, &newTransparent)) {
+        gfx_destroy_pipeline(ctx->host->gfxDevice, newOpaque);
+        return;
+    }
+
+    GfxPipeline newCompute[5] = {};
+    B32 computeOk = 1;
+    for (U32 passIndex = 0u; passIndex < 5u; ++passIndex) {
+        ContentView view = content_view_hash(ctx->core->resources.contentStore,
+                                             views[AppWorldShaderSlot_Reset + passIndex].hash);
+        if (!view.valid || view.size == 0u) {
+            computeOk = 0;
+            break;
+        }
+        GfxComputePipelineDesc desc = {};
+        desc.name = APP_WORLD_COMPUTE_ENTRIES[passIndex];
+#if defined(PLATFORM_OS_WINDOWS)
+        desc.shader.format = GfxShaderFormat_SPIRV;
+#else
+        desc.shader.format = GfxShaderFormat_MSL_Source;
+#endif
+        desc.shader.entry = APP_WORLD_COMPUTE_ENTRIES[passIndex];
+        desc.shader.data = view.data;
+        desc.shader.size = view.size;
+        desc.threadsPerThreadgroupX = APP_WORLD_COMPUTE_GROUP_SIZES[passIndex];
+        desc.threadsPerThreadgroupY = 1u;
+        desc.threadsPerThreadgroupZ = 1u;
+        newCompute[passIndex] = gfx_create_compute_pipeline(ctx->host->gfxDevice, &desc);
+        if (newCompute[passIndex].generation == 0u) {
+            computeOk = 0;
+            break;
+        }
+    }
+    if (!computeOk) {
+        gfx_destroy_pipeline(ctx->host->gfxDevice, newOpaque);
+        gfx_destroy_pipeline(ctx->host->gfxDevice, newTransparent);
+        for (U32 passIndex = 0u; passIndex < 5u; ++passIndex) {
+            gfx_destroy_pipeline(ctx->host->gfxDevice, newCompute[passIndex]);
+        }
+        return;
+    }
+
+    gfx_destroy_pipeline(ctx->host->gfxDevice, world->opaquePipeline);
+    gfx_destroy_pipeline(ctx->host->gfxDevice, world->transparentPipeline);
+    for (U32 passIndex = 0u; passIndex < 5u; ++passIndex) {
+        gfx_destroy_pipeline(ctx->host->gfxDevice, world->computePipelines[passIndex]);
+        world->computePipelines[passIndex] = newCompute[passIndex];
+    }
+    world->opaquePipeline = newOpaque;
+    world->transparentPipeline = newTransparent;
+    for (U32 shaderIndex = 0u; shaderIndex < APP_WORLD_SHADER_COUNT; ++shaderIndex) {
+        world->shaderHashes[shaderIndex] = views[shaderIndex].hash;
+    }
+    LOG_INFO("gfx", "World pipelines ready");
+}
+
+static void app_world_ensure_depth_(APP_Context* ctx) {
+    AppCoreState* state = ctx->core;
+    AppWorldState* world = &state->world;
+    U32 width = ctx->host->windowWidth;
+    U32 height = ctx->host->windowHeight;
+    if (width == 0u || height == 0u) {
+        return;
+    }
+    if (world->depthTexture.generation != 0u && world->depthWidth == width && world->depthHeight == height) {
+        return;
+    }
+    if (world->depthTexture.generation != 0u) {
+        gfx_destroy_texture(ctx->host->gfxDevice, world->depthTexture);
+    }
+    GfxTextureDesc depthDesc = {};
+    depthDesc.name = "world depth";
+    depthDesc.width = width;
+    depthDesc.height = height;
+    depthDesc.mipCount = 1u;
+    depthDesc.format = GfxFormat_D32_Float;
+    depthDesc.usageFlags = GfxTextureUsageFlags_DepthTarget;
+    depthDesc.storageKind = GfxTextureStorageKind_Transient;
+    world->depthTexture = gfx_create_texture(ctx->host->gfxDevice, &depthDesc);
+    world->depthWidth = width;
+    world->depthHeight = height;
+}
+
+static void app_world_frustum_planes_(const Mat4x4F32* m, F32* outPlanes) {
+    // Gribb-Hartmann from column-major viewProj; rowI[j] = v[j][i].
+    for (U32 planeIndex = 0u; planeIndex < 6u; ++planeIndex) {
+        F32 plane[4];
+        U32 row = planeIndex / 2u;
+        B32 add = (planeIndex & 1u) == 0u;
+        for (U32 component = 0u; component < 4u; ++component) {
+            F32 row3 = m->v[component][3];
+            F32 rowN = m->v[component][row];
+            plane[component] = add ? (row3 + rowN) : (row3 - rowN);
+        }
+        if (planeIndex == 4u) {
+            // Near plane for [0,1] clip depth is row2 itself.
+            for (U32 component = 0u; component < 4u; ++component) {
+                plane[component] = m->v[component][2];
+            }
+        }
+        F32 lengthSq = plane[0] * plane[0] + plane[1] * plane[1] + plane[2] * plane[2];
+        F32 inverseLength = (lengthSq > 0.0f) ? (1.0f / SQRT_F32(lengthSq)) : 0.0f;
+        for (U32 component = 0u; component < 4u; ++component) {
+            outPlanes[planeIndex * 4u + component] = plane[component] * inverseLength;
+        }
+    }
+}
+
+static void app_world_begin_frame_(APP_Context* ctx) {
+    AppCoreState* state = ctx->core;
+    AppWorldState* world = &state->world;
+    world->renderables = ARENA_PUSH_ARRAY(ctx->host->frameArena, ShdWorldRenderableRecord, APP_WORLD_MAX_RENDERABLES);
+    world->transparents = ARENA_PUSH_ARRAY(ctx->host->frameArena, ShdWorldRenderableRecord, APP_WORLD_MAX_RENDERABLES / 4u);
+    world->transparentDepths = ARENA_PUSH_ARRAY(ctx->host->frameArena, F32, APP_WORLD_MAX_RENDERABLES / 4u);
+    world->renderableCount = 0u;
+    world->transparentCount = 0u;
+    world->frameOpen = (world->renderables != 0 && world->transparents != 0 && world->transparentDepths != 0);
+}
+
+static void app_world_set_camera(APP_Context* ctx, Vec3F32 eye, Vec3F32 target, F32 fovYRadians,
+                                 F32 zNear, F32 zFar) {
+    AppCoreState* state = ctx->core;
+    AppWorldState* world = &state->world;
+    F32 aspect = (ctx->host->windowHeight != 0u)
+        ? ((F32)ctx->host->windowWidth / (F32)ctx->host->windowHeight)
+        : 1.0f;
+    Mat4x4F32 view = mat4_look_at(eye, target, app_world_vec3_(0.0f, 1.0f, 0.0f));
+    Mat4x4F32 projection = mat4_perspective(fovYRadians, aspect, zNear, zFar);
+    Mat4x4F32 viewProj = view * projection;
+
+    MEMSET(&world->frameRecord, 0, sizeof(world->frameRecord));
+    MEMCPY(world->frameRecord.viewProj, &viewProj, sizeof(world->frameRecord.viewProj));
+    app_world_frustum_planes_(&viewProj, world->frameRecord.frustumPlanes);
+    world->frameRecord.cameraPos[0] = eye.x;
+    world->frameRecord.cameraPos[1] = eye.y;
+    world->frameRecord.cameraPos[2] = eye.z;
+    world->frameRecord.time = (F32)((F64)state->frameCounter / 60.0);
+}
+
+static void app_world_push(APP_Context* ctx, AppWorldMeshHandle meshHandle, U32 materialIndex,
+                           AppWorldBin bin, const Mat4x4F32* transform) {
+    AppCoreState* state = ctx->core;
+    AppWorldState* world = &state->world;
+    if (!world->frameOpen) {
+        return;
+    }
+    AppWorldMesh* mesh = (AppWorldMesh*)slot_map_get(&world->meshes, meshHandle.index, meshHandle.generation);
+    if (!mesh) {
+        return;
+    }
+
+    ShdWorldRenderableRecord record = {};
+    MEMCPY(record.transform, transform, sizeof(record.transform));
+
+    // Row-vector convention: world = local . M, translation in storage row 3.
+    Vec3F32 local = mesh->boundsCenter;
+    Vec3F32 worldCenter;
+    worldCenter.x = local.x * transform->v[0][0] + local.y * transform->v[1][0] + local.z * transform->v[2][0] + transform->v[3][0];
+    worldCenter.y = local.x * transform->v[0][1] + local.y * transform->v[1][1] + local.z * transform->v[2][1] + transform->v[3][1];
+    worldCenter.z = local.x * transform->v[0][2] + local.y * transform->v[1][2] + local.z * transform->v[2][2] + transform->v[3][2];
+    F32 scaleX = SQRT_F32(transform->v[0][0] * transform->v[0][0] + transform->v[0][1] * transform->v[0][1] + transform->v[0][2] * transform->v[0][2]);
+    F32 scaleY = SQRT_F32(transform->v[1][0] * transform->v[1][0] + transform->v[1][1] * transform->v[1][1] + transform->v[1][2] * transform->v[1][2]);
+    F32 scaleZ = SQRT_F32(transform->v[2][0] * transform->v[2][0] + transform->v[2][1] * transform->v[2][1] + transform->v[2][2] * transform->v[2][2]);
+    F32 maxScale = MAX(scaleX, MAX(scaleY, scaleZ));
+
+    record.boundsCenter[0] = worldCenter.x;
+    record.boundsCenter[1] = worldCenter.y;
+    record.boundsCenter[2] = worldCenter.z;
+    record.boundsRadius = mesh->boundsRadius * maxScale;
+    record.boundsExtents[0] = mesh->boundsExtents.x * maxScale;
+    record.boundsExtents[1] = mesh->boundsExtents.y * maxScale;
+    record.boundsExtents[2] = mesh->boundsExtents.z * maxScale;
+    record.materialIndex = materialIndex;
+    record.cellIndex = (U32)bin * world->meshCount + meshHandle.index;
+    record.flags = 0u;
+
+    if (bin == AppWorldBin_Transparent) {
+        if (world->transparentCount >= APP_WORLD_MAX_RENDERABLES / 4u) {
+            return;
+        }
+        F32 dx = worldCenter.x - world->frameRecord.cameraPos[0];
+        F32 dy = worldCenter.y - world->frameRecord.cameraPos[1];
+        F32 dz = worldCenter.z - world->frameRecord.cameraPos[2];
+        world->transparents[world->transparentCount] = record;
+        world->transparentDepths[world->transparentCount] = dx * dx + dy * dy + dz * dz;
+        world->transparentCount += 1u;
+        return;
+    }
+
+    if (world->renderableCount >= APP_WORLD_MAX_RENDERABLES) {
+        return;
+    }
+    world->renderables[world->renderableCount] = record;
+    world->renderableCount += 1u;
+}
+
+static void app_world_sort_transparents_(AppWorldState* world, Arena* frameArena) {
+    U32 count = world->transparentCount;
+    if (count < 2u) {
+        return;
+    }
+    U32* order = ARENA_PUSH_ARRAY(frameArena, U32, count);
+    U32* scratch = ARENA_PUSH_ARRAY(frameArena, U32, count);
+    if (!order || !scratch) {
+        return;
+    }
+    for (U32 at = 0u; at < count; ++at) {
+        order[at] = at;
+    }
+    // Back-to-front: descending squared distance; radix over flipped F32 bits,
+    // two 16-bit passes, then reversed copy-out.
+    for (U32 pass = 0u; pass < 2u; ++pass) {
+        U32 shift = pass * 16u;
+        U32 histogram[65536];
+        MEMSET(histogram, 0, sizeof(histogram));
+        for (U32 at = 0u; at < count; ++at) {
+            union { F32 f; U32 u; } bits;
+            bits.f = world->transparentDepths[order[at]];
+            U32 key = ((bits.u >> 31u) != 0u) ? ~bits.u : (bits.u | 0x80000000u);
+            histogram[(key >> shift) & 0xFFFFu] += 1u;
+        }
+        U32 running = 0u;
+        for (U32 bucket = 0u; bucket < 65536u; ++bucket) {
+            U32 bucketCount = histogram[bucket];
+            histogram[bucket] = running;
+            running += bucketCount;
+        }
+        for (U32 at = 0u; at < count; ++at) {
+            union { F32 f; U32 u; } bits;
+            bits.f = world->transparentDepths[order[at]];
+            U32 key = ((bits.u >> 31u) != 0u) ? ~bits.u : (bits.u | 0x80000000u);
+            scratch[histogram[(key >> shift) & 0xFFFFu]++] = order[at];
+        }
+        U32* swap = order;
+        order = scratch;
+        scratch = swap;
+    }
+    for (U32 at = 0u; at < count; ++at) {
+        U32 source = order[count - 1u - at];
+        if (world->renderableCount >= APP_WORLD_MAX_RENDERABLES) {
+            break;
+        }
+        world->renderables[world->renderableCount] = world->transparents[source];
+        world->renderableCount += 1u;
+    }
+    world->transparentCount = 0u;
+}
+
+static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame) {
+    AppCoreState* state = ctx->core;
+    AppWorldState* world = &state->world;
+    GfxFrame* frame = rendererFrame->frame;
+
+    if (!world->frameOpen) {
+        world->lastRenderableCount = 0u;
+        return;
+    }
+    world->frameOpen = 0;
+
+    app_world_sort_transparents_(world, ctx->host->frameArena);
+    if (world->transparentCount != 0u) {
+        for (U32 at = 0u; at < world->transparentCount && world->renderableCount < APP_WORLD_MAX_RENDERABLES; ++at) {
+            world->renderables[world->renderableCount] = world->transparents[at];
+            world->renderableCount += 1u;
+        }
+        world->transparentCount = 0u;
+    }
+
+    world->lastRenderableCount = world->renderableCount;
+    if (world->renderableCount == 0u ||
+        !world->gpuResourcesCreated ||
+        world->opaquePipeline.generation == 0u ||
+        world->depthTexture.generation == 0u) {
+        world->lastRenderableCount = 0u;
+        return;
+    }
+
+    U32 frameBufferIndex = (U32)(state->frameCounter & (APP_WORLD_FRAME_BUFFER_COUNT - 1u));
+    world->frameRecord.renderableCount = world->renderableCount;
+    if (!gfx_upload_buffer(frame, world->frameRecordBuffers[frameBufferIndex], 0u,
+                           &world->frameRecord, sizeof(world->frameRecord)) ||
+        !gfx_upload_buffer(frame, world->renderableBuffers[frameBufferIndex], 0u,
+                           world->renderables, sizeof(ShdWorldRenderableRecord) * world->renderableCount)) {
+        world->lastRenderableCount = 0u;
+        return;
+    }
+
+    U32 cellCount = app_world_cell_count_(world);
+
+    GfxTemp rootTemp = gfx_allocate_temp(frame, sizeof(ShdWorldCullRootData), 16u);
+    if (!rootTemp.cpu) {
+        world->lastRenderableCount = 0u;
+        return;
+    }
+    ShdWorldCullRootData* cullRoot = (ShdWorldCullRootData*)rootTemp.cpu;
+    MEMSET(cullRoot, 0, sizeof(*cullRoot));
+    cullRoot->frameBuffer = world->frameRecordBufferIds[frameBufferIndex].index;
+    cullRoot->renderableBuffer = world->renderableBufferIds[frameBufferIndex].index;
+    cullRoot->flagsBuffer = world->flagsBufferId.index;
+    cullRoot->cellCountBuffer = world->cellCountBufferId.index;
+    cullRoot->cellOffsetBuffer = world->cellOffsetBufferId.index;
+    cullRoot->visibleBuffer = world->visibleBufferId.index;
+    cullRoot->argsBuffer = world->argsBufferId.index;
+    cullRoot->meshBuffer = world->meshRecordBufferId.index;
+    cullRoot->renderableCount = world->renderableCount;
+    cullRoot->cellCount = cellCount;
+    cullRoot->meshCount = world->meshCount;
+
+    static const char* passNames[5] = {
+        "world reset", "world cull", "world prefix", "world compact", "world args",
+    };
+    U32 groupCounts[5] = {
+        (cellCount + APP_WORLD_CULL_GROUP_SIZE - 1u) / APP_WORLD_CULL_GROUP_SIZE,
+        (world->renderableCount + APP_WORLD_CULL_GROUP_SIZE - 1u) / APP_WORLD_CULL_GROUP_SIZE,
+        1u,
+        cellCount,
+        (cellCount + APP_WORLD_CULL_GROUP_SIZE - 1u) / APP_WORLD_CULL_GROUP_SIZE,
+    };
+
+    for (U32 passIndex = 0u; passIndex < 5u; ++passIndex) {
+        GfxResourceUse uses[8] = {};
+        U32 useCount = 0u;
+        uses[useCount].kind = GfxResourceUseKind_Buffer;
+        uses[useCount].accessFlags = GfxResourceAccessFlags_ShaderRead;
+        uses[useCount].shaderStages = GfxShaderStageFlags_Compute;
+        uses[useCount].buffer = world->renderableBuffers[frameBufferIndex];
+        useCount += 1u;
+        uses[useCount].kind = GfxResourceUseKind_Buffer;
+        uses[useCount].accessFlags = GfxResourceAccessFlags_ShaderRead;
+        uses[useCount].shaderStages = GfxShaderStageFlags_Compute;
+        uses[useCount].buffer = world->frameRecordBuffers[frameBufferIndex];
+        useCount += 1u;
+        uses[useCount].kind = GfxResourceUseKind_Buffer;
+        uses[useCount].accessFlags = GfxResourceAccessFlags_ShaderRead | GfxResourceAccessFlags_ShaderWrite;
+        uses[useCount].shaderStages = GfxShaderStageFlags_Compute;
+        uses[useCount].buffer = world->flagsBuffer;
+        useCount += 1u;
+        uses[useCount].kind = GfxResourceUseKind_Buffer;
+        uses[useCount].accessFlags = GfxResourceAccessFlags_ShaderRead | GfxResourceAccessFlags_ShaderWrite;
+        uses[useCount].shaderStages = GfxShaderStageFlags_Compute;
+        uses[useCount].buffer = world->cellCountBuffer;
+        useCount += 1u;
+        uses[useCount].kind = GfxResourceUseKind_Buffer;
+        uses[useCount].accessFlags = GfxResourceAccessFlags_ShaderRead | GfxResourceAccessFlags_ShaderWrite;
+        uses[useCount].shaderStages = GfxShaderStageFlags_Compute;
+        uses[useCount].buffer = world->cellOffsetBuffer;
+        useCount += 1u;
+        uses[useCount].kind = GfxResourceUseKind_Buffer;
+        uses[useCount].accessFlags = GfxResourceAccessFlags_ShaderRead | GfxResourceAccessFlags_ShaderWrite;
+        uses[useCount].shaderStages = GfxShaderStageFlags_Compute;
+        uses[useCount].buffer = world->visibleBuffer;
+        useCount += 1u;
+        uses[useCount].kind = GfxResourceUseKind_Buffer;
+        uses[useCount].accessFlags = GfxResourceAccessFlags_ShaderWrite;
+        uses[useCount].shaderStages = GfxShaderStageFlags_Compute;
+        uses[useCount].buffer = world->argsBuffer;
+        useCount += 1u;
+        uses[useCount].kind = GfxResourceUseKind_Buffer;
+        uses[useCount].accessFlags = GfxResourceAccessFlags_ShaderRead;
+        uses[useCount].shaderStages = GfxShaderStageFlags_Compute;
+        uses[useCount].buffer = world->meshRecordBuffer;
+        useCount += 1u;
+
+        GfxComputePassDesc passDesc = {};
+        passDesc.name = passNames[passIndex];
+        passDesc.resourceUses = uses;
+        passDesc.resourceUseCount = useCount;
+
+        GfxDispatch dispatch = {};
+        dispatch.pipeline = world->computePipelines[passIndex];
+        dispatch.rootDataOffset = (U32)rootTemp.gpu.offset;
+        dispatch.rootDataSize = (U32)rootTemp.gpu.size;
+        dispatch.groupsX = groupCounts[passIndex];
+        dispatch.groupsY = 1u;
+        dispatch.groupsZ = 1u;
+        gfx_compute_pass(rendererFrame->commands, &passDesc, &dispatch, 1u);
+    }
+
+    GfxColorTarget colorTarget = {};
+    colorTarget.texture = gfx_get_backbuffer(frame);
+    colorTarget.loadOp = GfxLoadOp_Clear;
+    colorTarget.storeOp = GfxStoreOp_Store;
+    colorTarget.clearColor[0] = 0.06f;
+    colorTarget.clearColor[1] = 0.08f;
+    colorTarget.clearColor[2] = 0.10f;
+    colorTarget.clearColor[3] = 1.0f;
+
+    GfxDepthTarget depthTarget = {};
+    depthTarget.texture = world->depthTexture;
+    depthTarget.loadOp = GfxLoadOp_Clear;
+    depthTarget.storeOp = GfxStoreOp_DontCare;
+    depthTarget.clearDepth = 1.0f;
+
+    GfxResourceUse drawUses[7] = {};
+    U32 drawUseCount = 0u;
+    drawUses[drawUseCount].kind = GfxResourceUseKind_Buffer;
+    drawUses[drawUseCount].accessFlags = GfxResourceAccessFlags_IndirectRead;
+    drawUses[drawUseCount].shaderStages = GfxShaderStageFlags_Vertex;
+    drawUses[drawUseCount].buffer = world->argsBuffer;
+    drawUseCount += 1u;
+    drawUses[drawUseCount].kind = GfxResourceUseKind_Buffer;
+    drawUses[drawUseCount].accessFlags = GfxResourceAccessFlags_ShaderRead;
+    drawUses[drawUseCount].shaderStages = GfxShaderStageFlags_Vertex;
+    drawUses[drawUseCount].buffer = world->visibleBuffer;
+    drawUseCount += 1u;
+    drawUses[drawUseCount].kind = GfxResourceUseKind_Buffer;
+    drawUses[drawUseCount].accessFlags = GfxResourceAccessFlags_ShaderRead;
+    drawUses[drawUseCount].shaderStages = GfxShaderStageFlags_Vertex;
+    drawUses[drawUseCount].buffer = world->cellOffsetBuffer;
+    drawUseCount += 1u;
+    drawUses[drawUseCount].kind = GfxResourceUseKind_Buffer;
+    drawUses[drawUseCount].accessFlags = GfxResourceAccessFlags_ShaderRead;
+    drawUses[drawUseCount].shaderStages = GfxShaderStageFlags_Vertex;
+    drawUses[drawUseCount].buffer = world->renderableBuffers[frameBufferIndex];
+    drawUseCount += 1u;
+    drawUses[drawUseCount].kind = GfxResourceUseKind_Buffer;
+    drawUses[drawUseCount].accessFlags = GfxResourceAccessFlags_ShaderRead;
+    drawUses[drawUseCount].shaderStages = GfxShaderStageFlags_Vertex;
+    drawUses[drawUseCount].buffer = world->frameRecordBuffers[frameBufferIndex];
+    drawUseCount += 1u;
+    drawUses[drawUseCount].kind = GfxResourceUseKind_Buffer;
+    drawUses[drawUseCount].accessFlags = GfxResourceAccessFlags_ShaderRead;
+    drawUses[drawUseCount].shaderStages = GfxShaderStageFlags_Vertex;
+    drawUses[drawUseCount].buffer = world->vertexBuffer;
+    drawUseCount += 1u;
+    drawUses[drawUseCount].kind = GfxResourceUseKind_Buffer;
+    drawUses[drawUseCount].accessFlags = GfxResourceAccessFlags_ShaderRead;
+    drawUses[drawUseCount].shaderStages = GfxShaderStageFlags_Fragment;
+    drawUses[drawUseCount].buffer = world->materialBuffer;
+    drawUseCount += 1u;
+
+    GfxRenderPassDesc passDesc = {};
+    passDesc.name = "world forward";
+    passDesc.colorTargets = &colorTarget;
+    passDesc.colorTargetCount = 1u;
+    passDesc.depthTarget = &depthTarget;
+    passDesc.resourceUses = drawUses;
+    passDesc.resourceUseCount = drawUseCount;
+
+    U32 maxCells = APP_WORLD_BIN_COUNT * APP_WORLD_MAX_MESHES;
+    GfxDraw* draws = ARENA_PUSH_ARRAY(ctx->host->frameArena, GfxDraw, cellCount <= maxCells ? cellCount : maxCells);
+    if (!draws) {
+        world->lastRenderableCount = 0u;
+        return;
+    }
+    U32 drawCount = 0u;
+    for (U32 cell = 0u; cell < cellCount; ++cell) {
+        U32 bin = cell / world->meshCount;
+        GfxTemp drawRoot = gfx_allocate_temp(frame, sizeof(ShdWorldForwardRootData), 16u);
+        if (!drawRoot.cpu) {
+            break;
+        }
+        ShdWorldForwardRootData* rootData = (ShdWorldForwardRootData*)drawRoot.cpu;
+        MEMSET(rootData, 0, sizeof(*rootData));
+        rootData->frameBuffer = world->frameRecordBufferIds[frameBufferIndex].index;
+        rootData->renderableBuffer = world->renderableBufferIds[frameBufferIndex].index;
+        rootData->visibleBuffer = world->visibleBufferId.index;
+        rootData->cellOffsetBuffer = world->cellOffsetBufferId.index;
+        rootData->materialBuffer = world->materialBufferId.index;
+        rootData->vertexBuffer = world->vertexBufferId.index;
+        rootData->cellIndex = cell;
+
+        GfxDraw* draw = draws + drawCount;
+        *draw = {};
+        draw->pipeline = (bin == (U32)AppWorldBin_Transparent) ? world->transparentPipeline : world->opaquePipeline;
+        draw->indexBuffer = world->indexBuffer;
+        draw->indirectBuffer = world->argsBuffer;
+        draw->indirectByteOffset = cell * (U32)sizeof(GfxDrawIndexedIndirectArgs);
+        draw->indexType = GfxIndexType_U32;
+        draw->rootDataOffset = (U32)drawRoot.gpu.offset;
+        draw->rootDataSize = (U32)drawRoot.gpu.size;
+        drawCount += 1u;
+    }
+
+    GfxDrawArea area = {};
+    area.viewport.width = (F32)ctx->host->windowWidth;
+    area.viewport.height = (F32)ctx->host->windowHeight;
+    area.viewport.maxDepth = 1.0f;
+    area.scissor.width = ctx->host->windowWidth;
+    area.scissor.height = ctx->host->windowHeight;
+    area.draws = draws;
+    area.drawCount = drawCount;
+
+    gfx_render_pass(rendererFrame->commands, &passDesc, &area, 1u);
+}
+
 static B32 app_renderer_init(APP_Context* ctx) {
     AppCoreState* state = ctx->core;
     if (state->render2d.initialized) {
@@ -493,6 +1463,28 @@ static void app_renderer_shutdown(APP_Context* ctx) {
         gfx_destroy_sampler(device, render->atlasSampler);
         gfx_destroy_texture(device, render->atlasTexture);
         gfx_destroy_pipeline(device, render->pipeline);
+
+        AppWorldState* world = &state->world;
+        gfx_destroy_buffer(device, world->vertexBuffer);
+        gfx_destroy_buffer(device, world->indexBuffer);
+        gfx_destroy_buffer(device, world->meshRecordBuffer);
+        gfx_destroy_buffer(device, world->materialBuffer);
+        for (U32 bufferIndex = 0u; bufferIndex < APP_WORLD_FRAME_BUFFER_COUNT; ++bufferIndex) {
+            gfx_destroy_buffer(device, world->frameRecordBuffers[bufferIndex]);
+            gfx_destroy_buffer(device, world->renderableBuffers[bufferIndex]);
+        }
+        gfx_destroy_buffer(device, world->flagsBuffer);
+        gfx_destroy_buffer(device, world->cellCountBuffer);
+        gfx_destroy_buffer(device, world->cellOffsetBuffer);
+        gfx_destroy_buffer(device, world->visibleBuffer);
+        gfx_destroy_buffer(device, world->argsBuffer);
+        gfx_destroy_texture(device, world->depthTexture);
+        gfx_destroy_pipeline(device, world->opaquePipeline);
+        gfx_destroy_pipeline(device, world->transparentPipeline);
+        for (U32 passIndex = 0u; passIndex < 5u; ++passIndex) {
+            gfx_destroy_pipeline(device, world->computePipelines[passIndex]);
+        }
+        MEMSET(world, 0, sizeof(*world));
     }
 
     *render = {};
@@ -543,6 +1535,10 @@ static AppRendererFrame* app_renderer_begin_frame(APP_Context* ctx) {
     app_renderer_try_update_pipeline(ctx);
     app_renderer_try_create_gpu_resources(ctx);
     app_renderer_try_seed_atlas(ctx, frame);
+    app_world_try_create_resources_(ctx);
+    app_world_try_update_pipelines_(ctx);
+    app_world_ensure_depth_(ctx);
+    app_world_begin_frame_(ctx);
 
     F32 whiteU = 0.0f;
     F32 whiteV = 0.0f;
@@ -586,6 +1582,11 @@ static void app_renderer_end_frame(APP_Context* ctx, AppRendererFrame* rendererF
 
     if (rendererFrame == 0 || rendererFrame->frame == 0) {
         return;
+    }
+
+    {
+        PROF_SCOPE("world passes");
+        app_world_execute_(ctx, rendererFrame);
     }
 
     Draw2DResult result = {};

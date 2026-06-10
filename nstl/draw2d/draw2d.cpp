@@ -233,3 +233,26 @@ void draw2d_glyph_quads(Draw2DContext* ctx, Draw2DLayer layer, const Draw2DQuad*
         *dst = quad;
     }
 }
+
+void draw2d_glyph_run(Draw2DContext* ctx, Draw2DLayer layer, const Draw2DQuad* quads, U32 count, F32 offsetX, F32 offsetY, U32 rgba8) {
+    if (!ctx || !quads) {
+        return;
+    }
+
+    for (U32 quadIndex = 0u; quadIndex < count; ++quadIndex) {
+        Draw2DQuad quad = quads[quadIndex];
+        quad.minX += offsetX;
+        quad.minY += offsetY;
+        quad.maxX += offsetX;
+        quad.maxY += offsetY;
+        quad.rgba8 = rgba8;
+        if (!draw2d_clip_quad(ctx, &quad)) {
+            continue;
+        }
+        Draw2DQuad* dst = draw2d_push_quad(ctx, layer);
+        if (!dst) {
+            return;
+        }
+        *dst = quad;
+    }
+}

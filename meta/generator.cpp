@@ -285,11 +285,41 @@ static B32 shader_record_field_is_f32(ASTField* field) {
     return str8_equal(field->typeName, str8("F32"));
 }
 
+static void generate_shader_record_slang_load_(Generator* gen, ASTField* field, U32 wordIndex, B32 isRoot) {
+    const char* castOpen = shader_record_field_is_f32(field) ? "asfloat(" : "";
+    const char* castClose = shader_record_field_is_f32(field) ? ")" : "";
+    if (field->arrayCount) {
+        gen_line(gen, "[unroll] for (uint arrayIndex = 0u; arrayIndex < {}u; ++arrayIndex) {{", field->arrayCount);
+        gen->indentLevel++;
+        if (isRoot) {
+            gen_line(gen, "result.{}[arrayIndex] = {}gfx_load_root_word({}u + arrayIndex){};",
+                     field->name, str8(castOpen), wordIndex, str8(castClose));
+        } else {
+            gen_line(gen, "result.{}[arrayIndex] = {}gfx_load_buffer_word(bufferIndex, byteOffset, wordOffset + {}u + arrayIndex){};",
+                     field->name, str8(castOpen), wordIndex, str8(castClose));
+        }
+        gen->indentLevel--;
+        gen_line_(gen, str8("}"));
+    } else {
+        if (isRoot) {
+            gen_line(gen, "result.{} = {}gfx_load_root_word({}u){};",
+                     field->name, str8(castOpen), wordIndex, str8(castClose));
+        } else {
+            gen_line(gen, "result.{} = {}gfx_load_buffer_word(bufferIndex, byteOffset, wordOffset + {}u){};",
+                     field->name, str8(castOpen), wordIndex, str8(castClose));
+        }
+    }
+}
+
 static void generate_shader_record_slang(Generator* gen, ASTShaderRecord* record) {
     gen_line(gen, "struct {} {{", record->name);
     gen->indentLevel++;
     for (ASTField* field = record->fields; field; field = field->next) {
-        gen_line(gen, "{} {};", str8(shader_record_field_is_f32(field) ? "float" : "uint"), field->name);
+        if (field->arrayCount) {
+            gen_line(gen, "{} {}[{}];", str8(shader_record_field_is_f32(field) ? "float" : "uint"), field->name, field->arrayCount);
+        } else {
+            gen_line(gen, "{} {};", str8(shader_record_field_is_f32(field) ? "float" : "uint"), field->name);
+        }
     }
     gen->indentLevel--;
     gen_line_(gen, str8("};"));
@@ -300,29 +330,23 @@ static void generate_shader_record_slang(Generator* gen, ASTShaderRecord* record
         gen->indentLevel++;
         gen_line(gen, "{} result;", record->name);
         U32 wordIndex = 0;
-        for (ASTField* field = record->fields; field; field = field->next, ++wordIndex) {
-            if (shader_record_field_is_f32(field)) {
-                gen_line(gen, "result.{} = asfloat(gfx_load_root_word({}u));", field->name, wordIndex);
-            } else {
-                gen_line(gen, "result.{} = gfx_load_root_word({}u);", field->name, wordIndex);
-            }
+        for (ASTField* field = record->fields; field; field = field->next) {
+            generate_shader_record_slang_load_(gen, field, wordIndex, 1);
+            wordIndex += field->arrayCount ? field->arrayCount : 1u;
         }
         gen_line_(gen, str8("return result;"));
         gen->indentLevel--;
         gen_line_(gen, str8("}"));
     } else {
-        gen_line(gen, "static const uint SHD_{}_STRIDE_WORDS = {}u;", record->name, record->fieldCount);
+        gen_line(gen, "static const uint SHD_{}_STRIDE_WORDS = {}u;", record->name, record->wordCount);
         gen_line(gen, "{} shd_load_{}(uint bufferIndex, uint byteOffset, uint elementIndex) {{", record->name, record->name);
         gen->indentLevel++;
         gen_line(gen, "uint wordOffset = elementIndex * SHD_{}_STRIDE_WORDS;", record->name);
         gen_line(gen, "{} result;", record->name);
         U32 wordIndex = 0;
-        for (ASTField* field = record->fields; field; field = field->next, ++wordIndex) {
-            if (shader_record_field_is_f32(field)) {
-                gen_line(gen, "result.{} = asfloat(gfx_load_buffer_word(bufferIndex, byteOffset, wordOffset + {}u));", field->name, wordIndex);
-            } else {
-                gen_line(gen, "result.{} = gfx_load_buffer_word(bufferIndex, byteOffset, wordOffset + {}u);", field->name, wordIndex);
-            }
+        for (ASTField* field = record->fields; field; field = field->next) {
+            generate_shader_record_slang_load_(gen, field, wordIndex, 0);
+            wordIndex += field->arrayCount ? field->arrayCount : 1u;
         }
         gen_line_(gen, str8("return result;"));
         gen->indentLevel--;
@@ -332,28 +356,34 @@ static void generate_shader_record_slang(Generator* gen, ASTShaderRecord* record
 }
 
 static void generate_shader_record_c(Generator* gen, ASTShaderRecord* record) {
-    U32 paddedWordCount = record->isRootData ? 16u : record->fieldCount;
+    U32 rootWordCount = record->isComputeRoot ? 24u : 16u;
+    U32 paddedWordCount = record->isRootData ? rootWordCount : record->wordCount;
 
     gen_line(gen, "struct Shd{} {{", record->name);
     gen->indentLevel++;
     for (ASTField* field = record->fields; field; field = field->next) {
-        gen_line(gen, "{} {};", field->typeName, field->name);
+        if (field->arrayCount) {
+            gen_line(gen, "{} {}[{}];", field->typeName, field->name, field->arrayCount);
+        } else {
+            gen_line(gen, "{} {};", field->typeName, field->name);
+        }
     }
-    for (U32 padIndex = record->fieldCount; padIndex < paddedWordCount; ++padIndex) {
+    for (U32 padIndex = record->wordCount; padIndex < paddedWordCount; ++padIndex) {
         gen_line(gen, "U32 _pad{};", padIndex);
     }
     gen->indentLevel--;
     gen_line_(gen, str8("};"));
 
     U32 wordIndex = 0;
-    for (ASTField* field = record->fields; field; field = field->next, ++wordIndex) {
+    for (ASTField* field = record->fields; field; field = field->next) {
         gen_line(gen, "static_assert(offsetof(Shd{}, {}) == {}u, \"Shd{}.{} shader ABI offset mismatch\");",
                  record->name, field->name, wordIndex * 4u, record->name, field->name);
+        wordIndex += field->arrayCount ? field->arrayCount : 1u;
     }
     gen_line(gen, "static_assert(sizeof(Shd{}) == {}u, \"Shd{} shader ABI size mismatch\");",
              record->name, paddedWordCount * 4u, record->name);
     if (!record->isRootData) {
-        gen_line(gen, "static const U32 SHD_{}_STRIDE_WORDS = {}u;", record->name, record->fieldCount);
+        gen_line(gen, "static const U32 SHD_{}_STRIDE_WORDS = {}u;", record->name, record->wordCount);
     }
     gen_newline(gen);
 }

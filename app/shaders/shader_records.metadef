@@ -24,3 +24,86 @@
     maxV: F32,
     rgba8: U32,
 }
+
+@shader_record WorldFrameRecord {
+    viewProj: F32[16],
+    frustumPlanes: F32[24],
+    cameraPos: F32[3],
+    time: F32,
+    renderableCount: U32,
+    pad0: U32,
+    pad1: U32,
+    pad2: U32,
+}
+
+@shader_record WorldRenderableRecord {
+    transform: F32[16],
+    boundsCenter: F32[3],
+    boundsRadius: F32,
+    boundsExtents: F32[3],
+    materialIndex: U32,
+    cellIndex: U32,
+    flags: U32,
+    pad0: U32,
+    pad1: U32,
+}
+
+@shader_record WorldMaterialRecord {
+    baseColor: F32[4],
+    textureIndex: U32,
+    samplerIndex: U32,
+    flags: U32,
+    pad0: U32,
+}
+
+@shader_record WorldMeshRecord {
+    indexCount: U32,
+    firstIndex: U32,
+    baseVertex: U32,
+    pad0: U32,
+}
+
+@shader_record WorldVertexRecord {
+    position: F32[3],
+    normal: F32[3],
+    uv: F32[2],
+}
+
+@shader_record @root_data WorldForwardRootData {
+    frameBuffer: U32,
+    frameByteOffset: U32,
+    renderableBuffer: U32,
+    renderableByteOffset: U32,
+    visibleBuffer: U32,
+    visibleByteOffset: U32,
+    cellOffsetBuffer: U32,
+    cellOffsetByteOffset: U32,
+    materialBuffer: U32,
+    materialByteOffset: U32,
+    vertexBuffer: U32,
+    vertexByteOffset: U32,
+    cellIndex: U32,
+    debugFlags: U32,
+}
+
+@shader_record @root_data @compute WorldCullRootData {
+    frameBuffer: U32,
+    frameByteOffset: U32,
+    renderableBuffer: U32,
+    renderableByteOffset: U32,
+    flagsBuffer: U32,
+    flagsByteOffset: U32,
+    cellCountBuffer: U32,
+    cellCountByteOffset: U32,
+    cellOffsetBuffer: U32,
+    cellOffsetByteOffset: U32,
+    visibleBuffer: U32,
+    visibleByteOffset: U32,
+    argsBuffer: U32,
+    argsByteOffset: U32,
+    meshBuffer: U32,
+    meshByteOffset: U32,
+    renderableCount: U32,
+    cellCount: U32,
+    meshCount: U32,
+}

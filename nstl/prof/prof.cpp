@@ -16,11 +16,21 @@ struct ProfSiteEntry {
 struct ProfOpenScope {
     U32 site;
     U32 parentSite;
+    U32 path;
     U32 nodeIndex;
     U64 startNs;
     U64 sliceStartNs;
     U64 savedInclNs;
+    U64 savedPathInclNs;
 };
+
+struct ProfPathEntry {
+    U64 key;
+    U32 lastChild;
+};
+
+#define PROF_PATH_TABLE_SIZE 2048u
+#define PROF_GPU_THREAD_INDEX PROF_MAX_THREADS
 
 struct ProfThreadEntry {
     B32 used;
@@ -38,6 +48,7 @@ struct ProfFrameLane {
     const char* name;
     U32 firstNode;
     U32 nodeCount;
+    U32 threadIndex;
 };
 
 struct ProfFrameSlot {
@@ -95,6 +106,17 @@ struct ProfGlobal {
     U32 windowFrames;
     ProfSiteStats* stats;
     F32 frameHistoryMs[PROF_HISTORY_FRAMES];
+
+    ProfPathEntry pathEntries[PROF_MAX_PATHS];
+    U32 pathSlots[PROF_PATH_TABLE_SIZE];
+    U32 pathCount;
+    U32 pathRootFirst[PROF_MAX_THREADS + 1u];
+    U32 pathRootLast[PROF_MAX_THREADS + 1u];
+    U64 framePathInclNs[PROF_MAX_PATHS];
+    S64 framePathExclNs[PROF_MAX_PATHS];
+    U32 framePathHits[PROF_MAX_PATHS];
+    ProfSiteAccum pathAccum[PROF_MAX_PATHS];
+    ProfPathStats* pathStats;
 
     ProfLaneView viewLanes[PROF_MAX_THREADS + 1u];
     ProfFrameView view;
@@ -342,10 +364,21 @@ void prof_init() {
     g_prof.mutex = OS_mutex_create();
     g_prof.slots = ARENA_PUSH_ARRAY(g_prof.arena, ProfFrameSlot, PROF_COLLATION_FRAMES);
     g_prof.stats = ARENA_PUSH_ARRAY(g_prof.arena, ProfSiteStats, PROF_MAX_SITES);
-    if (!g_prof.slots || !g_prof.stats) {
+    g_prof.pathStats = ARENA_PUSH_ARRAY(g_prof.arena, ProfPathStats, PROF_MAX_PATHS);
+    if (!g_prof.slots || !g_prof.stats || !g_prof.pathStats) {
         return;
     }
     MEMSET(g_prof.slots, 0, sizeof(ProfFrameSlot) * PROF_COLLATION_FRAMES);
+    MEMSET(g_prof.pathStats, 0, sizeof(ProfPathStats) * PROF_MAX_PATHS);
+    g_prof.pathStats[0].parent = PROF_PATH_NIL;
+    g_prof.pathStats[0].firstChild = PROF_PATH_NIL;
+    g_prof.pathStats[0].nextSibling = PROF_PATH_NIL;
+    g_prof.pathEntries[0].lastChild = PROF_PATH_NIL;
+    g_prof.pathCount = 1u;
+    for (U32 thread = 0u; thread <= PROF_MAX_THREADS; ++thread) {
+        g_prof.pathRootFirst[thread] = PROF_PATH_NIL;
+        g_prof.pathRootLast[thread] = PROF_PATH_NIL;
+    }
 
     g_prof.siteCount = 1u;
     g_prof.enableMask = PROF_CAT_ALL;
@@ -393,6 +426,64 @@ U64 prof_current_frame() {
     return g_prof.frameIndex;
 }
 
+static U32 prof_path_require_(U32 parent, U32 site, U32 thread) {
+    U64 hash = 0xCBF29CE484222325ull;
+    hash = (hash ^ (U64)parent) * 0x100000001B3ull;
+    hash = (hash ^ (U64)site) * 0x100000001B3ull;
+    hash = (hash ^ (U64)thread) * 0x100000001B3ull;
+    hash ^= hash >> 33u;
+    hash *= 0xFF51AFD7ED558CCDull;
+    hash ^= hash >> 33u;
+    if (hash == 0ull) {
+        hash = 1ull;
+    }
+    for (U32 probe = 0u; probe < PROF_PATH_TABLE_SIZE; ++probe) {
+        U32 slotIndex = (U32)((hash + probe) & (PROF_PATH_TABLE_SIZE - 1u));
+        U32 stored = g_prof.pathSlots[slotIndex];
+        if (stored != 0u) {
+            if (g_prof.pathEntries[stored].key == hash) {
+                return stored;
+            }
+            continue;
+        }
+        if (g_prof.pathCount >= PROF_MAX_PATHS) {
+            return 0u;
+        }
+        U32 index = g_prof.pathCount;
+        g_prof.pathCount += 1u;
+        g_prof.pathSlots[slotIndex] = index;
+        g_prof.pathEntries[index].key = hash;
+        g_prof.pathEntries[index].lastChild = PROF_PATH_NIL;
+        ProfPathStats* path = g_prof.pathStats + index;
+        MEMSET(path, 0, sizeof(*path));
+        path->site = site;
+        path->parent = parent;
+        path->thread = thread;
+        path->depth = (parent != PROF_PATH_NIL) ? g_prof.pathStats[parent].depth + 1u : 0u;
+        path->firstChild = PROF_PATH_NIL;
+        path->nextSibling = PROF_PATH_NIL;
+        if (parent != PROF_PATH_NIL) {
+            U32 last = g_prof.pathEntries[parent].lastChild;
+            if (last == PROF_PATH_NIL) {
+                g_prof.pathStats[parent].firstChild = index;
+            } else {
+                g_prof.pathStats[last].nextSibling = index;
+            }
+            g_prof.pathEntries[parent].lastChild = index;
+        } else {
+            U32 last = g_prof.pathRootLast[thread];
+            if (last == PROF_PATH_NIL) {
+                g_prof.pathRootFirst[thread] = index;
+            } else {
+                g_prof.pathStats[last].nextSibling = index;
+            }
+            g_prof.pathRootLast[thread] = index;
+        }
+        return index;
+    }
+    return 0u;
+}
+
 static U64 prof_reconstruct_tick_(ProfThreadEntry* thread, U64 low48) {
     U64 base = thread->lastFullTick;
     U64 candidate = (base & ~PROF_EVENT_TICK_MASK) | low48;
@@ -403,7 +494,7 @@ static U64 prof_reconstruct_tick_(ProfThreadEntry* thread, U64 low48) {
     return candidate;
 }
 
-static ProfFrameNode* prof_push_node_(ProfFrameSlot* slot, U32 site, U32 depth, U64 startNs) {
+static ProfFrameNode* prof_push_node_(ProfFrameSlot* slot, U32 site, U32 depth, U32 path, U64 startNs) {
     if (slot->nodeCount >= PROF_MAX_FRAME_NODES) {
         return 0;
     }
@@ -411,6 +502,7 @@ static ProfFrameNode* prof_push_node_(ProfFrameSlot* slot, U32 site, U32 depth, 
     slot->nodeCount += 1u;
     node->site = site;
     node->depth = depth;
+    node->path = path;
     node->startNs = startNs;
     node->endNs = startNs;
     return node;
@@ -423,8 +515,15 @@ static void prof_account_slice_(ProfOpenScope* open, U64 endNs, B32 isFinalClose
     if (open->parentSite != 0u) {
         g_prof.frameExclNs[open->parentSite] -= (S64)elapsed;
     }
+    g_prof.framePathInclNs[open->path] = open->savedPathInclNs + elapsed;
+    g_prof.framePathExclNs[open->path] += (S64)elapsed;
+    U32 parentPath = g_prof.pathStats[open->path].parent;
+    if (parentPath != PROF_PATH_NIL) {
+        g_prof.framePathExclNs[parentPath] -= (S64)elapsed;
+    }
     if (isFinalClose) {
         g_prof.frameHits[open->site] += 1u;
+        g_prof.framePathHits[open->path] += 1u;
     }
 }
 
@@ -446,7 +545,8 @@ static void prof_collate_thread_(ProfThreadEntry* thread, ProfFrameSlot* slot, U
         ProfOpenScope* open = thread->open + depth;
         open->sliceStartNs = slot->startNs;
         open->savedInclNs = g_prof.frameInclNs[open->site];
-        ProfFrameNode* node = prof_push_node_(slot, open->site, depth, open->startNs < slot->startNs ? slot->startNs : open->startNs);
+        open->savedPathInclNs = g_prof.framePathInclNs[open->path];
+        ProfFrameNode* node = prof_push_node_(slot, open->site, depth, open->path, open->startNs < slot->startNs ? slot->startNs : open->startNs);
         open->nodeIndex = node ? (U32)(node - slot->nodes) : PROF_NIL_INDEX;
     }
 
@@ -464,10 +564,13 @@ static void prof_collate_thread_(ProfThreadEntry* thread, ProfFrameSlot* slot, U
             ProfOpenScope* open = thread->open + thread->openDepth;
             open->site = site;
             open->parentSite = (thread->openDepth > 0u) ? thread->open[thread->openDepth - 1u].site : 0u;
+            U32 parentPath = (thread->openDepth > 0u) ? thread->open[thread->openDepth - 1u].path : PROF_PATH_NIL;
+            open->path = prof_path_require_(parentPath, site, (U32)(thread - g_prof.threads));
             open->startNs = ns;
             open->sliceStartNs = ns;
             open->savedInclNs = g_prof.frameInclNs[site];
-            ProfFrameNode* node = prof_push_node_(slot, site, thread->openDepth, ns);
+            open->savedPathInclNs = g_prof.framePathInclNs[open->path];
+            ProfFrameNode* node = prof_push_node_(slot, site, thread->openDepth, open->path, ns);
             open->nodeIndex = node ? (U32)(node - slot->nodes) : PROF_NIL_INDEX;
             thread->openDepth += 1u;
         } else if (kind == PROF_EVENT_KIND_END) {
@@ -498,6 +601,7 @@ static void prof_collate_thread_(ProfThreadEntry* thread, ProfFrameSlot* slot, U
         lane->name = thread->name;
         lane->firstNode = laneFirst;
         lane->nodeCount = slot->nodeCount - laneFirst;
+        lane->threadIndex = (U32)(thread - g_prof.threads);
         slot->laneCount += 1u;
     }
 }
@@ -545,6 +649,25 @@ void prof_frame_advance() {
             g_prof.frameHits[site] = 0u;
         }
 
+        for (U32 path = 1u; path < g_prof.pathCount; ++path) {
+            U64 inclNs = g_prof.framePathInclNs[path];
+            S64 exclNs = g_prof.framePathExclNs[path];
+            U32 hits = g_prof.framePathHits[path];
+            ProfSiteAccum* accum = g_prof.pathAccum + path;
+
+            g_prof.pathStats[path].lastInclMs = (F32)((F64)inclNs / 1.0e6);
+            accum->sumInclNs += inclNs;
+            accum->sumExclNs += (exclNs > 0) ? (U64)exclNs : 0u;
+            accum->sumHits += hits;
+            if (inclNs > accum->maxInclNs) {
+                accum->maxInclNs = inclNs;
+            }
+
+            g_prof.framePathInclNs[path] = 0u;
+            g_prof.framePathExclNs[path] = 0;
+            g_prof.framePathHits[path] = 0u;
+        }
+
         g_prof.frameHistoryMs[frame % PROF_HISTORY_FRAMES] =
                 (F32)((F64)(frameEndNs - slot->startNs) / 1.0e6);
 
@@ -554,6 +677,15 @@ void prof_frame_advance() {
             for (U32 site = 1u; site < g_prof.siteCount; ++site) {
                 ProfSiteStats* stats = g_prof.stats + site;
                 ProfSiteAccum* accum = g_prof.windowAccum + site;
+                stats->avgInclMs = (F32)((F64)accum->sumInclNs / 1.0e6) * inverse;
+                stats->avgExclMs = (F32)((F64)accum->sumExclNs / 1.0e6) * inverse;
+                stats->maxInclMs = (F32)((F64)accum->maxInclNs / 1.0e6);
+                stats->avgHits = (F32)accum->sumHits * inverse;
+                MEMSET(accum, 0, sizeof(*accum));
+            }
+            for (U32 path = 1u; path < g_prof.pathCount; ++path) {
+                ProfPathStats* stats = g_prof.pathStats + path;
+                ProfSiteAccum* accum = g_prof.pathAccum + path;
                 stats->avgInclMs = (F32)((F64)accum->sumInclNs / 1.0e6) * inverse;
                 stats->avgExclMs = (F32)((F64)accum->sumExclNs / 1.0e6) * inverse;
                 stats->maxInclMs = (F32)((F64)accum->maxInclNs / 1.0e6);
@@ -597,7 +729,7 @@ void prof_frame_advance() {
 }
 
 void prof_gpu_span(U32 site, U64 cpuStartNs, U64 cpuEndNs, U64 frameIndex) {
-    if (!g_prof.initialized || site == 0u || site >= g_prof.siteCount) {
+    if (!g_prof.initialized || g_prof.enableMask == 0u || site == 0u || site >= g_prof.siteCount) {
         g_prof.gpuSpansDropped += 1u;
         return;
     }
@@ -611,8 +743,17 @@ void prof_gpu_span(U32 site, U64 cpuStartNs, U64 cpuEndNs, U64 frameIndex) {
     slot->gpuNodeCount += 1u;
     node->site = site;
     node->depth = 0u;
+    node->path = prof_path_require_(PROF_PATH_NIL, site, PROF_GPU_THREAD_INDEX);
     node->startNs = cpuStartNs;
     node->endNs = cpuEndNs;
+
+    U64 elapsed = (cpuEndNs > cpuStartNs) ? (cpuEndNs - cpuStartNs) : 0u;
+    g_prof.frameInclNs[site] += elapsed;
+    g_prof.frameExclNs[site] += (S64)elapsed;
+    g_prof.frameHits[site] += 1u;
+    g_prof.framePathInclNs[node->path] += elapsed;
+    g_prof.framePathExclNs[node->path] += (S64)elapsed;
+    g_prof.framePathHits[node->path] += 1u;
 }
 
 const ProfFrameView* prof_frame_view() {
@@ -636,6 +777,7 @@ const ProfFrameView* prof_frame_view() {
         view->name = lane->name;
         view->nodes = slot->nodes + lane->firstNode;
         view->nodeCount = lane->nodeCount;
+        view->threadIndex = lane->threadIndex;
         view->isGpu = 0;
         laneCount += 1u;
     }
@@ -644,6 +786,7 @@ const ProfFrameView* prof_frame_view() {
         view->name = "gpu";
         view->nodes = slot->gpuNodes;
         view->nodeCount = slot->gpuNodeCount;
+        view->threadIndex = PROF_GPU_THREAD_INDEX;
         view->isGpu = 1;
         laneCount += 1u;
     }
@@ -671,6 +814,13 @@ const ProfSiteStats* prof_site_stats(U32* outCount) {
         *outCount = g_prof.initialized ? g_prof.siteCount : 0u;
     }
     return g_prof.stats;
+}
+
+const ProfPathStats* prof_path_stats(U32* outCount) {
+    if (outCount) {
+        *outCount = g_prof.initialized ? g_prof.pathCount : 0u;
+    }
+    return g_prof.pathStats;
 }
 
 struct ProfCaptureLane {
@@ -950,6 +1100,7 @@ U64 prof_tick_to_ns(U64 tick) { return tick; }
 U64 prof_now_ns() { return 0u; }
 const ProfFrameView* prof_frame_view() { return 0; }
 const ProfSiteStats* prof_site_stats(U32* outCount) { if (outCount) { *outCount = 0u; } return 0; }
+const ProfPathStats* prof_path_stats(U32* outCount) { if (outCount) { *outCount = 0u; } return 0; }
 const F32* prof_frame_history(U32* outCount, U32* outOffset) { if (outCount) { *outCount = 0u; } if (outOffset) { *outOffset = 0u; } return 0; }
 ProfInfo prof_info() { ProfInfo info = {}; return info; }
 B32 prof_capture(U32, const char*) { return 0; }

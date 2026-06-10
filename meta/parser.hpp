@@ -9,7 +9,8 @@ struct ASTField {
     StringU8 typeName;
     B32 isPointer;
     B32 isReference;
-    
+    U32 arrayCount;
+
     ASTField* next;
 };
 
@@ -36,7 +37,9 @@ struct ASTShaderRecord {
     StringU8 name;
     ASTField* fields;
     U32 fieldCount;
+    U32 wordCount;
     B32 isRootData;
+    B32 isComputeRoot;
 
     ASTShaderRecord* next;
 };

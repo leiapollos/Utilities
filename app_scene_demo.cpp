@@ -2,70 +2,95 @@
 // Created by André Leite on 10/06/2026.
 //
 
+#define APP_SCENE_GRID_SPACING 2.2f
+
+static Mat4x4F32 app_scene_object_transform_(U32 x, U32 z, U32 side, F32 time, B32 animate) {
+    F32 half = (F32)(side - 1u) * 0.5f;
+    F32 worldX = ((F32)x - half) * APP_SCENE_GRID_SPACING;
+    F32 worldZ = ((F32)z - half) * APP_SCENE_GRID_SPACING;
+    U32 cellSeed = x * 31u + z * 17u;
+    F32 height = 0.5f + (F32)((cellSeed >> 2u) % 5u) * 0.22f;
+
+    // Row-vector convention: compose left to right, scale -> rotate -> translate.
+    Mat4x4F32 transform = mat4_scale(app_world_vec3_(1.0f, height, 1.0f));
+    if (animate && (cellSeed % 7u) == 0u) {
+        QuatF32 spin = quat_from_axis_angle(app_world_vec3_(0.0f, 1.0f, 0.0f),
+                                            time * (0.6f + (F32)(cellSeed % 5u) * 0.25f));
+        transform = transform * quat_to_mat4(spin);
+    }
+    transform = transform * mat4_translate(app_world_vec3_(worldX, height * 0.5f, worldZ));
+    if (animate && (cellSeed % 7u) == 0u) {
+        F32 bob = 0.35f * (0.5f + 0.5f * SIN_F32(time * 1.7f + (F32)cellSeed * 0.61f));
+        transform.v[3][1] += bob;
+    }
+    return transform;
+}
+
 static void app_demo_scene_submit(APP_Context* ctx, AppRendererFrame* rendererFrame) {
     AppCoreState* state = ctx->core;
     AppDemoState* demo = &state->demo;
-    Draw2DContext* draw2d = &state->render2d.draw2d;
-    if (state->render2d.textContext == 0 || state->render2d.font.generation == 0u) {
+    AppWorldState* world = &state->world;
+    if (!world->frameOpen || world->meshCount == 0u) {
         return;
     }
 
-    Temp scratch = get_scratch(0, 0);
-    if (scratch.arena == 0) {
-        return;
+    F32 time = (F32)((F64)state->frameCounter / 60.0);
+    U32 side = demo->gridSide;
+    if (side < 4u) {
+        side = 4u;
     }
-    DEFER_REF(temp_end(&scratch));
-
-    F32 panelMinX = 40.0f;
-    F32 panelMinY = 40.0f;
-    F32 panelMaxX = 980.0f;
-    F32 panelMaxY = 420.0f;
-    draw2d_rect(draw2d, Draw2DLayer_UI, panelMinX, panelMinY, panelMaxX, panelMaxY, 0x14181CF0u);
-    draw2d_box(draw2d, Draw2DLayer_UI, panelMinX, panelMinY, panelMaxX, panelMaxY, 2.0f, 0x3A4148FFu);
-    draw2d_line(draw2d, Draw2DLayer_UI, panelMinX + 24.0f, 132.0f, panelMaxX - 24.0f, 132.0f, 2.0f, 0x3A4148FFu);
-
-    TextDrawDesc titleDesc = {};
-    titleDesc.font = state->render2d.font;
-    titleDesc.text = str8((U8*)demo->titleBuffer, demo->titleLength);
-    titleDesc.x = panelMinX + 24.0f;
-    titleDesc.y = panelMinY + 24.0f;
-    titleDesc.pixelSize = demo->titleSize;
-    titleDesc.rgba8 = 0xF4F1E8FFu;
-    TextDrawData title = text_prepare_draw(state->render2d.textContext, scratch.arena, &titleDesc);
-    app_renderer_submit_text(ctx, rendererFrame, &title, Draw2DLayer_UI);
-
-    TextDrawDesc bodyDesc = {};
-    bodyDesc.font = state->render2d.font;
-    bodyDesc.text = str8("Hello, text\nOla, acao, coracao\nOl\xC3\xA1, a\xC3\xA7\xC3\xA3o, cora\xC3\xA7\xC3\xA3o\nAVATAR ToYo office ffi fi fl");
-    bodyDesc.x = panelMinX + 24.0f;
-    bodyDesc.y = 156.0f;
-    bodyDesc.pixelSize = 28.0f;
-    bodyDesc.rgba8 = 0xD9D4C7FFu;
-    TextDrawData body = text_prepare_draw(state->render2d.textContext, scratch.arena, &bodyDesc);
-    app_renderer_submit_text(ctx, rendererFrame, &body, Draw2DLayer_UI);
-
-    if (demo->showClipDemo) {
-        F32 clipMinX = panelMinX + 24.0f;
-        F32 clipMinY = 320.0f;
-        F32 clipMaxX = clipMinX + 360.0f;
-        F32 clipMaxY = clipMinY + 72.0f;
-        draw2d_box(draw2d, Draw2DLayer_UI, clipMinX, clipMinY, clipMaxX, clipMaxY, 1.0f, 0x6B7480FFu);
-        draw2d_push_clip(draw2d, clipMinX, clipMinY, clipMaxX, clipMaxY);
-        draw2d_rect(draw2d, Draw2DLayer_UI, clipMinX - 40.0f, clipMinY + 12.0f, clipMaxX + 40.0f, clipMinY + 28.0f, 0x4F8A6AFFu);
-
-        TextDrawDesc clippedDesc = {};
-        clippedDesc.font = state->render2d.font;
-        clippedDesc.text = str8("clipped text runs past the box edge and gets cut");
-        clippedDesc.x = clipMinX + 8.0f;
-        clippedDesc.y = clipMinY + 34.0f;
-        clippedDesc.pixelSize = 24.0f;
-        clippedDesc.rgba8 = 0xB9C4D1FFu;
-        TextDrawData clipped = text_prepare_draw(state->render2d.textContext, scratch.arena, &clippedDesc);
-        app_renderer_submit_text(ctx, rendererFrame, &clipped, Draw2DLayer_UI);
-        draw2d_pop_clip(draw2d);
+    if (side > 96u) {
+        side = 96u;
     }
 
-    if (demo->showMarker) {
-        draw2d_box(draw2d, Draw2DLayer_Debug, panelMaxX - 56.0f, panelMinY + 16.0f, panelMaxX - 16.0f, panelMinY + 56.0f, 2.0f, 0xE2574BFFu);
+    F32 orbitRadius = (F32)side * APP_SCENE_GRID_SPACING * 0.62f;
+    F32 yaw = time * 0.22f;
+    Vec3F32 eye = app_world_vec3_(COS_F32(yaw) * orbitRadius,
+                                  orbitRadius * 0.45f,
+                                  SIN_F32(yaw) * orbitRadius);
+    app_world_set_camera(ctx, eye, app_world_vec3_(0.0f, 0.0f, 0.0f), 1.0472f, 0.1f,
+                         orbitRadius * 4.0f);
+
+    Mat4x4F32 groundTransform = mat4_scale(app_world_vec3_((F32)side * APP_SCENE_GRID_SPACING + 8.0f, 1.0f,
+                                                            (F32)side * APP_SCENE_GRID_SPACING + 8.0f)) *
+                                mat4_translate(app_world_vec3_(0.0f, -0.05f, 0.0f));
+    app_world_push(ctx, world->builtinMeshes[2], 5u, AppWorldBin_Opaque, &groundTransform);
+
+    for (U32 z = 0u; z < side; ++z) {
+        for (U32 x = 0u; x < side; ++x) {
+            U32 cellSeed = x * 31u + z * 17u;
+            Mat4x4F32 transform = app_scene_object_transform_(x, z, side, time, demo->animate);
+
+            AppWorldMeshHandle mesh = ((cellSeed & 3u) == 0u) ? world->builtinMeshes[1]
+                                                              : world->builtinMeshes[0];
+            U32 lane = cellSeed % 11u;
+            if (lane == 3u) {
+                app_world_push(ctx, world->builtinMeshes[0], 6u, AppWorldBin_AlphaTest, &transform);
+            } else if (lane == 5u || lane == 7u) {
+                app_world_push(ctx, mesh, (lane == 5u) ? 7u : 8u, AppWorldBin_Transparent, &transform);
+            } else {
+                app_world_push(ctx, mesh, cellSeed % 6u, AppWorldBin_Opaque, &transform);
+            }
+        }
+    }
+
+    if (demo->showBounds) {
+        app_debug_draw_world_bounds(ctx, 256u);
+    }
+
+    if (state->render2d.textContext != 0 && state->render2d.font.generation != 0u) {
+        Temp scratch = get_scratch(0, 0);
+        if (scratch.arena) {
+            DEFER_REF(temp_end(&scratch));
+            TextDrawDesc titleDesc = {};
+            titleDesc.font = state->render2d.font;
+            titleDesc.text = str8((U8*)demo->titleBuffer, demo->titleLength);
+            titleDesc.x = 40.0f;
+            titleDesc.y = 28.0f;
+            titleDesc.pixelSize = demo->titleSize;
+            titleDesc.rgba8 = 0xF4F1E8FFu;
+            TextDrawData title = text_prepare_draw(state->render2d.textContext, scratch.arena, &titleDesc);
+            app_renderer_submit_text(ctx, rendererFrame, &title, Draw2DLayer_HUD);
+        }
     }
 }

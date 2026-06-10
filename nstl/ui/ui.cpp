@@ -385,35 +385,34 @@ static void ui_process_events(UI_Context* ui, const OS_GraphicsEvent* events, U3
 // ////////////////////////
 // Text shaping helpers
 
-static void ui_accumulate_uploads(UI_Context* ui, const TextDrawData* data) {
-    for (U32 uploadIndex = 0; uploadIndex < data->uploadCount; ++uploadIndex) {
+static void ui_accumulate_uploads(UI_Context* ui, const TextRunView* view) {
+    for (U32 uploadIndex = 0; uploadIndex < view->uploadCount; ++uploadIndex) {
         if (ui->uploadCount >= UI_MAX_UPLOADS) {
             return;
         }
-        ui->uploads[ui->uploadCount] = data->uploads[uploadIndex];
+        ui->uploads[ui->uploadCount] = view->uploads[uploadIndex];
         ui->uploadCount += 1u;
     }
 }
 
-static TextDrawData ui_shape_text(UI_Context* ui, StringU8 text, F32 pixelSize, U32 rgba8) {
-    TextDrawData result = {};
+static TextRunView ui_shape_text(UI_Context* ui, StringU8 text, F32 pixelSize) {
+    TextRunView view = {};
     if (!ui->textContext || ui->font.generation == 0u || text.size == 0u) {
-        return result;
+        return view;
     }
 
-    TextDrawDesc desc = {};
+    TextRunDesc desc = {};
     desc.font = ui->font;
     desc.text = text;
     desc.pixelSize = pixelSize;
-    desc.rgba8 = rgba8;
-    result = text_prepare_draw(ui->textContext, ui->frameArena, &desc);
-    ui_accumulate_uploads(ui, &result);
-    return result;
+    view = text_prepare_run(ui->textContext, ui->frameArena, &desc);
+    ui_accumulate_uploads(ui, &view);
+    return view;
 }
 
 static F32 ui_measure_text_width(UI_Context* ui, StringU8 text, F32 pixelSize) {
-    TextDrawData data = ui_shape_text(ui, text, pixelSize, 0xFFFFFFFFu);
-    return data.width;
+    TextRunView view = ui_shape_text(ui, text, pixelSize);
+    return view.width;
 }
 
 // ////////////////////////
@@ -501,18 +500,23 @@ static U32 ui_widget_add(UI_Context* ui, UI_Key key, U32 flags, U32 kind, UI_Siz
     return index;
 }
 
-static void ui_widget_set_text(UI_Context* ui, U32 index, StringU8 text, F32 pixelSize, U32 rgba8) {
+static void ui_widget_set_run(UI_Context* ui, U32 index, TextRunView view, B32 hasText, U32 rgba8) {
     UI_Widget* widget = ui_widget(ui, index);
-    widget->text = ui_shape_text(ui, text, pixelSize, rgba8);
+    widget->text = view;
+    widget->textColor = rgba8;
     for (U32 axis = 0; axis < UI_Axis_COUNT; ++axis) {
         if (widget->semanticSize[axis].kind == UI_SizeKind_Text) {
             F32 textSize = (axis == UI_Axis_X) ? widget->text.width : widget->text.height;
             widget->size[axis] = textSize + 2.0f * widget->padding[axis];
         }
     }
-    if (widget->text.quadCount != 0u || text.size != 0u) {
+    if (widget->text.quadCount != 0u || hasText) {
         widget->flags |= UI_WidgetFlag_DrawText;
     }
+}
+
+static void ui_widget_set_text(UI_Context* ui, U32 index, StringU8 text, F32 pixelSize, U32 rgba8) {
+    ui_widget_set_run(ui, index, ui_shape_text(ui, text, pixelSize), text.size != 0u, rgba8);
 }
 
 static void ui_push_parent(UI_Context* ui, U32 index) {
@@ -617,6 +621,12 @@ UI_Context* ui_begin(const UI_BeginDesc* desc) {
 
     UI_State* state = ui->state;
     state->frameIndex += 1u;
+    state->stats.valueRunHits = 0u;
+    state->stats.valueRunMisses = 0u;
+    state->stats.valueRunUninsertable = 0u;
+    state->stats.valueRunResolveFails = 0u;
+    state->stats.valueRunNoVictim = 0u;
+    state->stats.valueRunNoSlot = 0u;
     state->clickClock += desc->deltaSeconds;
     if (state->clickClock > 10.0f) {
         state->clickClock = 10.0f;
@@ -886,8 +896,8 @@ static void ui_paint_widget_enter(UI_Context* ui, UI_Widget* widget, const F32* 
                 draw2d_rect(draw, UI_LAYER, selMin, minY + 3.0f, selMax, maxY - 3.0f, UI_COLOR_SELECTION);
             }
             if (widget->text.quadCount != 0u) {
-                draw2d_glyph_quads(draw, UI_LAYER, (const Draw2DQuad*)widget->text.quads,
-                                   widget->text.quadCount, textX, textY);
+                draw2d_glyph_run(draw, UI_LAYER, (const Draw2DQuad*)widget->text.quads,
+                                 widget->text.quadCount, textX, textY, widget->textColor);
             }
             if ((widget->kindBits & UI_EditKindBit_Focused) && (widget->kindBits & UI_EditKindBit_CaretVisible)) {
                 F32 caretX = ui_floor(innerMinX + widget->kindParams[0] - scrollX);
@@ -905,8 +915,8 @@ static void ui_paint_widget_enter(UI_Context* ui, UI_Widget* widget, const F32* 
         F32 slack = MAX(0.0f, innerW - widget->text.width);
         F32 textX = ui_floor(minX + widget->padding[UI_Axis_X] + widget->textAlign * slack);
         F32 textY = ui_floor(minY + (widget->size[UI_Axis_Y] - widget->text.height) * 0.5f);
-        draw2d_glyph_quads(ui->draw2d, UI_LAYER, (const Draw2DQuad*)widget->text.quads,
-                           widget->text.quadCount, textX, textY);
+        draw2d_glyph_run(ui->draw2d, UI_LAYER, (const Draw2DQuad*)widget->text.quads,
+                         widget->text.quadCount, textX, textY, widget->textColor);
     }
 }
 
@@ -1055,8 +1065,11 @@ UI_Output ui_end(UI_Context* ui) {
         return output;
     }
 
-    for (U32 rootAt = 0; rootAt < rootCount; ++rootAt) {
-        ui_solve_root(ui, rootIndices[rootAt], solveStack);
+    {
+        PROF_SCOPE("ui solve");
+        for (U32 rootAt = 0; rootAt < rootCount; ++rootAt) {
+            ui_solve_root(ui, rootIndices[rootAt], solveStack);
+        }
     }
 
     for (U32 sortAt = 1; sortAt < rootCount; ++sortAt) {
@@ -1077,6 +1090,7 @@ UI_Output ui_end(UI_Context* ui) {
 
     state->hitRectCount = 0u;
     if (ui->draw2d) {
+        PROF_SCOPE("ui paint");
         for (U32 rootAt = 0; rootAt < rootCount; ++rootAt) {
             ui_paint_root(ui, rootIndices[rootAt], paintFrames);
         }
@@ -1354,6 +1368,102 @@ void ui_label_colored(UI_Context* ui, StringU8 text, U32 rgba8) {
 
 void ui_label(UI_Context* ui, StringU8 text) {
     ui_label_colored(ui, text, UI_COLOR_TEXT);
+}
+
+static U64 ui_value_args_key_(StringU8 fmt, const Str8FmtArg* args, U64 argCount) {
+    U64 hash = 0xCBF29CE484222325ull;
+    for (U64 at = 0u; at < fmt.size; ++at) {
+        hash = (hash ^ (U64)fmt.data[at]) * 0x100000001B3ull;
+    }
+    for (U64 argIndex = 0u; argIndex < argCount; ++argIndex) {
+        const Str8FmtArg* arg = args + argIndex;
+        hash = (hash ^ (U64)arg->kind) * 0x100000001B3ull;
+        switch (arg->kind) {
+            case Str8FmtKind_STRINGU8: {
+                for (U64 at = 0u; at < arg->stringU8Val.size; ++at) {
+                    hash = (hash ^ (U64)arg->stringU8Val.data[at]) * 0x100000001B3ull;
+                }
+            } break;
+            case Str8FmtKind_CSTR: {
+                for (const char* at = arg->cstrVal; at && *at; ++at) {
+                    hash = (hash ^ (U64)(U8)*at) * 0x100000001B3ull;
+                }
+            } break;
+            case Str8FmtKind_CHAR: {
+                hash = (hash ^ (U64)arg->charVal) * 0x100000001B3ull;
+            } break;
+            default: {
+                hash = (hash ^ arg->u64Val) * 0x100000001B3ull;
+            } break;
+        }
+    }
+    hash ^= hash >> 33u;
+    hash *= 0xFF51AFD7ED558CCDull;
+    hash ^= hash >> 33u;
+    hash *= 0xC4CEB9FE1A85EC53ull;
+    hash ^= hash >> 33u;
+    return hash ? hash : 1ull;
+}
+
+void ui_label_value_(UI_Context* ui, U32 rgba8, StringU8 fmt, const Str8FmtArg* args, U64 argCount) {
+    if (!ui) {
+        return;
+    }
+    UI_State* state = ui->state;
+    U64 valueKey = ui_value_args_key_(fmt, args, argCount);
+    U32 frame = (U32)state->frameIndex;
+
+    UI_ValueRun* victim = 0;
+    for (U32 probe = 0u; probe < UI_VALUE_RUN_PROBE; ++probe) {
+        UI_ValueRun* entry = state->valueRuns + ((valueKey + probe) & (UI_VALUE_RUN_SLOTS - 1u));
+        if (entry->valueKey == valueKey) {
+            TextRunView view = {};
+            if (ui->textContext &&
+                text_run_resolve(ui->textContext, entry->runSlot, entry->runKey, &view)) {
+                entry->lastUsedFrame = frame;
+                state->stats.valueRunHits += 1u;
+                U32 index = ui_widget_add(ui, 0ull, 0u, UI_WidgetKind_Plain, ui_text_size(), ui_text_size());
+                ui_widget_set_run(ui, index, view, 1, rgba8);
+                return;
+            }
+            state->stats.valueRunResolveFails += 1u;
+            victim = entry;
+            break;
+        }
+        if (entry->valueKey == 0ull) {
+            victim = entry;
+            break;
+        }
+        if (!victim || entry->lastUsedFrame < victim->lastUsedFrame) {
+            victim = entry;
+        }
+    }
+
+    StringU8 text = str8_fmt_(ui->frameArena, fmt, args, argCount);
+    TextRunView view = ui_shape_text(ui, text, UI_STYLE_TEXT_SIZE);
+    state->stats.valueRunMisses += 1u;
+    B32 victimUsable = victim &&
+        (victim->valueKey == 0ull || victim->valueKey == valueKey ||
+         victim->lastUsedFrame + UI_VALUE_RUN_EXPIRE_FRAMES <= frame);
+    if (!victimUsable || view.slot == TEXT_RUN_NO_SLOT) {
+        state->stats.valueRunUninsertable += 1u;
+        if (!victimUsable) {
+            state->stats.valueRunNoVictim += 1u;
+        }
+        if (view.slot == TEXT_RUN_NO_SLOT) {
+            state->stats.valueRunNoSlot += 1u;
+        }
+    }
+    if (victimUsable && view.slot != TEXT_RUN_NO_SLOT) {
+        victim->valueKey = valueKey;
+        victim->runKey = view.key;
+        victim->runSlot = view.slot;
+        victim->lastUsedFrame = frame;
+        victim->width = view.width;
+        victim->height = view.height;
+    }
+    U32 index = ui_widget_add(ui, 0ull, 0u, UI_WidgetKind_Plain, ui_text_size(), ui_text_size());
+    ui_widget_set_run(ui, index, view, text.size != 0u, rgba8);
 }
 
 UI_Signal ui_button(UI_Context* ui, StringU8 label) {
@@ -1837,7 +1947,8 @@ UI_EditResult ui_text_edit(UI_Context* ui, StringU8 label, U8* buffer, U32 buffe
     widget->borderColor = focused ? UI_COLOR_ACCENT : UI_COLOR_WIDGET_BORDER;
 
     StringU8 shown = str8((U8*)buffer, *ioLength);
-    widget->text = ui_shape_text(ui, shown, UI_STYLE_TEXT_SIZE, UI_COLOR_TEXT_BRIGHT);
+    widget->text = ui_shape_text(ui, shown, UI_STYLE_TEXT_SIZE);
+    widget->textColor = UI_COLOR_TEXT_BRIGHT;
 
     if (focused && edit->editKey == key) {
         F32 caretX = ui_edit_prefix_width(ui, edit, edit->cursor, UI_STYLE_TEXT_SIZE);

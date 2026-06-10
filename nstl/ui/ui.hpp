@@ -82,7 +82,8 @@ struct UI_Widget {
     U32 borderColor;
     F32 borderThickness;
     F32 textAlign;
-    TextDrawData text;
+    TextRunView text;
+    U32 textColor;
     F32 kindParams[4];
     U32 kindBits;
     const F32* plotValues;
@@ -138,6 +139,25 @@ struct UI_Stats {
     U32 duplicateKeyCount;
     U32 retainedEvictCount;
     U32 hitRectOverflowCount;
+    U32 valueRunHits;
+    U32 valueRunMisses;
+    U32 valueRunUninsertable;
+    U32 valueRunResolveFails;
+    U32 valueRunNoVictim;
+    U32 valueRunNoSlot;
+};
+
+#define UI_VALUE_RUN_SLOTS 1024u
+#define UI_VALUE_RUN_PROBE 8u
+#define UI_VALUE_RUN_EXPIRE_FRAMES 120u
+
+struct UI_ValueRun {
+    U64 valueKey;
+    U64 runKey;
+    U32 runSlot;
+    U32 lastUsedFrame;
+    F32 width;
+    F32 height;
 };
 
 struct UI_State {
@@ -170,6 +190,8 @@ struct UI_State {
     UI_HitRect hitRects[UI_MAX_HIT_RECTS];
 
     UI_RetainedWidget retained[UI_MAX_RETAINED];
+
+    UI_ValueRun valueRuns[UI_VALUE_RUN_SLOTS];
 
     UI_EditState edit;
 };
@@ -293,6 +315,15 @@ void ui_spacer(UI_Context* ui, UI_Size size);
 
 void ui_label(UI_Context* ui, StringU8 text);
 void ui_label_colored(UI_Context* ui, StringU8 text, U32 rgba8);
+void ui_label_value_(UI_Context* ui, U32 rgba8, StringU8 fmt, const Str8FmtArg* args, U64 argCount);
+
+#define ui_label_value(ui, rgba8, fmt, ...)                                                 \
+    ([&](){                                                                                 \
+        const Str8FmtArg uiValueArgs_[] = { Str8FmtArg(), __VA_ARGS__ };                    \
+        const U64 uiValueCount_ = (U64)((sizeof(uiValueArgs_) / sizeof(Str8FmtArg)) - 1);   \
+        const Str8FmtArg* uiValuePtr_ = (uiValueCount_ > 0) ? (uiValueArgs_ + 1) : nullptr; \
+        ui_label_value_((ui), (rgba8), str8(fmt), uiValuePtr_, uiValueCount_);              \
+    }())
 UI_Signal ui_button(UI_Context* ui, StringU8 label);
 B32 ui_checkbox(UI_Context* ui, StringU8 label, B32* value);
 B32 ui_slider(UI_Context* ui, StringU8 label, F32* value, F32 minValue, F32 maxValue);

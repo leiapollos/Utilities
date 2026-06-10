@@ -3,16 +3,17 @@
 //
 
 #define app_ui_stat_line(ui, rgba8, fmt, ...) \
-    ui_label_colored((ui), str8_fmt((ui)->frameArena, fmt, __VA_ARGS__), (rgba8))
+    ui_label_value((ui), (rgba8), fmt, __VA_ARGS__)
 
 static void app_demo_state_reset(AppDemoState* demo) {
-    StringU8 title = str8("draw2d + kb_text_shape + FreeType");
+    StringU8 title = str8("world: gpu-driven indirect draws");
     MEMSET(demo, 0, sizeof(*demo));
     MEMCPY(demo->titleBuffer, title.data, title.size);
     demo->titleLength = (U32)title.size;
-    demo->titleSize = 40.0f;
-    demo->showClipDemo = 1;
-    demo->showMarker = 1;
+    demo->titleSize = 32.0f;
+    demo->showBounds = 0;
+    demo->animate = 1;
+    demo->gridSide = 48u;
 }
 
 static void app_ui_controls_panel(APP_Context* ctx, UI_Context* ui) {
@@ -35,8 +36,12 @@ static void app_ui_controls_panel(APP_Context* ctx, UI_Context* ui) {
 
     ui_slider(ui, str8("size###title_size"), &demo->titleSize, 20.0f, 60.0f);
 
-    ui_checkbox(ui, str8("clip showcase"), &demo->showClipDemo);
-    ui_checkbox(ui, str8("debug marker"), &demo->showMarker);
+    F32 gridSide = (F32)demo->gridSide;
+    ui_slider(ui, str8("grid###world_grid"), &gridSide, 4.0f, 96.0f);
+    demo->gridSide = (U32)(gridSide + 0.5f);
+
+    ui_checkbox(ui, str8("cull bounds"), &demo->showBounds);
+    ui_checkbox(ui, str8("animate"), &demo->animate);
 
     ui_row_begin(ui, ui_grow(1.0f), ui_fit());
     if (ui_button(ui, str8("reset demo")).clicked) {
@@ -48,12 +53,6 @@ static void app_ui_controls_panel(APP_Context* ctx, UI_Context* ui) {
     }
     ui_row_end(ui);
 
-    ui_scroll_begin(ui, str8("###controls_scroll"), ui_grow(1.0f), ui_px(150.0f));
-    for (U32 lineIndex = 0u; lineIndex < 24u; ++lineIndex) {
-        app_ui_stat_line(ui, (lineIndex & 1u) ? UI_COLOR_TEXT_DIM : UI_COLOR_TEXT,
-                         "scroll line {} — wheel or drag the thumb", lineIndex);
-    }
-    ui_scroll_end(ui);
 
     ui_panel_end(ui);
 }
@@ -85,6 +84,11 @@ static void app_ui_stats_panel(APP_Context* ctx, UI_Context* ui) {
     app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "ui  widgets {}  retained {}  hits {}  evict {}  dup {}",
                      uiStats->widgetCount, uiStats->retainedCount, uiStats->hitRectCount,
                      uiStats->retainedEvictCount, uiStats->duplicateKeyCount);
+    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "ui text  value hits {}  misses {}  uncached {}",
+                     uiStats->valueRunHits, uiStats->valueRunMisses, uiStats->valueRunUninsertable);
+    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "world  renderables {}  meshes {}  cells {}",
+                     state->world.lastRenderableCount, state->world.meshCount,
+                     APP_WORLD_BIN_COUNT * state->world.meshCount);
 
     if (state->resources.artifactCache) {
         ArtifactStats artifact = artifact_cache_stats(state->resources.artifactCache);
@@ -110,17 +114,6 @@ static void app_ui_stats_panel(APP_Context* ctx, UI_Context* ui) {
     ui_panel_end(ui);
 }
 
-#define APP_PROF_MERGED_CAP 128u
-#define APP_PROF_NIL 0xFFFFFFFFu
-
-struct AppProfMergedNode {
-    U32 site;
-    U32 depth;
-    U32 firstChild;
-    U32 lastChild;
-    U32 nextSibling;
-};
-
 static void app_ui_profiler_row(UI_Context* ui, const ProfSiteStats* stats, U32 site, U32 depth,
                                 StringU8 rowKey, U32* ioSelectedSite) {
     const ProfSiteStats* siteStats = stats + site;
@@ -142,17 +135,54 @@ static void app_ui_profiler_row(UI_Context* ui, const ProfSiteStats* stats, U32 
                 indent = str8(padBytes, pad);
             }
         }
-        ui_label_colored(ui, str8_fmt((ui)->frameArena, "{}{}", indent, str8(siteStats->label)),
-                         UI_COLOR_TEXT);
+        ui_label_value(ui, UI_COLOR_TEXT, "{}{}", indent, str8(siteStats->label));
         temp_end(&scratch);
     }
 
     ui_spacer(ui, ui_grow(1.0f));
-    app_ui_stat_line(ui, UI_COLOR_TEXT, "{}", siteStats->avgInclMs);
-    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "{}", siteStats->avgExclMs);
-    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "{}", siteStats->maxInclMs);
+    app_ui_stat_line(ui, UI_COLOR_TEXT, "{:.3}", siteStats->avgInclMs);
+    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "{:.3}", siteStats->avgExclMs);
+    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "{:.3}", siteStats->maxInclMs);
     app_ui_stat_line(ui, 0x6B7480FFu, "x{}", (U32)(siteStats->avgHits + 0.5f));
     ui_row_end(ui);
+}
+
+static void app_ui_profiler_path_row(UI_Context* ui, const ProfSiteStats* stats,
+                                     const ProfPathStats* path, U32 pathIndex, U32* ioSelectedSite) {
+    const ProfSiteStats* siteStats = stats + path->site;
+
+    UI_Signal rowSignal = ui_row_begin_keyed(ui, str8_fmt(ui->frameArena, "###prof_p_{}", pathIndex),
+                                             ui_grow(1.0f), ui_px(22.0f),
+                                             (*ioSelectedSite == path->site));
+    if (rowSignal.clicked) {
+        *ioSelectedSite = path->site;
+    }
+
+    Temp scratch = get_scratch(0, 0);
+    if (scratch.arena) {
+        StringU8 indent = str8("");
+        if (path->depth != 0u) {
+            U64 pad = (U64)path->depth * 2u;
+            U8* padBytes = ARENA_PUSH_ARRAY(scratch.arena, U8, pad);
+            if (padBytes) {
+                MEMSET(padBytes, ' ', pad);
+                indent = str8(padBytes, pad);
+            }
+        }
+        ui_label_value(ui, UI_COLOR_TEXT, "{}{}", indent, str8(siteStats->label));
+        temp_end(&scratch);
+    }
+
+    ui_spacer(ui, ui_grow(1.0f));
+    app_ui_stat_line(ui, UI_COLOR_TEXT, "{:.3}", path->avgInclMs);
+    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "{:.3}", path->avgExclMs);
+    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "{:.3}", path->maxInclMs);
+    app_ui_stat_line(ui, 0x6B7480FFu, "x{}", (U32)(path->avgHits + 0.5f));
+    ui_row_end(ui);
+}
+
+static B32 app_ui_profiler_path_live(const ProfPathStats* path) {
+    return (path->avgInclMs > 0.0f || path->lastInclMs > 0.0f || path->avgHits > 0.0f) ? 1 : 0;
 }
 
 static void app_ui_profiler_panel(APP_Context* ctx, UI_Context* ui) {
@@ -175,7 +205,7 @@ static void app_ui_profiler_panel(APP_Context* ctx, UI_Context* ui) {
 
     F32 averageFrameMs = state->averageDeltaSeconds * 1000.0f;
     F32 fps = (state->averageDeltaSeconds > 0.0f) ? (1.0f / state->averageDeltaSeconds) : 0.0f;
-    app_ui_stat_line(ui, UI_COLOR_TEXT, "frame {}ms  {}fps  |  res {}ns  scope {}ns  drops {}  sites {}",
+    app_ui_stat_line(ui, UI_COLOR_TEXT, "frame {:.2}ms  {:.0}fps  |  res {:.0}ns  scope {:.1}ns  drops {}  sites {}",
                      averageFrameMs, fps, info.resolutionNs, info.overheadNsPerScope,
                      info.droppedEvents, info.siteCount);
 
@@ -227,81 +257,46 @@ static void app_ui_profiler_panel(APP_Context* ctx, UI_Context* ui) {
                                 &state->profSelectedSite);
         }
     } else {
+        PROF_SCOPE("tree view");
+        U32 pathCount = 0u;
+        const ProfPathStats* paths = prof_path_stats(&pathCount);
         const ProfFrameView* view = prof_frame_view();
-        if (view) {
+        if (view && paths) {
             for (U32 laneIndex = 0u; laneIndex < view->laneCount; ++laneIndex) {
                 const ProfLaneView* lane = view->lanes + laneIndex;
-                ui_label_colored(ui, str8_fmt(ui->frameArena, "[{}]", str8(lane->name)), 0x6B7480FFu);
+                ui_label_value(ui, 0x6B7480FFu, "[{}]", str8(lane->name));
 
-                AppProfMergedNode merged[APP_PROF_MERGED_CAP];
-                U32 mergedCount = 0u;
-                U32 rootFirst = APP_PROF_NIL;
-                U32 rootLast = APP_PROF_NIL;
-                U32 depthStack[PROF_OPEN_STACK_DEPTH];
-                for (U32 nodeIndex = 0u; nodeIndex < lane->nodeCount; ++nodeIndex) {
-                    const ProfFrameNode* node = lane->nodes + nodeIndex;
-                    U32 depth = node->depth;
-                    if (depth >= PROF_OPEN_STACK_DEPTH) {
+                for (U32 root = 1u; root < pathCount; ++root) {
+                    if (paths[root].parent != PROF_PATH_NIL || paths[root].thread != lane->threadIndex) {
                         continue;
                     }
-                    U32* firstLink = &rootFirst;
-                    U32* lastLink = &rootLast;
-                    if (depth != 0u) {
-                        U32 parent = depthStack[depth - 1u];
-                        if (parent == APP_PROF_NIL) {
-                            depthStack[depth] = APP_PROF_NIL;
+                    if (!app_ui_profiler_path_live(paths + root)) {
+                        continue;
+                    }
+                    app_ui_profiler_path_row(ui, stats, paths + root, root, &state->profSelectedSite);
+
+                    U32 walkStack[PROF_OPEN_STACK_DEPTH];
+                    U32 walkTop = 0u;
+                    U32 current = paths[root].firstChild;
+                    while (current != PROF_PATH_NIL || walkTop != 0u) {
+                        if (current == PROF_PATH_NIL) {
+                            walkTop -= 1u;
+                            current = paths[walkStack[walkTop]].nextSibling;
                             continue;
                         }
-                        firstLink = &merged[parent].firstChild;
-                        lastLink = &merged[parent].lastChild;
-                    }
-                    U32 found = APP_PROF_NIL;
-                    for (U32 m = *firstLink; m != APP_PROF_NIL; m = merged[m].nextSibling) {
-                        if (merged[m].site == node->site) {
-                            found = m;
-                            break;
-                        }
-                    }
-                    if (found == APP_PROF_NIL) {
-                        if (mergedCount >= APP_PROF_MERGED_CAP) {
-                            depthStack[depth] = APP_PROF_NIL;
+                        if (!app_ui_profiler_path_live(paths + current)) {
+                            current = paths[current].nextSibling;
                             continue;
                         }
-                        found = mergedCount;
-                        mergedCount += 1u;
-                        merged[found].site = node->site;
-                        merged[found].depth = depth;
-                        merged[found].firstChild = APP_PROF_NIL;
-                        merged[found].lastChild = APP_PROF_NIL;
-                        merged[found].nextSibling = APP_PROF_NIL;
-                        if (*lastLink == APP_PROF_NIL) {
-                            *firstLink = found;
+                        app_ui_profiler_path_row(ui, stats, paths + current, current,
+                                                 &state->profSelectedSite);
+                        if (paths[current].firstChild != PROF_PATH_NIL && walkTop < PROF_OPEN_STACK_DEPTH) {
+                            walkStack[walkTop] = current;
+                            walkTop += 1u;
+                            current = paths[current].firstChild;
                         } else {
-                            merged[*lastLink].nextSibling = found;
+                            current = paths[current].nextSibling;
                         }
-                        *lastLink = found;
-                    }
-                    depthStack[depth] = found;
-                }
-
-                U32 walkStack[PROF_OPEN_STACK_DEPTH];
-                U32 walkTop = 0u;
-                U32 current = rootFirst;
-                while (current != APP_PROF_NIL || walkTop != 0u) {
-                    if (current == APP_PROF_NIL) {
-                        walkTop -= 1u;
-                        current = merged[walkStack[walkTop]].nextSibling;
-                        continue;
-                    }
-                    app_ui_profiler_row(ui, stats, merged[current].site, merged[current].depth,
-                                        str8_fmt(ui->frameArena, "###prof_m_{}_{}", laneIndex, current),
-                                        &state->profSelectedSite);
-                    if (merged[current].firstChild != APP_PROF_NIL && walkTop < PROF_OPEN_STACK_DEPTH) {
-                        walkStack[walkTop] = current;
-                        walkTop += 1u;
-                        current = merged[current].firstChild;
-                    } else {
-                        current = merged[current].nextSibling;
                     }
                 }
             }
@@ -311,7 +306,7 @@ static void app_ui_profiler_panel(APP_Context* ctx, UI_Context* ui) {
 
     if (state->profSelectedSite != 0u && state->profSelectedSite < siteCount) {
         const ProfSiteStats* selected = stats + state->profSelectedSite;
-        app_ui_stat_line(ui, UI_COLOR_TEXT_BRIGHT, "{}  avg {}ms  max {}ms",
+        app_ui_stat_line(ui, UI_COLOR_TEXT_BRIGHT, "{}  avg {:.3}ms  max {:.3}ms",
                          str8(selected->label), selected->avgInclMs, selected->maxInclMs);
         ui_plot(ui, selected->historyMs, PROF_HISTORY_FRAMES, historyOffset, ui_grow(1.0f), ui_px(48.0f));
     }

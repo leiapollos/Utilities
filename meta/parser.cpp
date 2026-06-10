@@ -47,11 +47,37 @@ static ASTField* parse_field(Parser* parser) {
         return nullptr;
     }
     field->typeName = typeTok.text;
-    
+
+    if (lexer_accept(parser->lexer, TokenKind_OpenBracket, nullptr)) {
+        Token countTok;
+        if (!lexer_expect(parser->lexer, TokenKind_Number, &countTok)) {
+            parser_error_(parser, str8("Expected array count after '['"));
+            return nullptr;
+        }
+        U32 arrayCount = 0;
+        for (U64 at = 0; at < countTok.text.size; ++at) {
+            U8 c = countTok.text.data[at];
+            if (c < '0' || c > '9') {
+                parser_error_(parser, str8("Array count must be a decimal integer"));
+                return nullptr;
+            }
+            arrayCount = arrayCount * 10u + (U32)(c - '0');
+        }
+        if (arrayCount == 0u || arrayCount > 64u) {
+            parser_error_(parser, str8("Array count must be in [1, 64]"));
+            return nullptr;
+        }
+        field->arrayCount = arrayCount;
+        if (!lexer_expect(parser->lexer, TokenKind_CloseBracket, nullptr)) {
+            parser_error_(parser, str8("Expected ']' after array count"));
+            return nullptr;
+        }
+    }
+
     if (lexer_accept(parser->lexer, TokenKind_Ampersand, nullptr)) {
         field->isReference = 1;
     }
-    
+
     return field;
 }
 
@@ -198,12 +224,22 @@ static ASTShaderRecord* parse_shader_record(Parser* parser) {
     ASTShaderRecord* record = ARENA_PUSH_STRUCT(parser->arena, ASTShaderRecord);
     MEMSET(record, 0, sizeof(ASTShaderRecord));
 
-    if (lexer_accept(parser->lexer, TokenKind_At, nullptr)) {
-        if (!lexer_expect(parser->lexer, TokenKind_KW_RootData, nullptr)) {
-            parser_error_(parser, str8("Expected 'root_data' after '@'"));
+    while (lexer_accept(parser->lexer, TokenKind_At, nullptr)) {
+        Token directive = lexer_peek_token(parser->lexer);
+        if (directive.kind == TokenKind_KW_RootData) {
+            lexer_skip_token(parser->lexer);
+            record->isRootData = 1;
+        } else if (directive.kind == TokenKind_Identifier && str8_equal(directive.text, str8("compute"))) {
+            lexer_skip_token(parser->lexer);
+            record->isComputeRoot = 1;
+        } else {
+            parser_error_(parser, str8("Expected 'root_data' or 'compute' after '@'"));
             return nullptr;
         }
-        record->isRootData = 1;
+    }
+    if (record->isComputeRoot && !record->isRootData) {
+        parser_error_(parser, str8("'@compute' requires '@root_data'"));
+        return nullptr;
     }
 
     Token nameTok;
@@ -221,11 +257,8 @@ static ASTShaderRecord* parse_shader_record(Parser* parser) {
         parser_error_(parser, str8("Shader record needs at least one field"));
         return nullptr;
     }
-    if (record->isRootData && record->fieldCount > 16) {
-        parser_error_(parser, str8("Root data records are limited to 16 words"));
-        return nullptr;
-    }
 
+    record->wordCount = 0;
     for (ASTField* field = record->fields; field; field = field->next) {
         if (field->isPointer || field->isReference) {
             parser_error_(parser, str8("Shader record fields cannot be pointers or references"));
@@ -236,6 +269,13 @@ static ASTShaderRecord* parse_shader_record(Parser* parser) {
             parser_error_(parser, str8_fmt(parser->arena, "Shader record field type must be U32 or F32, got '{}'", field->typeName));
             return nullptr;
         }
+        record->wordCount += field->arrayCount ? field->arrayCount : 1u;
+    }
+
+    U32 rootWordLimit = record->isComputeRoot ? 24u : 16u;
+    if (record->isRootData && record->wordCount > rootWordLimit) {
+        parser_error_(parser, str8_fmt(parser->arena, "Root data record '{}' exceeds {} words", record->name, rootWordLimit));
+        return nullptr;
     }
 
     return record;

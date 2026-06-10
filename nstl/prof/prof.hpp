@@ -18,6 +18,9 @@
 #define PROF_CAT_DEFAULT (1u << 0u)
 #define PROF_CAT_GPU (1u << 1u)
 
+#define PROF_MAX_PATHS 1024u
+#define PROF_PATH_NIL 0xFFFFFFFFu
+
 struct ProfTls {
     U64* entries;
     U64* head;
@@ -27,6 +30,7 @@ struct ProfTls {
 struct ProfFrameNode {
     U32 site;
     U32 depth;
+    U32 path;
     U64 startNs;
     U64 endNs;
 };
@@ -35,7 +39,22 @@ struct ProfLaneView {
     const char* name;
     const ProfFrameNode* nodes;
     U32 nodeCount;
+    U32 threadIndex;
     B32 isGpu;
+};
+
+struct ProfPathStats {
+    U32 site;
+    U32 parent;
+    U32 firstChild;
+    U32 nextSibling;
+    U32 thread;
+    U32 depth;
+    F32 avgInclMs;
+    F32 avgExclMs;
+    F32 maxInclMs;
+    F32 avgHits;
+    F32 lastInclMs;
 };
 
 struct ProfFrameView {
@@ -88,6 +107,7 @@ UTILITIES_SHARED_API U64 prof_tick_to_ns(U64 tick);
 UTILITIES_SHARED_API U64 prof_now_ns();
 UTILITIES_SHARED_API const ProfFrameView* prof_frame_view();
 UTILITIES_SHARED_API const ProfSiteStats* prof_site_stats(U32* outCount);
+UTILITIES_SHARED_API const ProfPathStats* prof_path_stats(U32* outCount);
 UTILITIES_SHARED_API const F32* prof_frame_history(U32* outCount, U32* outOffset);
 UTILITIES_SHARED_API ProfInfo prof_info();
 UTILITIES_SHARED_API B32 prof_capture(U32 frameCount, const char* directory);

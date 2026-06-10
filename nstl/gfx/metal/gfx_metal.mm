@@ -1955,18 +1955,6 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
 
     gfx_metal_release_frame_objects(frame);
 
-    id<CAMetalDrawable> drawable = 0;
-    {
-        PROF_SCOPE("acquire drawable");
-        drawable = [device->metalLayer nextDrawable];
-    }
-    if (!drawable) {
-        LOG_ERROR("gfx", "Metal layer did not provide a drawable");
-        dispatch_semaphore_signal(device->frameSemaphore);
-        return 0;
-    }
-
-    frame->drawable = [drawable retain];
     if (gfx_metal_backend_validation_enabled(device)) {
         MTLCommandBufferDescriptor* commandBufferDesc = [[MTLCommandBufferDescriptor alloc] init];
         commandBufferDesc.errorOptions = MTLCommandBufferErrorOptionEncoderExecutionStatus;
@@ -1981,16 +1969,9 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
         return 0;
     }
 
-    id<MTLTexture> drawableTexture = [drawable texture];
     GfxMetalTexture* backbuffer = gfx_metal_resolve_texture(device, device->backbuffer);
     if (backbuffer) {
-        backbuffer->texture = drawableTexture;
-        backbuffer->width = (U32)[drawableTexture width];
-        backbuffer->height = (U32)[drawableTexture height];
-        backbuffer->mipCount = 1u;
-        backbuffer->format = GfxFormat_BGRA8_UNorm;
-        backbuffer->storageKind = GfxTextureStorageKind_Device;
-        backbuffer->usageFlags = GfxTextureUsageFlags_ColorTarget;
+        backbuffer->texture = nil;
     }
 
     if (device->gpuTimingsEnabled && frame->timestampSamples && frame->timedPassCount != 0u) {
@@ -2285,6 +2266,34 @@ B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRe
     return 1;
 }
 
+static B32 gfx_metal_ensure_drawable_(GfxDevice* device, GfxFrame* frame) {
+    if (frame->drawable) {
+        return 1;
+    }
+    id<CAMetalDrawable> drawable = 0;
+    {
+        PROF_SCOPE("acquire drawable");
+        drawable = [device->metalLayer nextDrawable];
+    }
+    if (!drawable) {
+        LOG_ERROR("gfx", "Metal layer did not provide a drawable");
+        return 0;
+    }
+    frame->drawable = [drawable retain];
+    id<MTLTexture> drawableTexture = [drawable texture];
+    GfxMetalTexture* backbuffer = gfx_metal_resolve_texture(device, device->backbuffer);
+    if (backbuffer) {
+        backbuffer->texture = drawableTexture;
+        backbuffer->width = (U32)[drawableTexture width];
+        backbuffer->height = (U32)[drawableTexture height];
+        backbuffer->mipCount = 1u;
+        backbuffer->format = GfxFormat_BGRA8_UNorm;
+        backbuffer->storageKind = GfxTextureStorageKind_Device;
+        backbuffer->usageFlags = GfxTextureUsageFlags_ColorTarget;
+    }
+    return 1;
+}
+
 void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, const GfxDrawArea* areas, U32 areaCount) {
     if (!commands || !commands->frame || !desc) {
         return;
@@ -2294,6 +2303,15 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
     GfxDevice* device = frame->device;
     if (!frame->active || !frame->commandBuffer) {
         return;
+    }
+
+    for (U32 targetIndex = 0; targetIndex < desc->colorTargetCount && desc->colorTargets; ++targetIndex) {
+        const GfxColorTarget* target = &desc->colorTargets[targetIndex];
+        if (target->texture.index == device->backbuffer.index &&
+            target->texture.generation == device->backbuffer.generation) {
+            gfx_metal_ensure_drawable_(device, frame);
+            break;
+        }
     }
 
     gfx_metal_api_assert(device, desc->colorTargetCount > 0u);

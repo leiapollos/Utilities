@@ -5,7 +5,7 @@
 #define TEXT_SHAPE_CONTEXT_MEMORY_SIZE MB(4)
 #define TEXT_ATLAS_UPLOAD_PITCH_ALIGNMENT 256u
 
-#define TEXT_RUN_CACHE_SLOTS 1024u
+#define TEXT_RUN_CACHE_SLOTS 2048u
 #define TEXT_RUN_CACHE_SLOT_QUADS 48u
 #define TEXT_RUN_CACHE_PROBE 8u
 #define TEXT_RUN_CACHE_EXPIRE_FRAMES 120u
@@ -206,30 +206,16 @@ static void text_run_cache_insert(TextContext* text, U64 key, const TextQuad* qu
     MEMCPY(text->runQuads + slotIndex * TEXT_RUN_CACHE_SLOT_QUADS, quads, quadCount * sizeof(TextQuad));
 }
 
-static TextDrawData text_run_cache_emit(TextContext* text, Arena* frameArena, TextRunEntry* entry,
-                                        const TextDrawDesc* desc) {
-    TextDrawData result = text_draw_data_nil();
-    U32 quadCount = entry->quadCount;
-    TextQuad* out = ARENA_PUSH_ARRAY(frameArena, TextQuad, quadCount ? quadCount : 1u);
-    if (!out) {
-        return result;
-    }
+static TextRunView text_run_view_from_entry_(TextContext* text, TextRunEntry* entry, U64 key) {
+    TextRunView view = {};
     U64 slotIndex = (U64)(entry - text->runEntries);
-    const TextQuad* src = text->runQuads + slotIndex * TEXT_RUN_CACHE_SLOT_QUADS;
-    for (U32 at = 0u; at < quadCount; ++at) {
-        TextQuad quad = src[at];
-        quad.minX += desc->x;
-        quad.maxX += desc->x;
-        quad.minY += desc->y;
-        quad.maxY += desc->y;
-        quad.rgba8 = desc->rgba8;
-        out[at] = quad;
-    }
-    result.quads = out;
-    result.quadCount = quadCount;
-    result.width = entry->width;
-    result.height = entry->height;
-    return result;
+    view.quads = text->runQuads + slotIndex * TEXT_RUN_CACHE_SLOT_QUADS;
+    view.quadCount = entry->quadCount;
+    view.width = entry->width;
+    view.height = entry->height;
+    view.slot = (U32)slotIndex;
+    view.key = key;
+    return view;
 }
 
 static B32 text_atlas_alloc(TextContext* text, U32 width, U32 height, U32* outX, U32* outY) {
@@ -770,21 +756,22 @@ static TextDrawData text_shape_run_origin(TextContext* text, Arena* frameArena, 
     return result;
 }
 
-TextDrawData text_prepare_draw(TextContext* text, Arena* frameArena, const TextDrawDesc* desc) {
+TextRunView text_prepare_run(TextContext* text, Arena* frameArena, const TextRunDesc* desc) {
     PROF_FUNCTION();
-    TextDrawData result = text_draw_data_nil();
+    TextRunView view = {};
+    view.slot = TEXT_RUN_NO_SLOT;
     if (!text || !frameArena || !desc || desc->text.size == 0u || desc->pixelSize <= 0.0f) {
-        return result;
+        return view;
     }
 
     TextFontSlot* font = text_font_slot_from_handle(text, desc->font);
     if (!font || !font->ftFace || !font->kbFontValid || !desc->text.data) {
-        return result;
+        return view;
     }
 
     U32 pixelSize = (U32)(desc->pixelSize + 0.5f);
     if (pixelSize == 0u || pixelSize > 512u || desc->text.size > (U64)0x7fffffffu) {
-        return result;
+        return view;
     }
 
     U64 runKey = text_run_key(desc->text, font->index, font->generation, pixelSize);
@@ -795,7 +782,7 @@ TextDrawData text_prepare_draw(TextContext* text, Arena* frameArena, const TextD
 #if TEXT_RUN_CACHE_VALIDATE
         {
             TextDrawData fresh = text_shape_run_origin(text, frameArena, font, desc->text, pixelSize,
-                                                       desc->rgba8);
+                                                       0xFFFFFFFFu);
             ASSERT_ALWAYS(fresh.quadCount == cached->quadCount);
             ASSERT_ALWAYS(fresh.width == cached->width);
             ASSERT_ALWAYS(fresh.height == cached->height);
@@ -813,20 +800,76 @@ TextDrawData text_prepare_draw(TextContext* text, Arena* frameArena, const TextD
             }
         }
 #endif
-        return text_run_cache_emit(text, frameArena, cached, desc);
+        return text_run_view_from_entry_(text, cached, runKey);
     }
     text->runMisses += 1ull;
 
-    result = text_shape_run_origin(text, frameArena, font, desc->text, pixelSize, desc->rgba8);
-    if (result.quads && !result.atlasOverflow && result.quadCount <= TEXT_RUN_CACHE_SLOT_QUADS) {
-        text_run_cache_insert(text, runKey, result.quads, result.quadCount, result.width, result.height);
+    TextDrawData shaped = text_shape_run_origin(text, frameArena, font, desc->text, pixelSize, 0xFFFFFFFFu);
+    view.uploads = shaped.uploads;
+    view.uploadCount = shaped.uploadCount;
+    if (shaped.quads && !shaped.atlasOverflow && shaped.quadCount <= TEXT_RUN_CACHE_SLOT_QUADS) {
+        text_run_cache_insert(text, runKey, shaped.quads, shaped.quadCount, shaped.width, shaped.height);
+        TextRunEntry* inserted = text_run_cache_find(text, runKey);
+        if (inserted) {
+            TextRunView stored = text_run_view_from_entry_(text, inserted, runKey);
+            stored.uploads = shaped.uploads;
+            stored.uploadCount = shaped.uploadCount;
+            return stored;
+        }
     }
-    for (U32 at = 0u; at < result.quadCount; ++at) {
-        result.quads[at].minX += desc->x;
-        result.quads[at].maxX += desc->x;
-        result.quads[at].minY += desc->y;
-        result.quads[at].maxY += desc->y;
+    view.quads = shaped.quads;
+    view.quadCount = shaped.quadCount;
+    view.width = shaped.width;
+    view.height = shaped.height;
+    return view;
+}
+
+B32 text_run_resolve(TextContext* text, U32 slot, U64 key, TextRunView* outView) {
+    if (!text || !outView || slot >= TEXT_RUN_CACHE_SLOTS || key == 0ull || !text->runEntries) {
+        return 0;
     }
+    TextRunEntry* entry = text->runEntries + slot;
+    if (entry->key != key) {
+        return 0;
+    }
+    entry->lastUsedFrame = text->runFrameIndex;
+    text->runHits += 1ull;
+    *outView = text_run_view_from_entry_(text, entry, key);
+    return 1;
+}
+
+TextDrawData text_prepare_draw(TextContext* text, Arena* frameArena, const TextDrawDesc* desc) {
+    TextDrawData result = text_draw_data_nil();
+    if (!desc || !frameArena) {
+        return result;
+    }
+    TextRunDesc runDesc = {};
+    runDesc.font = desc->font;
+    runDesc.text = desc->text;
+    runDesc.pixelSize = desc->pixelSize;
+    TextRunView view = text_prepare_run(text, frameArena, &runDesc);
+    if (!view.quads && view.quadCount == 0u) {
+        return result;
+    }
+    TextQuad* out = ARENA_PUSH_ARRAY(frameArena, TextQuad, view.quadCount ? view.quadCount : 1u);
+    if (!out) {
+        return result;
+    }
+    for (U32 at = 0u; at < view.quadCount; ++at) {
+        TextQuad quad = view.quads[at];
+        quad.minX += desc->x;
+        quad.maxX += desc->x;
+        quad.minY += desc->y;
+        quad.maxY += desc->y;
+        quad.rgba8 = desc->rgba8;
+        out[at] = quad;
+    }
+    result.quads = out;
+    result.quadCount = view.quadCount;
+    result.uploads = view.uploads;
+    result.uploadCount = view.uploadCount;
+    result.width = view.width;
+    result.height = view.height;
     return result;
 }
 

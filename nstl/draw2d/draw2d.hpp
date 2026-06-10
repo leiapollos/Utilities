@@ -67,3 +67,4 @@ void draw2d_rect(Draw2DContext* ctx, Draw2DLayer layer, F32 minX, F32 minY, F32 
 void draw2d_line(Draw2DContext* ctx, Draw2DLayer layer, F32 x0, F32 y0, F32 x1, F32 y1, F32 thickness, U32 rgba8);
 void draw2d_box(Draw2DContext* ctx, Draw2DLayer layer, F32 minX, F32 minY, F32 maxX, F32 maxY, F32 thickness, U32 rgba8);
 void draw2d_glyph_quads(Draw2DContext* ctx, Draw2DLayer layer, const Draw2DQuad* quads, U32 count, F32 offsetX, F32 offsetY);
+void draw2d_glyph_run(Draw2DContext* ctx, Draw2DLayer layer, const Draw2DQuad* quads, U32 count, F32 offsetX, F32 offsetY, U32 rgba8);
