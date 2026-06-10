@@ -51,6 +51,22 @@ static const char* APP_WORLD_SHADER_PATHS[APP_WORLD_SHADER_COUNT] = {
     APP_SHADER_WORLD_ARGS_RUNTIME_PATH,
 };
 
+// Demo asset policy: which cooked assets exist and which material slot each
+// texture binds. Module rodata; hot state stores handles only.
+struct AppWorldDemoAssetDesc {
+    const char* meshPath;
+    const char* texturePath;
+    const char* meshLabel;
+    const char* textureLabel;
+    U32 materialIndex;
+};
+
+static const AppWorldDemoAssetDesc APP_WORLD_DEMO_ASSETS[APP_WORLD_DEMO_ASSET_COUNT] = {
+    {"app/assets/cooked/Duck.umsh", "app/assets/cooked/Duck.utex",
+     "assets/Duck.umsh", "assets/Duck.utex", 9u},
+    {"app/assets/cooked/Avocado.umsh", "app/assets/cooked/Avocado.utex",
+     "assets/Avocado.umsh", "assets/Avocado.utex", 10u},
+};
 
 static void app_renderer_log_once(AppCoreState* state, U32 bit, const char* message) {
     if (state == 0 || message == 0 || FLAGS_HAS(state->render2d.loadLogMask, bit)) {
@@ -104,10 +120,15 @@ static void app_renderer_watch_files(APP_Context* ctx) {
     state->render2d.fragmentShaderFile = file_watch(state->resources.fileStream, fragmentPath, 0u);
     state->render2d.fontFile = file_watch(state->resources.fileStream, fontPath, 0u);
 
-    StringU8 duckMeshPath = str8_concat(scratch.arena, exeDir, str8("/../app/assets/cooked/Duck.umsh"));
-    StringU8 duckTexturePath = str8_concat(scratch.arena, exeDir, str8("/../app/assets/cooked/Duck.utex"));
-    state->world.duckMeshFile = file_watch(state->resources.fileStream, duckMeshPath, 0u);
-    state->world.duckTextureFile = file_watch(state->resources.fileStream, duckTexturePath, 0u);
+    for (U32 assetIndex = 0u; assetIndex < APP_WORLD_DEMO_ASSET_COUNT; ++assetIndex) {
+        const AppWorldDemoAssetDesc* asset = APP_WORLD_DEMO_ASSETS + assetIndex;
+        StringU8 meshPath = str8_concat(scratch.arena, exeDir, str8("/../"));
+        meshPath = str8_concat(scratch.arena, meshPath, str8(asset->meshPath));
+        StringU8 texturePath = str8_concat(scratch.arena, exeDir, str8("/../"));
+        texturePath = str8_concat(scratch.arena, texturePath, str8(asset->texturePath));
+        state->world.assetMeshFiles[assetIndex] = file_watch(state->resources.fileStream, meshPath, 0u);
+        state->world.assetTextureFiles[assetIndex] = file_watch(state->resources.fileStream, texturePath, 0u);
+    }
 
     for (U32 shaderIndex = 0u; shaderIndex < APP_WORLD_SHADER_COUNT; ++shaderIndex) {
         StringU8 worldPath = str8_concat(scratch.arena, exeDir, str8("/../"));
@@ -779,11 +800,17 @@ static B32 app_world_try_create_resources_(APP_Context* ctx) {
     materials[8].baseColor[1] = 0.45f;
     materials[8].baseColor[2] = 0.55f;
     materials[8].baseColor[3] = 0.42f;
+    // 9 and 10: asset materials (Duck, Avocado); white until a texture publish
+    // flips the textured flag.
     materials[9].baseColor[0] = 1.0f;
     materials[9].baseColor[1] = 1.0f;
     materials[9].baseColor[2] = 1.0f;
     materials[9].baseColor[3] = 1.0f;
-    world->materialCount = 10u;
+    materials[10].baseColor[0] = 1.0f;
+    materials[10].baseColor[1] = 1.0f;
+    materials[10].baseColor[2] = 1.0f;
+    materials[10].baseColor[3] = 1.0f;
+    world->materialCount = 11u;
     world->materialsDirty = 1;
 
     GfxSamplerDesc worldSamplerDesc = {};
@@ -889,8 +916,11 @@ static B32 app_world_try_create_resources_(APP_Context* ctx) {
 #define APP_ARTIFACT_TYPE_TEXTURE 0x54455855u
 #define APP_ARTIFACT_PUBLISHED_MARK 1ull
 
+// materialIndex rides the request so the texture publish knows its target
+// material; mesh requests ignore it.
 struct AppAssetRequest {
     ContentHash hash;
+    U32 materialIndex;
 };
 
 static B32 app_asset_build_blob_(ArtifactBuildContext* buildCtx, U32 expectedMagic, U64 minimumSize,
@@ -1085,12 +1115,17 @@ static B32 app_texture_artifact_publish_(ArtifactPublishContext* publishCtx, Art
         world->assetTextureCount += 1u;
     }
 
-    ShdWorldMaterialRecord* duckMaterial = &world->materialRecords[9];
-    duckMaterial->textureIndex = textureId.index;
-    duckMaterial->samplerIndex = world->worldSamplerId.index;
-    duckMaterial->flags |= APP_WORLD_MATERIAL_FLAG_TEXTURED;
+    const AppAssetRequest* request = (const AppAssetRequest*)publishCtx->requestData;
+    U32 materialIndex = (request && publishCtx->requestDataSize >= sizeof(AppAssetRequest))
+        ? request->materialIndex : 0u;
+    if (materialIndex >= APP_WORLD_MAX_MATERIALS) {
+        materialIndex = 0u;
+    }
+    ShdWorldMaterialRecord* material = &world->materialRecords[materialIndex];
+    material->textureIndex = textureId.index;
+    material->samplerIndex = world->worldSamplerId.index;
+    material->flags |= APP_WORLD_MATERIAL_FLAG_TEXTURED;
     world->materialsDirty = 1;
-    world->duckTextureReady = 1;
 
     outValue->u64[0] = texture.index;
     outValue->u64[1] = texture.generation;
@@ -1184,29 +1219,35 @@ static void app_world_try_load_assets_(APP_Context* ctx) {
         return;
     }
 
-    FileView meshView = file_view(state->resources.fileStream, world->duckMeshFile);
-    if (meshView.status == FileStatus_Ready && !content_hash_is_zero(meshView.hash)) {
-        AppAssetRequest request = {};
-        request.hash = meshView.hash;
-        ArtifactResult result = artifact_get(state->resources.artifactCache, APP_ARTIFACT_TYPE_MESH,
-                                             app_artifact_key_from_label("assets/Duck.umsh"),
-                                             meshView.generation, &request, sizeof(request),
-                                             ArtifactGetFlags_None, 0u);
-        if (result.status == ArtifactStatus_Ready &&
-            result.value.u64[3] == APP_ARTIFACT_PUBLISHED_MARK) {
-            world->duckMesh.index = (U32)result.value.u64[0];
-            world->duckMesh.generation = (U32)result.value.u64[1];
-        }
-    }
+    for (U32 assetIndex = 0u; assetIndex < APP_WORLD_DEMO_ASSET_COUNT; ++assetIndex) {
+        const AppWorldDemoAssetDesc* asset = APP_WORLD_DEMO_ASSETS + assetIndex;
 
-    FileView textureView = file_view(state->resources.fileStream, world->duckTextureFile);
-    if (textureView.status == FileStatus_Ready && !content_hash_is_zero(textureView.hash)) {
-        AppAssetRequest request = {};
-        request.hash = textureView.hash;
-        artifact_get(state->resources.artifactCache, APP_ARTIFACT_TYPE_TEXTURE,
-                     app_artifact_key_from_label("assets/Duck.utex"),
-                     textureView.generation, &request, sizeof(request),
-                     ArtifactGetFlags_None, 0u);
+        FileView meshView = file_view(state->resources.fileStream, world->assetMeshFiles[assetIndex]);
+        if (meshView.status == FileStatus_Ready && !content_hash_is_zero(meshView.hash)) {
+            AppAssetRequest request = {};
+            request.hash = meshView.hash;
+            request.materialIndex = asset->materialIndex;
+            ArtifactResult result = artifact_get(state->resources.artifactCache, APP_ARTIFACT_TYPE_MESH,
+                                                 app_artifact_key_from_label(asset->meshLabel),
+                                                 meshView.generation, &request, sizeof(request),
+                                                 ArtifactGetFlags_None, 0u);
+            if (result.status == ArtifactStatus_Ready &&
+                result.value.u64[3] == APP_ARTIFACT_PUBLISHED_MARK) {
+                world->assetMeshes[assetIndex].index = (U32)result.value.u64[0];
+                world->assetMeshes[assetIndex].generation = (U32)result.value.u64[1];
+            }
+        }
+
+        FileView textureView = file_view(state->resources.fileStream, world->assetTextureFiles[assetIndex]);
+        if (textureView.status == FileStatus_Ready && !content_hash_is_zero(textureView.hash)) {
+            AppAssetRequest request = {};
+            request.hash = textureView.hash;
+            request.materialIndex = asset->materialIndex;
+            artifact_get(state->resources.artifactCache, APP_ARTIFACT_TYPE_TEXTURE,
+                         app_artifact_key_from_label(asset->textureLabel),
+                         textureView.generation, &request, sizeof(request),
+                         ArtifactGetFlags_None, 0u);
+        }
     }
 }
 

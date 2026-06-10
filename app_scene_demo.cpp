@@ -52,7 +52,7 @@ static void app_scene_extract_range_(const AppSceneExtractParams* params, U64 la
         AppWorldMeshHandle mesh = ((cellSeed & 3u) == 0u) ? world->builtinMeshes[1]
                                                           : world->builtinMeshes[0];
         U32 lane = cellSeed % 11u;
-        if (lane == 9u && world->duckMesh.generation != 0u) {
+        if (lane == 9u && world->assetMeshes[0].generation != 0u) {
             F32 halfSide = (F32)(side - 1u) * 0.5f;
             Mat4x4F32 duckTransform = mat4_scale(app_world_vec3_(0.012f, 0.012f, 0.012f));
             QuatF32 duckSpin = quat_from_axis_angle(app_world_vec3_(0.0f, 1.0f, 0.0f),
@@ -61,7 +61,19 @@ static void app_scene_extract_range_(const AppSceneExtractParams* params, U64 la
             duckTransform = duckTransform * mat4_translate(app_world_vec3_(
                 ((F32)x - halfSide) * APP_SCENE_GRID_SPACING, 0.0f,
                 ((F32)z - halfSide) * APP_SCENE_GRID_SPACING));
-            app_world_writer_push_(world, writer, world->duckMesh, 9u, AppWorldBin_Opaque, &duckTransform);
+            app_world_writer_push_(world, writer, world->assetMeshes[0], 9u, AppWorldBin_Opaque, &duckTransform);
+            continue;
+        }
+        if (lane == 1u && world->assetMeshes[1].generation != 0u) {
+            F32 halfSide = (F32)(side - 1u) * 0.5f;
+            Mat4x4F32 avocadoTransform = mat4_scale(app_world_vec3_(22.0f, 22.0f, 22.0f));
+            QuatF32 avocadoSpin = quat_from_axis_angle(app_world_vec3_(0.0f, 1.0f, 0.0f),
+                                                       (F32)cellSeed * 1.3f);
+            avocadoTransform = avocadoTransform * quat_to_mat4(avocadoSpin);
+            avocadoTransform = avocadoTransform * mat4_translate(app_world_vec3_(
+                ((F32)x - halfSide) * APP_SCENE_GRID_SPACING, 0.0f,
+                ((F32)z - halfSide) * APP_SCENE_GRID_SPACING));
+            app_world_writer_push_(world, writer, world->assetMeshes[1], 10u, AppWorldBin_Opaque, &avocadoTransform);
             continue;
         }
         if (lane == 3u) {

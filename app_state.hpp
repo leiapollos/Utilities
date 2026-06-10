@@ -71,6 +71,7 @@ struct AppCoreState;
 #define APP_WORLD_FRAME_BUFFER_COUNT 2u
 #define APP_WORLD_SHADER_COUNT 7u
 #define APP_WORLD_MAX_LANES 16u
+#define APP_WORLD_DEMO_ASSET_COUNT 2u
 
 enum AppWorldBin {
     AppWorldBin_Opaque = 0,
@@ -165,10 +166,9 @@ struct AppWorldState {
     GfxTexture assetTextures[APP_WORLD_MAX_MESHES];
     U32 assetTextureCount;
 
-    FileHandle duckMeshFile;
-    FileHandle duckTextureFile;
-    AppWorldMeshHandle duckMesh;
-    B32 duckTextureReady;
+    FileHandle assetMeshFiles[APP_WORLD_DEMO_ASSET_COUNT];
+    FileHandle assetTextureFiles[APP_WORLD_DEMO_ASSET_COUNT];
+    AppWorldMeshHandle assetMeshes[APP_WORLD_DEMO_ASSET_COUNT];
     AppWorldArtifactBridge artifactBridge;
 
     ShdWorldFrameRecord frameRecord;

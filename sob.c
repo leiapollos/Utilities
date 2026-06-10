@@ -1337,6 +1337,7 @@ static S32 build_and_run_metagen(BuildMode mode) {
 
 static const char* COOK_ASSET_SOURCES[] = {
     "app/assets/src/Duck.glb",
+    "app/assets/src/Avocado.glb",
 };
 
 static S32 build_and_run_cooker(BuildMode mode) {
