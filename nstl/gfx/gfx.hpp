@@ -411,11 +411,6 @@ struct GfxStats {
     U32 stagingOverflowCount;
     U64 stagingBytesUsed;
     U64 frameIndex;
-    F32 gpuWaitMs;
-    F32 acquireWaitMs;
-    // most recently completed frame, submission order, GpuTimings flag only
-    F32 passGpuMs[GFX_MAX_TIMED_PASSES];
-    U32 passGpuCount;
 };
 
 UTILITIES_SHARED_API B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDevice);

@@ -106,6 +106,9 @@ struct GfxFrame {
     U64 stagingPos;
     VkQueryPool timestampPool;
     U32 timedPassCount;
+    U32 timedPassSites[GFX_MAX_TIMED_PASSES];
+    U64 profFrameIndex;
+    U64 profSubmitNs;
     U32 imageIndex;
     B32 active;
     B32 submitted;
@@ -2875,9 +2878,11 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
     }
 
     GfxFrame* frame = &device->frames[device->frameCursor];
-    U64 gpuWaitStartNs = OS_get_time_nanoseconds();
-    VkResult fenceResult = vkGetFenceStatus(device->device, frame->fence);
-    U64 gpuWaitEndNs = OS_get_time_nanoseconds();
+    VkResult fenceResult = VK_SUCCESS;
+    {
+        PROF_SCOPE("gpu wait");
+        fenceResult = vkGetFenceStatus(device->device, frame->fence);
+    }
     if (fenceResult == VK_NOT_READY) {
         return 0;
     }
@@ -2891,14 +2896,16 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
         gfx_vulkan_drain_retired(device);
     }
 
-    U64 acquireStartNs = OS_get_time_nanoseconds();
-    VkResult acquireResult = vkAcquireNextImageKHR(device->device,
-                                                   device->swapchain,
-                                                   0u,
-                                                   frame->imageAvailableSemaphore,
-                                                   0,
-                                                   &frame->imageIndex);
-    U64 acquireEndNs = OS_get_time_nanoseconds();
+    VkResult acquireResult = VK_SUCCESS;
+    {
+        PROF_SCOPE("acquire drawable");
+        acquireResult = vkAcquireNextImageKHR(device->device,
+                                              device->swapchain,
+                                              0u,
+                                              frame->imageAvailableSemaphore,
+                                              0,
+                                              &frame->imageIndex);
+    }
     if (acquireResult == VK_TIMEOUT || acquireResult == VK_NOT_READY) {
         return 0;
     }
@@ -2906,8 +2913,6 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
         return 0;
     }
 
-    F32 resolvedMs[GFX_MAX_TIMED_PASSES] = {};
-    U32 resolvedCount = 0u;
     if (device->gpuTimingsEnabled && frame->timestampPool && frame->timedPassCount != 0u) {
         U64 timestamps[2u * GFX_MAX_TIMED_PASSES] = {};
         U32 queryCount = 2u * frame->timedPassCount;
@@ -2924,18 +2929,22 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
                                                      VK_QUERY_RESULT_64_BIT);
         if (queryResult == VK_SUCCESS) {
             U32 passCount = queryCount / 2u;
+            U64 firstTicks = timestamps[0];
             for (U32 passIndex = 0u; passIndex < passCount; ++passIndex) {
                 U64 beginTicks = timestamps[2u * passIndex];
                 U64 endTicks = timestamps[2u * passIndex + 1u];
-                if (endTicks >= beginTicks) {
-                    resolvedMs[passIndex] =
-                        (F32)((F64)(endTicks - beginTicks) * device->timestampPeriodNs / 1.0e6);
+                if (endTicks >= beginTicks && beginTicks >= firstTicks) {
+                    U64 beginNs = frame->profSubmitNs +
+                                  (U64)((F64)(beginTicks - firstTicks) * device->timestampPeriodNs);
+                    U64 endNs = frame->profSubmitNs +
+                                (U64)((F64)(endTicks - firstTicks) * device->timestampPeriodNs);
+                    prof_gpu_span(frame->timedPassSites[passIndex], beginNs, endNs, frame->profFrameIndex);
                 }
             }
-            resolvedCount = passCount;
         }
     }
     frame->timedPassCount = 0u;
+    frame->profFrameIndex = prof_current_frame();
 
     vkResetCommandPool(device->device, frame->commandPool, 0u);
 
@@ -2965,10 +2974,6 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
     device->stats.stagingBytesUsed = 0u;
     device->stats.resourceTableCount = device->resourceTable.liveCount;
     device->stats.frameIndex = device->frameSerial;
-    MEMCPY(device->stats.passGpuMs, resolvedMs, sizeof(resolvedMs));
-    device->stats.passGpuCount = resolvedCount;
-    device->stats.gpuWaitMs = (F32)((F64)(gpuWaitEndNs - gpuWaitStartNs) / 1.0e6);
-    device->stats.acquireWaitMs = (F32)((F64)(acquireEndNs - acquireStartNs) / 1.0e6);
     return frame;
 }
 
@@ -3558,6 +3563,7 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
                              VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
                              frame->timestampPool,
                              2u * frame->timedPassCount);
+        frame->timedPassSites[frame->timedPassCount] = prof_site_gpu(desc->name ? desc->name : "render pass");
         timedPass = 1;
     }
 
@@ -3752,6 +3758,7 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
                              VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
                              frame->timestampPool,
                              2u * frame->timedPassCount);
+        frame->timedPassSites[frame->timedPassCount] = prof_site_gpu(desc->name ? desc->name : "render pass");
         timedPass = 1;
     }
 
@@ -3851,6 +3858,8 @@ void gfx_submit(GfxCommandBuffer* commands) {
     if (!device || !frame->active || frame->submitted) {
         return;
     }
+
+    frame->profSubmitNs = prof_now_ns();
 
     if (vkEndCommandBuffer(frame->commandBuffer) != VK_SUCCESS) {
         return;

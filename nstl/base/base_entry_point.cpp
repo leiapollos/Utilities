@@ -2,16 +2,17 @@
 // Created by André Leite on 26/07/2025.
 //
 
+UTILITIES_SHARED_API void prof_init();
+UTILITIES_SHARED_API void prof_shutdown();
 
 void base_entry_point(int argc, char** argv) {
     thread_context_alloc();
     log_init();
-    profiler_initialize();
+    prof_init();
 
     entry_point();
 
-    profiler_print_report();
-    profiler_shutdown();
+    prof_shutdown();
     thread_context_release();
 }
 

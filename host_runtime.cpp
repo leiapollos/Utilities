@@ -4,12 +4,14 @@
 
 #include "nstl/base/base_include.hpp"
 #include "nstl/os/os_include.hpp"
+#include "nstl/prof/prof_include.hpp"
 #include "nstl/gfx/gfx_include.hpp"
 #include "nstl/text/text_include.hpp"
 #include "app_interface.hpp"
 
 #include "nstl/base/base_include.cpp"
 #include "nstl/os/os_include.cpp"
+#include "nstl/prof/prof_include.cpp"
 #include "nstl/gfx/gfx_include.cpp"
 #include "nstl/text/text_include.cpp"
 
@@ -44,6 +46,8 @@ static const char* HOST_HOT_MODULE_INPUTS[] = {
     "app_ui_panels.cpp",
     "app_scene_demo.cpp",
     "app_state.hpp",
+    "nstl/prof/prof.hpp",
+    "nstl/prof/prof_include.hpp",
     "nstl/content/content.hpp",
     "nstl/content/content.cpp",
     "nstl/content/content_include.hpp",
@@ -83,6 +87,10 @@ static const char* HOST_RESTART_REQUIRED_INPUTS[] = {
     "host_runtime.cpp",
     "main.cpp",
     "main.mm",
+    "nstl/prof/prof.hpp",
+    "nstl/prof/prof.cpp",
+    "nstl/prof/prof_include.hpp",
+    "nstl/prof/prof_include.cpp",
     "nstl/gfx/gfx.hpp",
     "nstl/gfx/gfx_include.hpp",
     "nstl/gfx/gfx_include.cpp",
@@ -206,9 +214,9 @@ struct HostState {
     U32 targetFpsFocused;
     U32 targetFpsUnfocused;
     U32 minSleepMs;
-    F32 lastSleepSeconds;
     B32 framePacingEnabled;
     U32 exitAfterFrames;
+    U32 profCaptureFrame;
     U32 framesRun;
 };
 
@@ -297,6 +305,10 @@ static B32 host_init(HostState* state) {
             StringU8 exitAfterFramesText = OS_get_environment_variable(scratch.arena,
                                                                        str8("UTILITIES_EXIT_AFTER_FRAMES"));
             state->exitAfterFrames = host_parse_u32_env_value(exitAfterFramesText);
+
+            StringU8 captureFrameText = OS_get_environment_variable(scratch.arena,
+                                                                    str8("UTILITIES_PROF_CAPTURE_FRAME"));
+            state->profCaptureFrame = host_parse_u32_env_value(captureFrameText);
             temp_end(&scratch);
         }
     }
@@ -346,16 +358,25 @@ static void host_update(HostState* state, F32 deltaSeconds) {
 
     arena_pop_to(state->frameArena, 0);
 
-    host_try_reload_module(state);
+    {
+        PROF_SCOPE("module watch");
+        host_try_reload_module(state);
+    }
 
-    host_update_input(state, deltaSeconds);
+    {
+        PROF_SCOPE("pump events");
+        host_update_input(state, deltaSeconds);
+    }
     if (state->host.shouldQuit) {
         return;
     }
 
     ASSERT_ALWAYS(state->module.code.frame != 0);
 
-    state->module.code.frame(&state->host, &state->store, &state->input);
+    {
+        PROF_SCOPE("app frame");
+        state->module.code.frame(&state->host, &state->store, &state->input);
+    }
 }
 
 static void host_shutdown(HostState* state) {
@@ -912,6 +933,7 @@ static void host_try_build_module(HostState* state) {
     }
 
     LOG_INFO("host", "Detected app module source changes -> rebuilding module");
+    PROF_SCOPE("module rebuild");
 #if defined(PLATFORM_OS_WINDOWS)
     S32 buildResult = APP_OS_CALL(&state->host, OS_execute, str8(".\\sob.exe module debug"));
 #else
@@ -973,15 +995,18 @@ static void host_try_reload_module(HostState* state) {
     }
 
     LOG_INFO("host", "Detected module change ({} -> {}), loading candidate", state->moduleTimestamp, timestamp);
+    prof_record_gate(0);
     LoadedModule candidate = {};
     StringU8 candidatePath = STR8_NIL;
     if (!host_load_candidate(state, &candidate, &candidatePath)) {
         LOG_ERROR("host", "Candidate load failed; active module remains running");
+        prof_record_gate(1);
         return;
     }
     if (!host_commit_candidate(state, &candidate, candidatePath, 1)) {
         LOG_ERROR("host", "Candidate swap failed; active module remains running");
     }
+    prof_record_gate(1);
 #endif
 }
 
@@ -1121,7 +1146,6 @@ static void host_update_input(HostState* state, F32 deltaSeconds) {
 
     AppInput* input = &state->input;
     input->deltaSeconds = deltaSeconds;
-    input->sleepSeconds = state->lastSleepSeconds;
     input->events = 0;
     input->eventCount = 0;
 
@@ -1236,6 +1260,8 @@ int host_main_loop(int argc, char** argv) {
     U64 lastTickTime = OS_get_time_microseconds();
 
     while (!state.host.shouldQuit) {
+        prof_frame_advance();
+
         U64 frameStartTime = OS_get_time_microseconds();
         U64 deltaMicro = frameStartTime - lastTickTime;
         lastTickTime = frameStartTime;
@@ -1243,11 +1269,13 @@ int host_main_loop(int argc, char** argv) {
 
         host_update(&state, deltaSeconds);
         state.framesRun += 1u;
+        if (state.profCaptureFrame != 0u && state.framesRun == state.profCaptureFrame) {
+            prof_capture(64u, "captures");
+        }
         if (state.exitAfterFrames != 0u && state.framesRun >= state.exitAfterFrames) {
             state.host.shouldQuit = 1;
         }
 
-        state.lastSleepSeconds = 0.0f;
         if (state.framePacingEnabled && !state.host.shouldQuit) {
             U32 targetFps = state.windowFocused ? state.targetFpsFocused : state.targetFpsUnfocused;
             targetFps = host_clamp_u32(targetFps, HOST_MIN_TARGET_FPS, HOST_MAX_TARGET_FPS);
@@ -1262,10 +1290,8 @@ int host_main_loop(int argc, char** argv) {
                     if (sleepMilliseconds < state.minSleepMs) {
                         sleepMilliseconds = state.minSleepMs;
                     }
-                    U64 sleepStartTime = OS_get_time_microseconds();
+                    PROF_SCOPE("pacing sleep");
                     OS_sleep_milliseconds(sleepMilliseconds);
-                    U64 sleepEndTime = OS_get_time_microseconds();
-                    state.lastSleepSeconds = (F32)((F64)(sleepEndTime - sleepStartTime) / (F64)MILLION(1ULL));
                 }
             }
         }

@@ -485,6 +485,16 @@ void OS_barrier_wait(OS_Handle barrierHandle) {
     OS_mutex_unlock(entity->barrier.mutexHandle);
 }
 
+B32 OS_create_directory(const char* path) {
+    if (!path) {
+        return 0;
+    }
+    if (CreateDirectoryA(path, 0)) {
+        return 1;
+    }
+    return (GetLastError() == ERROR_ALREADY_EXISTS) ? 1 : 0;
+}
+
 OS_Handle OS_file_open(const char* path, OS_FileOpenMode mode) {
     OS_Handle result = {};
     if (!path) {

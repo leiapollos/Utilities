@@ -115,6 +115,7 @@ struct OS_FileInfo {
     U64 lastWriteTimestampNs;
 };
 
+UTILITIES_SHARED_API B32 OS_create_directory(const char* path);
 UTILITIES_SHARED_API OS_Handle OS_file_open(const char* path, OS_FileOpenMode mode);
 UTILITIES_SHARED_API void OS_file_close(OS_Handle h);
 UTILITIES_SHARED_API U64 OS_file_read(OS_Handle h, RangeU64 range, void* dst);

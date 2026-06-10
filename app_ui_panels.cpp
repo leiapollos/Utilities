@@ -73,31 +73,8 @@ static void app_ui_stats_panel(APP_Context* ctx, UI_Context* ui) {
     desc.height = ui_fit();
     ui_panel_begin(ui, str8("debug###stats"), &desc);
 
-    F32 frameMs = state->lastDeltaSeconds * 1000.0f;
-    F32 averageFrameMs = state->averageDeltaSeconds * 1000.0f;
-    F32 fps = (state->averageDeltaSeconds > 0.0f) ? (1.0f / state->averageDeltaSeconds) : 0.0f;
-    F32 bodyMs = state->lastWorkSeconds * 1000.0f;
-    F32 sleepMs = state->lastSleepSeconds * 1000.0f;
-    F32 workMs = bodyMs - gfx->gpuWaitMs - gfx->acquireWaitMs;
-    if (workMs < 0.0f) {
-        workMs = 0.0f;
-    }
-    F32 hostMs = frameMs - bodyMs - sleepMs;
-    if (hostMs < 0.0f) {
-        hostMs = 0.0f;
-    }
-
-    app_ui_stat_line(ui, UI_COLOR_TEXT_BRIGHT, "frame {}  reloads {}  [F1]", gfx->frameIndex, state->reloadCount);
-    app_ui_stat_line(ui, UI_COLOR_TEXT, "frame {}ms  avg {}ms  {}fps", frameMs, averageFrameMs, fps);
-    app_ui_stat_line(ui, UI_COLOR_TEXT, "work {}us  gpu {}us  acq {}us  sleep {}us  host {}us",
-                     (U32)(workMs * 1000.0f + 0.5f),
-                     (U32)(gfx->gpuWaitMs * 1000.0f + 0.5f),
-                     (U32)(gfx->acquireWaitMs * 1000.0f + 0.5f),
-                     (U32)(sleepMs * 1000.0f + 0.5f),
-                     (U32)(hostMs * 1000.0f + 0.5f));
-    for (U32 passIndex = 0u; passIndex < gfx->passGpuCount; ++passIndex) {
-        app_ui_stat_line(ui, UI_COLOR_TEXT, "gpu pass[{}] {}ms", passIndex, gfx->passGpuMs[passIndex]);
-    }
+    app_ui_stat_line(ui, UI_COLOR_TEXT_BRIGHT, "frame {}  reloads {}  [F1] stats  [F2] profiler",
+                     gfx->frameIndex, state->reloadCount);
     app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "gfx  draws {}  dispatches {}  pso {}  table {}",
                      gfx->drawCount, gfx->dispatchCount, gfx->pipelineSwitchCount, gfx->resourceTableCount);
     app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "temp {}KB ovf {}   staging {}KB ovf {}",
@@ -133,6 +110,139 @@ static void app_ui_stats_panel(APP_Context* ctx, UI_Context* ui) {
     ui_panel_end(ui);
 }
 
+static void app_ui_profiler_row(UI_Context* ui, const ProfSiteStats* stats, U32 site, U32 depth,
+                                StringU8 rowKey, U32* ioSelectedSite) {
+    const ProfSiteStats* siteStats = stats + site;
+
+    UI_Signal rowSignal = ui_row_begin_keyed(ui, rowKey, ui_grow(1.0f), ui_px(22.0f),
+                                             (*ioSelectedSite == site));
+    if (rowSignal.clicked) {
+        *ioSelectedSite = site;
+    }
+
+    Temp scratch = get_scratch(0, 0);
+    if (scratch.arena) {
+        StringU8 indent = str8("");
+        if (depth != 0u) {
+            U64 pad = (U64)depth * 2u;
+            U8* padBytes = ARENA_PUSH_ARRAY(scratch.arena, U8, pad);
+            if (padBytes) {
+                MEMSET(padBytes, ' ', pad);
+                indent = str8(padBytes, pad);
+            }
+        }
+        ui_label_colored(ui, str8_fmt((ui)->frameArena, "{}{}", indent, str8(siteStats->label)),
+                         UI_COLOR_TEXT);
+        temp_end(&scratch);
+    }
+
+    ui_spacer(ui, ui_grow(1.0f));
+    app_ui_stat_line(ui, UI_COLOR_TEXT, "{}", siteStats->avgInclMs);
+    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "{}", siteStats->avgExclMs);
+    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "{}", siteStats->maxInclMs);
+    app_ui_stat_line(ui, 0x6B7480FFu, "x{}", (U32)(siteStats->avgHits + 0.5f));
+    ui_row_end(ui);
+}
+
+static void app_ui_profiler_panel(APP_Context* ctx, UI_Context* ui) {
+    AppCoreState* state = ctx->core;
+    ProfInfo info = prof_info();
+    U32 siteCount = 0u;
+    const ProfSiteStats* stats = prof_site_stats(&siteCount);
+    if (!stats || siteCount <= 1u) {
+        return;
+    }
+
+    UI_PanelDesc desc = {};
+    desc.anchorX = 1.0f;
+    desc.anchorY = 1.0f;
+    desc.offsetX = -16.0f;
+    desc.offsetY = -16.0f;
+    desc.width = ui_px(640.0f);
+    desc.height = ui_fit();
+    ui_panel_begin(ui, str8("profiler###prof"), &desc);
+
+    F32 averageFrameMs = state->averageDeltaSeconds * 1000.0f;
+    F32 fps = (state->averageDeltaSeconds > 0.0f) ? (1.0f / state->averageDeltaSeconds) : 0.0f;
+    app_ui_stat_line(ui, UI_COLOR_TEXT, "frame {}ms  {}fps  |  res {}ns  scope {}ns  drops {}  sites {}",
+                     averageFrameMs, fps, info.resolutionNs, info.overheadNsPerScope,
+                     info.droppedEvents, info.siteCount);
+
+    U32 historyCount = 0u;
+    U32 historyOffset = 0u;
+    const F32* frameHistory = prof_frame_history(&historyCount, &historyOffset);
+    if (frameHistory && historyCount != 0u) {
+        ui_plot(ui, frameHistory, historyCount, historyOffset, ui_grow(1.0f), ui_px(48.0f));
+    }
+
+    ui_row_begin(ui, ui_grow(1.0f), ui_fit());
+    B32 paused = prof_is_paused();
+    if (ui_checkbox(ui, str8("pause"), &paused)) {
+        prof_pause(paused);
+    }
+    ui_checkbox(ui, str8("flat"), &state->profFlatView);
+    ui_spacer(ui, ui_grow(1.0f));
+    if (ui_button(ui, str8("capture")).clicked) {
+        prof_capture(64u, "captures");
+    }
+    ui_row_end(ui);
+
+    ui_scroll_begin(ui, str8("###prof_scroll"), ui_grow(1.0f), ui_px(330.0f));
+    if (state->profFlatView) {
+        U32 order[24];
+        U32 orderCount = 0u;
+        for (U32 site = 1u; site < siteCount; ++site) {
+            if (stats[site].avgInclMs <= 0.0f && stats[site].lastInclMs <= 0.0f) {
+                continue;
+            }
+            U32 at = orderCount;
+            if (at < ARRAY_COUNT(order)) {
+                orderCount += 1u;
+            } else {
+                at = ARRAY_COUNT(order) - 1u;
+                if (stats[order[at]].avgExclMs >= stats[site].avgExclMs) {
+                    continue;
+                }
+            }
+            while (at > 0u && stats[order[at - 1u]].avgExclMs < stats[site].avgExclMs) {
+                order[at] = order[at - 1u];
+                at -= 1u;
+            }
+            order[at] = site;
+        }
+        for (U32 at = 0u; at < orderCount; ++at) {
+            app_ui_profiler_row(ui, stats, order[at], 0u,
+                                str8_fmt(ui->frameArena, "###prof_flat_{}", at),
+                                &state->profSelectedSite);
+        }
+    } else {
+        const ProfFrameView* view = prof_frame_view();
+        if (view) {
+            for (U32 laneIndex = 0u; laneIndex < view->laneCount; ++laneIndex) {
+                const ProfLaneView* lane = view->lanes + laneIndex;
+                ui_label_colored(ui, str8_fmt(ui->frameArena, "[{}]", str8(lane->name)), 0x6B7480FFu);
+                U32 shown = MIN(lane->nodeCount, 96u);
+                for (U32 nodeIndex = 0u; nodeIndex < shown; ++nodeIndex) {
+                    const ProfFrameNode* node = lane->nodes + nodeIndex;
+                    app_ui_profiler_row(ui, stats, node->site, node->depth,
+                                        str8_fmt(ui->frameArena, "###prof_n_{}_{}", laneIndex, nodeIndex),
+                                        &state->profSelectedSite);
+                }
+            }
+        }
+    }
+    ui_scroll_end(ui);
+
+    if (state->profSelectedSite != 0u && state->profSelectedSite < siteCount) {
+        const ProfSiteStats* selected = stats + state->profSelectedSite;
+        app_ui_stat_line(ui, UI_COLOR_TEXT_BRIGHT, "{}  avg {}ms  max {}ms",
+                         str8(selected->label), selected->avgInclMs, selected->maxInclMs);
+        ui_plot(ui, selected->historyMs, PROF_HISTORY_FRAMES, historyOffset, ui_grow(1.0f), ui_px(48.0f));
+    }
+
+    ui_panel_end(ui);
+}
+
 static void app_ui_panels_submit(APP_Context* ctx, AppRendererFrame* rendererFrame, const AppInput* input) {
     AppCoreState* state = ctx->core;
     AppRender2DState* render = &state->render2d;
@@ -152,16 +262,35 @@ static void app_ui_panels_submit(APP_Context* ctx, AppRendererFrame* rendererFra
     desc.viewportHeight = (F32)ctx->host->windowHeight;
     desc.deltaSeconds = input->deltaSeconds;
 
-    UI_Context* ui = ui_begin(&desc);
+    UI_Context* ui = 0;
+    {
+        PROF_SCOPE("ui begin");
+        ui = ui_begin(&desc);
+    }
     if (!ui) {
         return;
     }
 
-    app_ui_controls_panel(ctx, ui);
-    if (state->debugOverlayVisible) {
-        app_ui_stats_panel(ctx, ui);
+    {
+        PROF_SCOPE("ui build");
+        {
+            PROF_SCOPE("controls panel");
+            app_ui_controls_panel(ctx, ui);
+        }
+        if (state->debugOverlayVisible) {
+            PROF_SCOPE("stats panel");
+            app_ui_stats_panel(ctx, ui);
+        }
+        if (state->profilerVisible) {
+            PROF_SCOPE("profiler panel");
+            app_ui_profiler_panel(ctx, ui);
+        }
     }
 
-    UI_Output output = ui_end(ui);
+    UI_Output output = {};
+    {
+        PROF_SCOPE("ui end");
+        output = ui_end(ui);
+    }
     app_renderer_apply_text_uploads(ctx, rendererFrame, output.uploads, output.uploadCount);
 }

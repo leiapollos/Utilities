@@ -76,10 +76,10 @@ struct AppCoreState {
     U32 reloadCount;
     F32 lastDeltaSeconds;
     F32 averageDeltaSeconds;
-    F32 lastWorkSeconds;
-    F32 averageWorkSeconds;
-    F32 lastSleepSeconds;
     B32 debugOverlayVisible;
+    B32 profilerVisible;
+    B32 profFlatView;
+    U32 profSelectedSite;
 
     JobSystem* jobSystem;
     U32 workerCount;

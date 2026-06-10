@@ -326,12 +326,15 @@ static void text_shape_line(TextContext* text,
         return;
     }
 
-    kbts_ShapeBegin(text->shapeContext, KBTS_DIRECTION_DONT_KNOW, KBTS_LANGUAGE_DONT_KNOW);
-    kbts_ShapeUtf8(text->shapeContext,
-                   (const char*)line,
-                   (int)lineSize,
-                   KBTS_USER_ID_GENERATION_MODE_CODEPOINT_INDEX);
-    kbts_ShapeEnd(text->shapeContext);
+    {
+        PROF_SCOPE("kbts shape");
+        kbts_ShapeBegin(text->shapeContext, KBTS_DIRECTION_DONT_KNOW, KBTS_LANGUAGE_DONT_KNOW);
+        kbts_ShapeUtf8(text->shapeContext,
+                       (const char*)line,
+                       (int)lineSize,
+                       KBTS_USER_ID_GENERATION_MODE_CODEPOINT_INDEX);
+        kbts_ShapeEnd(text->shapeContext);
+    }
 
     if (kbts_ShapeError(text->shapeContext) != 0) {
         if (!text->loggedShapeMemory) {
@@ -567,6 +570,7 @@ TextFont text_font_load_memory(TextContext* text, const TextFontDesc* desc) {
 }
 
 TextDrawData text_prepare_draw(TextContext* text, Arena* frameArena, const TextDrawDesc* desc) {
+    PROF_FUNCTION();
     TextDrawData result = text_draw_data_nil();
     if (!text || !frameArena || !desc || desc->text.size == 0u || desc->pixelSize <= 0.0f) {
         return result;

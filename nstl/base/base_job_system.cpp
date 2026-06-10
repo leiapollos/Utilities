@@ -218,12 +218,15 @@ static void job_system_on_job_popped_(JobSystem* jobSystem) {
     }
 }
 
+UTILITIES_SHARED_API void prof_thread_name(const char* name);
+
 static
 void job_system_worker_entry(void* params) {
     ASSERT_DEBUG(params);
     WorkerParameters* workerParameters = (WorkerParameters*) params;
     JobSystem* jobSystem = workerParameters->jobSystem;
     U32 workerIndex = workerParameters->workerIndex;
+    prof_thread_name("worker");
 
     ASSERT_DEBUG(g_tlsJobState.jobSystem == nullptr && "JobSystem already initialized on this thread");
 

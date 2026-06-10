@@ -3,6 +3,8 @@
 //
 
 #include <dlfcn.h>
+#include <sys/stat.h>
+#include <errno.h>
 
 // ////////////////////////
 // Globals
@@ -440,6 +442,16 @@ void OS_barrier_wait(OS_Handle barrierHandle) {
 
 // ////////////////////////
 // File I/O
+
+B32 OS_create_directory(const char* path) {
+    if (!path) {
+        return 0;
+    }
+    if (mkdir(path, 0755) == 0) {
+        return 1;
+    }
+    return (errno == EEXIST) ? 1 : 0;
+}
 
 OS_Handle OS_file_open(const char* path, OS_FileOpenMode mode) {
     int flags = 0;

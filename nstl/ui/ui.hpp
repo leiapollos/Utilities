@@ -55,6 +55,7 @@ enum UI_WidgetKind {
     UI_WidgetKind_Slider,
     UI_WidgetKind_ScrollRegion,
     UI_WidgetKind_Edit,
+    UI_WidgetKind_Plot,
 };
 
 struct UI_Widget {
@@ -84,6 +85,9 @@ struct UI_Widget {
     TextDrawData text;
     F32 kindParams[4];
     U32 kindBits;
+    const F32* plotValues;
+    U32 plotCount;
+    U32 plotOffset;
 
     F32 size[UI_Axis_COUNT];
     F32 pos[UI_Axis_COUNT];
@@ -278,7 +282,9 @@ UI_Output ui_end(UI_Context* ui);
 void ui_panel_begin(UI_Context* ui, StringU8 label, const UI_PanelDesc* desc);
 void ui_panel_end(UI_Context* ui);
 void ui_row_begin(UI_Context* ui, UI_Size width, UI_Size height);
+UI_Signal ui_row_begin_keyed(UI_Context* ui, StringU8 label, UI_Size width, UI_Size height, B32 highlighted);
 void ui_row_end(UI_Context* ui);
+void ui_plot(UI_Context* ui, const F32* values, U32 count, U32 offset, UI_Size width, UI_Size height);
 void ui_column_begin(UI_Context* ui, UI_Size width, UI_Size height);
 void ui_column_end(UI_Context* ui);
 void ui_scroll_begin(UI_Context* ui, StringU8 label, UI_Size width, UI_Size height);

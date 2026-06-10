@@ -513,16 +513,25 @@ static AppRendererFrame* app_renderer_begin_frame(APP_Context* ctx) {
     }
 
 #if defined(PLATFORM_BUILD_DEBUG)
-    app_gfx_try_build_dev_shaders(ctx);
+    {
+        PROF_SCOPE("dev shaders");
+        app_gfx_try_build_dev_shaders(ctx);
+    }
     if (ctx->core->resources.fileStream) {
+        PROF_SCOPE("file stream tick");
         file_stream_tick(ctx->core->resources.fileStream, OS_get_time_nanoseconds(), 16u);
     }
 #endif
     if (ctx->core->resources.artifactCache) {
+        PROF_SCOPE("artifact tick");
         artifact_cache_tick(ctx->core->resources.artifactCache, ctx->core->frameCounter, 16u, 16u);
     }
 
-    GfxFrame* frame = gfx_begin_frame(ctx->host->gfxDevice);
+    GfxFrame* frame = 0;
+    {
+        PROF_SCOPE("gfx begin frame");
+        frame = gfx_begin_frame(ctx->host->gfxDevice);
+    }
     if (!frame) {
         return 0;
     }
@@ -579,14 +588,27 @@ static void app_renderer_end_frame(APP_Context* ctx, AppRendererFrame* rendererF
         return;
     }
 
-    Draw2DResult result = draw2d_end(&ctx->core->render2d.draw2d);
-    app_renderer_execute_2d(ctx, rendererFrame, result);
+    Draw2DResult result = {};
+    {
+        PROF_SCOPE("draw2d end");
+        result = draw2d_end(&ctx->core->render2d.draw2d);
+    }
+    {
+        PROF_SCOPE("2d pass");
+        app_renderer_execute_2d(ctx, rendererFrame, result);
+    }
 
     ctx->core->render2d.lastDraw2DStats = ctx->core->render2d.draw2d.stats;
     ctx->core->render2d.lastGfxStats = gfx_get_stats(ctx->host->gfxDevice);
 
-    gfx_submit(rendererFrame->commands);
-    gfx_end_frame(rendererFrame->frame);
+    {
+        PROF_SCOPE("gfx submit");
+        gfx_submit(rendererFrame->commands);
+    }
+    {
+        PROF_SCOPE("gfx end frame");
+        gfx_end_frame(rendererFrame->frame);
+    }
     if (ctx->core->resources.artifactCache) {
         artifact_cache_evict(ctx->core->resources.artifactCache, ctx->core->frameCounter, 128u);
     }

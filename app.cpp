@@ -2,7 +2,7 @@
 // Created by André Leite on 31/10/2025.
 //
 
-#define APP_CORE_STATE_VERSION 53u
+#define APP_CORE_STATE_VERSION 54u
 
 #if defined(PLATFORM_BUILD_DEBUG)
 #define APP_GFX_DEV_SHADER_SOURCE_ENTRY(name, source) source,
@@ -94,7 +94,6 @@ static void app_frame(AppHost* host, HOT_StateStore* store, const AppInput* inpu
     state->windowHeight = host->windowHeight;
     state->frameCounter += 1ull;
     state->lastDeltaSeconds = input->deltaSeconds;
-    state->lastSleepSeconds = input->sleepSeconds;
     state->averageDeltaSeconds = (state->averageDeltaSeconds <= 0.0f)
         ? input->deltaSeconds
         : state->averageDeltaSeconds * 0.95f + input->deltaSeconds * 0.05f;
@@ -113,22 +112,32 @@ static void app_frame(AppHost* host, HOT_StateStore* store, const AppInput* inpu
             !event->keyDown.isRepeat) {
             state->debugOverlayVisible = !state->debugOverlayVisible;
         }
+        if (event->tag == OS_GraphicsEvent_Tag_KeyDown &&
+            event->keyDown.keyCode == OS_KeyCode_F2 &&
+            !event->keyDown.isRepeat) {
+            state->profilerVisible = !state->profilerVisible;
+        }
     }
 
-    U64 workStartNs = OS_get_time_nanoseconds();
-    AppRendererFrame* rendererFrame = app_renderer_begin_frame(&ctx);
+    AppRendererFrame* rendererFrame = 0;
+    {
+        PROF_SCOPE("renderer begin");
+        rendererFrame = app_renderer_begin_frame(&ctx);
+    }
     if (rendererFrame) {
-        app_demo_scene_submit(&ctx, rendererFrame);
-        app_ui_panels_submit(&ctx, rendererFrame, input);
-        app_renderer_end_frame(&ctx, rendererFrame);
+        {
+            PROF_SCOPE("scene");
+            app_demo_scene_submit(&ctx, rendererFrame);
+        }
+        {
+            PROF_SCOPE("ui panels");
+            app_ui_panels_submit(&ctx, rendererFrame, input);
+        }
+        {
+            PROF_SCOPE("renderer end");
+            app_renderer_end_frame(&ctx, rendererFrame);
+        }
     }
-    U64 workEndNs = OS_get_time_nanoseconds();
-
-    F32 workSeconds = (F32)((F64)(workEndNs - workStartNs) / 1.0e9);
-    state->lastWorkSeconds = workSeconds;
-    state->averageWorkSeconds = (state->averageWorkSeconds <= 0.0f)
-        ? workSeconds
-        : state->averageWorkSeconds * 0.95f + workSeconds * 0.05f;
 }
 
 static void app_shutdown(AppHost* host, HOT_StateStore* store) {
@@ -405,6 +414,7 @@ static void app_state_init(APP_Context* ctx, APP_StateKind kind, void* memory) {
             core->windowWidth = ctx->host->windowWidth;
             core->windowHeight = ctx->host->windowHeight;
             core->debugOverlayVisible = 1;
+            core->profilerVisible = 1;
             app_demo_state_reset(&core->demo);
 
             StringU8 eventsDomain = str8((const char*) "events", 6);

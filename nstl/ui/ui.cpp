@@ -841,6 +841,36 @@ static void ui_paint_widget_enter(UI_Context* ui, UI_Widget* widget, const F32* 
             draw2d_rect(draw, UI_LAYER, thumbX - half, minY, thumbX + half, maxY, thumbColor);
         }
         break;
+        case UI_WidgetKind_Plot: {
+            if (widget->plotValues && widget->plotCount != 0u) {
+                F32 innerMinX = minX + 2.0f;
+                F32 innerMaxX = maxX - 2.0f;
+                F32 innerMinY = minY + 2.0f;
+                F32 innerMaxY = maxY - 2.0f;
+                F32 innerW = MAX(0.0f, innerMaxX - innerMinX);
+                F32 innerH = MAX(0.0f, innerMaxY - innerMinY);
+                F32 maxValue = 0.0f;
+                for (U32 at = 0u; at < widget->plotCount; ++at) {
+                    maxValue = MAX(maxValue, widget->plotValues[at]);
+                }
+                if (maxValue > 0.0f && innerW > 0.0f) {
+                    F32 barWidth = innerW / (F32)widget->plotCount;
+                    for (U32 at = 0u; at < widget->plotCount; ++at) {
+                        U32 valueIndex = (widget->plotOffset + at) % widget->plotCount;
+                        F32 value = widget->plotValues[valueIndex];
+                        if (value <= 0.0f) {
+                            continue;
+                        }
+                        F32 fraction = ui_saturate(value / maxValue);
+                        F32 barMinX = innerMinX + (F32)at * barWidth;
+                        F32 barMaxX = barMinX + MAX(1.0f, barWidth - 1.0f);
+                        F32 barMinY = innerMaxY - fraction * innerH;
+                        draw2d_rect(draw, UI_LAYER, barMinX, barMinY, barMaxX, innerMaxY, UI_COLOR_ACCENT);
+                    }
+                }
+            }
+        }
+        break;
         case UI_WidgetKind_Edit: {
             F32 padX = widget->padding[UI_Axis_X];
             F32 innerMinX = minX + padX;
@@ -1180,6 +1210,44 @@ void ui_row_begin(UI_Context* ui, UI_Size width, UI_Size height) {
         return;
     }
     ui_container_begin(ui, UI_Axis_X, width, height);
+}
+
+UI_Signal ui_row_begin_keyed(UI_Context* ui, StringU8 label, UI_Size width, UI_Size height, B32 highlighted) {
+    UI_Signal signal = {};
+    if (!ui) {
+        return signal;
+    }
+
+    UI_Key key = ui_key_from_label(ui, label);
+    signal = ui_signal_for(ui, key);
+
+    U32 index = ui_widget_add(ui, key, UI_WidgetFlag_Clickable | UI_WidgetFlag_DrawBackground,
+                              UI_WidgetKind_Plain, width, height);
+    UI_Widget* row = ui_widget(ui, index);
+    row->layoutAxis = UI_Axis_X;
+    row->childGap = 8.0f;
+    row->alignCross = 0.5f;
+
+    F32 hotT = (row->retainedIndex != UI_NIL_INDEX) ? ui->state->retained[row->retainedIndex].hotT : 0.0f;
+    U32 base = highlighted ? UI_COLOR_WIDGET_BG : 0x00000000u;
+    row->backgroundColor = ui_color_lerp(base, UI_COLOR_WIDGET_BG_HOT, hotT * 0.7f);
+
+    ui_push_parent(ui, index);
+    return signal;
+}
+
+void ui_plot(UI_Context* ui, const F32* values, U32 count, U32 offset, UI_Size width, UI_Size height) {
+    if (!ui) {
+        return;
+    }
+    U32 index = ui_widget_add(ui, 0ull, UI_WidgetFlag_DrawBackground | UI_WidgetFlag_DrawBorder,
+                              UI_WidgetKind_Plot, width, height);
+    UI_Widget* widget = ui_widget(ui, index);
+    widget->backgroundColor = UI_COLOR_EDIT_BG;
+    widget->borderColor = UI_COLOR_PANEL_BORDER;
+    widget->plotValues = values;
+    widget->plotCount = count;
+    widget->plotOffset = offset;
 }
 
 void ui_row_end(UI_Context* ui) {

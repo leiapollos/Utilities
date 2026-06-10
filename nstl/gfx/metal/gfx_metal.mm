@@ -97,6 +97,8 @@ struct GfxFrame {
     U64 stagingPos;
     id<MTLCounterSampleBuffer> timestampSamples;
     U32 timedPassCount;
+    U32 timedPassSites[GFX_MAX_TIMED_PASSES];
+    U64 profFrameIndex;
     U32 slotIndex;
     B32 active;
     B32 submitted;
@@ -150,7 +152,7 @@ struct GfxDevice {
     B32 bcSupported;
     B32 gpuTimingsEnabled;
     id<MTLCounterSet> timestampCounterSet;
-    MTLTimestamp lastCpuTimestamp;
+    U64 lastProfTick;
     MTLTimestamp lastGpuTimestamp;
 
     GfxStats stats;
@@ -1291,8 +1293,10 @@ B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDe
             }
             if (sampleBuffersOk) {
                 device->gpuTimingsEnabled = 1;
-                [metalDevice sampleTimestamps:&device->lastCpuTimestamp
+                MTLTimestamp cpuIgnored = 0u;
+                [metalDevice sampleTimestamps:&cpuIgnored
                                  gpuTimestamp:&device->lastGpuTimestamp];
+                device->lastProfTick = prof_tick();
             }
         }
         if (!device->gpuTimingsEnabled) {
@@ -1935,11 +1939,13 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
         return 0;
     }
 
-    U64 gpuWaitStartNs = OS_get_time_nanoseconds();
-    dispatch_semaphore_wait(device->frameSemaphore, DISPATCH_TIME_FOREVER);
-    U64 gpuWaitEndNs = OS_get_time_nanoseconds();
+    GfxFrame* frame = 0;
+    {
+        PROF_SCOPE("gpu wait");
+        dispatch_semaphore_wait(device->frameSemaphore, DISPATCH_TIME_FOREVER);
+    }
 
-    GfxFrame* frame = &device->frames[device->frameCursor];
+    frame = &device->frames[device->frameCursor];
     device->frameCursor = (device->frameCursor + 1u) % device->framesInFlight;
 
     if (frame->submittedSerial > device->completedFrameSerial) {
@@ -1949,9 +1955,11 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
 
     gfx_metal_release_frame_objects(frame);
 
-    U64 acquireStartNs = OS_get_time_nanoseconds();
-    id<CAMetalDrawable> drawable = [device->metalLayer nextDrawable];
-    U64 acquireEndNs = OS_get_time_nanoseconds();
+    id<CAMetalDrawable> drawable = 0;
+    {
+        PROF_SCOPE("acquire drawable");
+        drawable = [device->metalLayer nextDrawable];
+    }
     if (!drawable) {
         LOG_ERROR("gfx", "Metal layer did not provide a drawable");
         dispatch_semaphore_signal(device->frameSemaphore);
@@ -1985,23 +1993,24 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
         backbuffer->usageFlags = GfxTextureUsageFlags_ColorTarget;
     }
 
-    F32 resolvedMs[GFX_MAX_TIMED_PASSES] = {};
-    U32 resolvedCount = 0u;
     if (device->gpuTimingsEnabled && frame->timestampSamples && frame->timedPassCount != 0u) {
-        MTLTimestamp cpuNow = 0u;
+        MTLTimestamp cpuIgnored = 0u;
         MTLTimestamp gpuNow = 0u;
-        [device->metalDevice sampleTimestamps:&cpuNow gpuTimestamp:&gpuNow];
-        F64 nsPerTick = 0.0;
-        if (gpuNow > device->lastGpuTimestamp && cpuNow > device->lastCpuTimestamp) {
-            nsPerTick = (F64)(cpuNow - device->lastCpuTimestamp) /
-                        (F64)(gpuNow - device->lastGpuTimestamp);
+        [device->metalDevice sampleTimestamps:&cpuIgnored gpuTimestamp:&gpuNow];
+        U64 profNow = prof_tick();
+        F64 profTicksPerGpuTick = 0.0;
+        if (gpuNow > device->lastGpuTimestamp && profNow > device->lastProfTick) {
+            profTicksPerGpuTick = (F64)(profNow - device->lastProfTick) /
+                                  (F64)(gpuNow - device->lastGpuTimestamp);
         }
-        device->lastCpuTimestamp = cpuNow;
+        U64 anchorGpu = device->lastGpuTimestamp;
+        U64 anchorProf = device->lastProfTick;
+        device->lastProfTick = profNow;
         device->lastGpuTimestamp = gpuNow;
 
         NSData* sampleData =
             [frame->timestampSamples resolveCounterRange:NSMakeRange(0u, 2u * frame->timedPassCount)];
-        if (sampleData && nsPerTick > 0.0) {
+        if (sampleData && profTicksPerGpuTick > 0.0) {
             const MTLCounterResultTimestamp* samples =
                 (const MTLCounterResultTimestamp*)[sampleData bytes];
             U64 sampleCount = (U64)[sampleData length] / sizeof(MTLCounterResultTimestamp);
@@ -2019,14 +2028,20 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
                 U64 endTicks = samples[endIndex].timestamp;
                 if (beginTicks != MTLCounterErrorValue &&
                     endTicks != MTLCounterErrorValue &&
-                    endTicks >= beginTicks) {
-                    resolvedMs[passIndex] = (F32)((F64)(endTicks - beginTicks) * nsPerTick / 1.0e6);
+                    endTicks >= beginTicks &&
+                    beginTicks >= anchorGpu) {
+                    U64 beginProf = anchorProf + (U64)((F64)(beginTicks - anchorGpu) * profTicksPerGpuTick);
+                    U64 endProf = anchorProf + (U64)((F64)(endTicks - anchorGpu) * profTicksPerGpuTick);
+                    prof_gpu_span(frame->timedPassSites[passIndex],
+                                  prof_tick_to_ns(beginProf),
+                                  prof_tick_to_ns(endProf),
+                                  frame->profFrameIndex);
                 }
             }
-            resolvedCount = passCount;
         }
     }
     frame->timedPassCount = 0u;
+    frame->profFrameIndex = prof_current_frame();
 
     frame->tempPos = 0u;
     frame->stagingPos = 0u;
@@ -2043,10 +2058,6 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
     device->stats.stagingBytesUsed = 0u;
     device->stats.resourceTableCount = device->resourceTable.liveCount;
     device->stats.frameIndex = device->frameSerial;
-    MEMCPY(device->stats.passGpuMs, resolvedMs, sizeof(resolvedMs));
-    device->stats.passGpuCount = resolvedCount;
-    device->stats.gpuWaitMs = (F32)((F64)(gpuWaitEndNs - gpuWaitStartNs) / 1.0e6);
-    device->stats.acquireWaitMs = (F32)((F64)(acquireEndNs - acquireStartNs) / 1.0e6);
 
     return frame;
 }
@@ -2388,6 +2399,7 @@ void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, 
         sampleAttachment.endOfVertexSampleIndex = MTLCounterDontSample;
         sampleAttachment.startOfFragmentSampleIndex = MTLCounterDontSample;
         sampleAttachment.endOfFragmentSampleIndex = (NSUInteger)(2u * frame->timedPassCount + 1u);
+        frame->timedPassSites[frame->timedPassCount] = prof_site_gpu(desc->name ? desc->name : "render pass");
         frame->timedPassCount += 1u;
     }
 
@@ -2567,6 +2579,7 @@ void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc
         sampleAttachment.sampleBuffer = frame->timestampSamples;
         sampleAttachment.startOfEncoderSampleIndex = (NSUInteger)(2u * frame->timedPassCount);
         sampleAttachment.endOfEncoderSampleIndex = (NSUInteger)(2u * frame->timedPassCount + 1u);
+        frame->timedPassSites[frame->timedPassCount] = prof_site_gpu(desc->name ? desc->name : "compute pass");
         frame->timedPassCount += 1u;
         encoder = [[frame->commandBuffer computeCommandEncoderWithDescriptor:computePassDesc] retain];
         [computePassDesc release];
