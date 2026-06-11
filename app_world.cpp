@@ -5,6 +5,8 @@
 // lane writers, GPU visibility passes, and the forward pass.
 //
 
+#include "app_world_kernels.hpp"
+
 enum AppWorldShaderSlot {
     AppWorldShaderSlot_Vertex = 0,
     AppWorldShaderSlot_Fragment,
@@ -135,42 +137,6 @@ static Vec3F32 app_world_vec3_(F32 x, F32 y, F32 z) {
     return result;
 }
 
-struct AppWorldMeshBuilder {
-    ShdWorldVertexRecord* vertices;
-    U32* indices;
-    U32 vertexCount;
-    U32 indexCount;
-    U32 vertexCapacity;
-    U32 indexCapacity;
-};
-
-static void app_world_builder_vertex_(AppWorldMeshBuilder* builder, F32 px, F32 py, F32 pz,
-                                      F32 nx, F32 ny, F32 nz, F32 u, F32 v) {
-    if (builder->vertexCount >= builder->vertexCapacity) {
-        return;
-    }
-    ShdWorldVertexRecord* vertex = builder->vertices + builder->vertexCount;
-    builder->vertexCount += 1u;
-    vertex->position[0] = px;
-    vertex->position[1] = py;
-    vertex->position[2] = pz;
-    vertex->normal[0] = nx;
-    vertex->normal[1] = ny;
-    vertex->normal[2] = nz;
-    vertex->uv[0] = u;
-    vertex->uv[1] = v;
-}
-
-static void app_world_builder_index_(AppWorldMeshBuilder* builder, U32 a, U32 b, U32 c) {
-    if (builder->indexCount + 3u > builder->indexCapacity) {
-        return;
-    }
-    builder->indices[builder->indexCount + 0u] = a;
-    builder->indices[builder->indexCount + 1u] = b;
-    builder->indices[builder->indexCount + 2u] = c;
-    builder->indexCount += 3u;
-}
-
 static AppWorldMeshHandle app_world_register_mesh_(AppWorldState* world, U32 firstIndex, U32 indexCount,
                                                    U32 baseVertex, GfxBuffer vertexBuffer,
                                                    GfxResourceId vertexBufferId, GfxBuffer indexBuffer,
@@ -257,76 +223,6 @@ static void app_world_material_release(AppWorldState* world, U32 index) {
     // the slot is reused.
     world->materialRecords[index] = world->materialRecords[APP_WORLD_MATERIAL_MISSING];
     world->materialsDirty = 1;
-}
-
-static void app_world_build_cube_(AppWorldMeshBuilder* builder) {
-    static const F32 faces[6][3] = {
-        {1.0f, 0.0f, 0.0f}, {-1.0f, 0.0f, 0.0f},
-        {0.0f, 1.0f, 0.0f}, {0.0f, -1.0f, 0.0f},
-        {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, -1.0f},
-    };
-    for (U32 face = 0u; face < 6u; ++face) {
-        F32 nx = faces[face][0];
-        F32 ny = faces[face][1];
-        F32 nz = faces[face][2];
-        F32 ux = ny;
-        F32 uy = nz;
-        F32 uz = nx;
-        F32 vx = ny * uz - nz * uy;
-        F32 vy = nz * ux - nx * uz;
-        F32 vz = nx * uy - ny * ux;
-        U32 base = builder->vertexCount;
-        for (U32 corner = 0u; corner < 4u; ++corner) {
-            F32 s = (corner == 1u || corner == 2u) ? 0.5f : -0.5f;
-            F32 t = (corner >= 2u) ? 0.5f : -0.5f;
-            app_world_builder_vertex_(builder,
-                                      nx * 0.5f + ux * s + vx * t,
-                                      ny * 0.5f + uy * s + vy * t,
-                                      nz * 0.5f + uz * s + vz * t,
-                                      nx, ny, nz,
-                                      (corner == 1u || corner == 2u) ? 1.0f : 0.0f,
-                                      (corner >= 2u) ? 1.0f : 0.0f);
-        }
-        app_world_builder_index_(builder, base + 0u, base + 1u, base + 2u);
-        app_world_builder_index_(builder, base + 0u, base + 2u, base + 3u);
-    }
-}
-
-static void app_world_build_sphere_(AppWorldMeshBuilder* builder, U32 rings, U32 sectors) {
-    U32 base = builder->vertexCount;
-    for (U32 ring = 0u; ring <= rings; ++ring) {
-        F32 v = (F32)ring / (F32)rings;
-        F32 phi = v * 3.14159265f;
-        F32 y = COS_F32(phi);
-        F32 r = SIN_F32(phi);
-        for (U32 sector = 0u; sector <= sectors; ++sector) {
-            F32 u = (F32)sector / (F32)sectors;
-            F32 theta = u * 2.0f * 3.14159265f;
-            F32 x = r * COS_F32(theta);
-            F32 z = r * SIN_F32(theta);
-            app_world_builder_vertex_(builder, x * 0.5f, y * 0.5f, z * 0.5f, x, y, z, u, v);
-        }
-    }
-    for (U32 ring = 0u; ring < rings; ++ring) {
-        for (U32 sector = 0u; sector < sectors; ++sector) {
-            U32 a = base + ring * (sectors + 1u) + sector;
-            U32 b = a + sectors + 1u;
-            // Wound to match the cube/plane convention (right-handed cross
-            // points outward); the transparent pipeline culls on it.
-            app_world_builder_index_(builder, a, a + 1u, b);
-            app_world_builder_index_(builder, a + 1u, b + 1u, b);
-        }
-    }
-}
-
-static void app_world_build_plane_(AppWorldMeshBuilder* builder) {
-    U32 base = builder->vertexCount;
-    app_world_builder_vertex_(builder, -0.5f, 0.0f, -0.5f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f);
-    app_world_builder_vertex_(builder, 0.5f, 0.0f, -0.5f, 0.0f, 1.0f, 0.0f, 4.0f, 0.0f);
-    app_world_builder_vertex_(builder, 0.5f, 0.0f, 0.5f, 0.0f, 1.0f, 0.0f, 4.0f, 4.0f);
-    app_world_builder_vertex_(builder, -0.5f, 0.0f, 0.5f, 0.0f, 1.0f, 0.0f, 0.0f, 4.0f);
-    app_world_builder_index_(builder, base + 0u, base + 2u, base + 1u);
-    app_world_builder_index_(builder, base + 0u, base + 3u, base + 2u);
 }
 
 static B32 app_world_try_create_resources_(APP_Context* ctx) {
@@ -1084,31 +980,6 @@ static void app_world_ensure_depth_(APP_Context* ctx) {
     world->depthHeight = height;
 }
 
-static void app_world_frustum_planes_(const Mat4x4F32* m, F32* outPlanes) {
-    // Gribb-Hartmann from column-major viewProj; rowI[j] = v[j][i].
-    for (U32 planeIndex = 0u; planeIndex < 6u; ++planeIndex) {
-        F32 plane[4];
-        U32 row = planeIndex / 2u;
-        B32 add = (planeIndex & 1u) == 0u;
-        for (U32 component = 0u; component < 4u; ++component) {
-            F32 row3 = m->v[component][3];
-            F32 rowN = m->v[component][row];
-            plane[component] = add ? (row3 + rowN) : (row3 - rowN);
-        }
-        if (planeIndex == 4u) {
-            // Near plane for [0,1] clip depth is row2 itself.
-            for (U32 component = 0u; component < 4u; ++component) {
-                plane[component] = m->v[component][2];
-            }
-        }
-        F32 lengthSq = plane[0] * plane[0] + plane[1] * plane[1] + plane[2] * plane[2];
-        F32 inverseLength = (lengthSq > 0.0f) ? (1.0f / SQRT_F32(lengthSq)) : 0.0f;
-        for (U32 component = 0u; component < 4u; ++component) {
-            outPlanes[planeIndex * 4u + component] = plane[component] * inverseLength;
-        }
-    }
-}
-
 static void app_world_begin_frame_(APP_Context* ctx) {
     AppCoreState* state = ctx->core;
     AppWorldState* world = &state->world;
@@ -1151,9 +1022,8 @@ static void app_world_set_camera(APP_Context* ctx, Vec3F32 eye, Vec3F32 target, 
     F32 aspect = (ctx->host->windowHeight != 0u)
         ? ((F32)ctx->host->windowWidth / (F32)ctx->host->windowHeight)
         : 1.0f;
-    Mat4x4F32 view = mat4_look_at(eye, target, app_world_vec3_(0.0f, 1.0f, 0.0f));
-    Mat4x4F32 projection = mat4_perspective(fovYRadians, aspect, zNear, zFar);
-    Mat4x4F32 viewProj = view * projection;
+    Mat4x4F32 viewProj = app_world_camera_view_proj_(eye, target, app_world_vec3_(0.0f, 1.0f, 0.0f),
+                                                     fovYRadians, aspect, zNear, zFar);
 
     MEMSET(&world->frameRecord, 0, sizeof(world->frameRecord));
     MEMCPY(world->frameRecord.viewProj, &viewProj, sizeof(world->frameRecord.viewProj));
@@ -1264,24 +1134,10 @@ static B32 app_world_cull_sort_transparents_(AppWorldState* world, Arena* frameA
         for (U32 at = 0u; at < writer->transparentCount; ++at) {
             const ShdWorldRenderableRecord* record = writer->transparents + at;
             F32 radius = record->boundsRadius;
-            B32 inside = 1;
-            for (U32 plane = 0u; plane < 6u; ++plane) {
-                F32 distance = planes[plane * 4u + 0u] * record->boundsCenter[0] +
-                               planes[plane * 4u + 1u] * record->boundsCenter[1] +
-                               planes[plane * 4u + 2u] * record->boundsCenter[2] +
-                               planes[plane * 4u + 3u];
-                if (distance < -radius) {
-                    inside = 0;
-                    break;
-                }
-            }
-            if (!inside) {
+            if (!app_world_sphere_visible_(planes, record->boundsCenter, radius)) {
                 continue;
             }
-            depths[visible] = (record->boundsCenter[0] - eye[0]) * forward.x +
-                              (record->boundsCenter[1] - eye[1]) * forward.y +
-                              (record->boundsCenter[2] - eye[2]) * forward.z -
-                              radius;
+            depths[visible] = app_world_transparent_depth_(record->boundsCenter, radius, eye, forward);
             sources[visible] = record;
             visible += 1u;
         }
@@ -1312,37 +1168,9 @@ static B32 app_world_cull_sort_transparents_(AppWorldState* world, Arena* frameA
     if (!order || !scratch) {
         return 0;
     }
-    for (U32 at = 0u; at < visible; ++at) {
-        order[at] = at;
-    }
-    // Back-to-front: descending view depth; radix over flipped F32 bits,
-    // two 16-bit passes, then reversed copy-out.
-    for (U32 pass = 0u; pass < 2u; ++pass) {
-        U32 shift = pass * 16u;
-        U32 histogram[65536];
-        MEMSET(histogram, 0, sizeof(histogram));
-        for (U32 at = 0u; at < visible; ++at) {
-            union { F32 f; U32 u; } bits;
-            bits.f = depths[order[at]];
-            U32 key = ((bits.u >> 31u) != 0u) ? ~bits.u : (bits.u | 0x80000000u);
-            histogram[(key >> shift) & 0xFFFFu] += 1u;
-        }
-        U32 running = 0u;
-        for (U32 bucket = 0u; bucket < 65536u; ++bucket) {
-            U32 bucketCount = histogram[bucket];
-            histogram[bucket] = running;
-            running += bucketCount;
-        }
-        for (U32 at = 0u; at < visible; ++at) {
-            union { F32 f; U32 u; } bits;
-            bits.f = depths[order[at]];
-            U32 key = ((bits.u >> 31u) != 0u) ? ~bits.u : (bits.u | 0x80000000u);
-            scratch[histogram[(key >> shift) & 0xFFFFu]++] = order[at];
-        }
-        U32* swap = order;
-        order = scratch;
-        scratch = swap;
-    }
+    // Back-to-front: descending view depth; ascending radix, reversed
+    // copy-out.
+    app_world_order_ascending_(depths, order, scratch, visible);
     for (U32 at = 0u; at < uploadCount; ++at) {
         const ShdWorldRenderableRecord* source = sources[order[visible - 1u - at]];
         tailOut[at] = *source;
