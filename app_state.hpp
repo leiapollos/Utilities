@@ -213,6 +213,10 @@ struct AppDemoState {
     U32 transparentMaterials[2];
 };
 
+#define APP_SIM_TICK_HZ 60u
+#define APP_SIM_TICK_DT (1.0f / (F32)APP_SIM_TICK_HZ)
+#define APP_SIM_MAX_FRAME_DT 0.25f
+
 struct AppCoreState {
     U32 windowWidth;
     U32 windowHeight;
@@ -220,6 +224,11 @@ struct AppCoreState {
     U32 reloadCount;
     F32 lastDeltaSeconds;
     F32 averageDeltaSeconds;
+    U64 simTickCounter;
+    F32 simAccumulator;
+    F32 simForcedDt;
+    F64 simTimeSeconds;
+    U32 simClampCount;
     B32 debugOverlayVisible;
     B32 profilerVisible;
     B32 profFlatView;

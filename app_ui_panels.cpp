@@ -5,27 +5,6 @@
 #define app_ui_stat_line(ui, rgba8, fmt, ...) \
     ui_label_value((ui), (rgba8), fmt, __VA_ARGS__)
 
-static U32 app_demo_env_u32_(StringU8 name, U32 fallback, U32 minValue, U32 maxValue) {
-    U32 result = fallback;
-    Temp scratch = get_scratch(0, 0);
-    if (scratch.arena) {
-        StringU8 text = OS_get_environment_variable(scratch.arena, name);
-        if (text.data && text.size != 0u) {
-            U64 parsed = 0ull;
-            for (U64 at = 0u; at < text.size; ++at) {
-                U8 ch = text.data[at];
-                if (ch < (U8)'0' || ch > (U8)'9') {
-                    break;
-                }
-                parsed = parsed * 10ull + (U64)(ch - (U8)'0');
-            }
-            result = (U32)CLAMP(parsed, (U64)minValue, (U64)maxValue);
-        }
-        temp_end(&scratch);
-    }
-    return result;
-}
-
 static void app_demo_state_reset(AppDemoState* demo) {
     StringU8 title = str8("world: gpu-driven indirect draws");
     MEMSET(demo, 0, sizeof(*demo));
@@ -34,11 +13,11 @@ static void app_demo_state_reset(AppDemoState* demo) {
     demo->titleSize = 32.0f;
     demo->showBounds = 0;
     demo->animate = 1;
-    demo->threadedExtract = (B32)app_demo_env_u32_(str8("UTILITIES_DEMO_THREADED"), 1u, 0u, 1u);
-    demo->maxLanes = app_demo_env_u32_(str8("UTILITIES_DEMO_MAX_LANES"), APP_WORLD_MAX_LANES,
-                                       1u, APP_WORLD_MAX_LANES);
-    demo->gridSide = app_demo_env_u32_(str8("UTILITIES_DEMO_GRID"), 48u,
-                                       APP_DEMO_GRID_MIN, APP_DEMO_GRID_MAX);
+    demo->threadedExtract = (B32)app_env_u32_(str8("UTILITIES_DEMO_THREADED"), 1u, 0u, 1u);
+    demo->maxLanes = app_env_u32_(str8("UTILITIES_DEMO_MAX_LANES"), APP_WORLD_MAX_LANES,
+                                  1u, APP_WORLD_MAX_LANES);
+    demo->gridSide = app_env_u32_(str8("UTILITIES_DEMO_GRID"), 48u,
+                                  APP_DEMO_GRID_MIN, APP_DEMO_GRID_MAX);
 }
 
 static void app_ui_controls_panel(APP_Context* ctx, UI_Context* ui) {
@@ -232,8 +211,9 @@ static void app_ui_profiler_panel(APP_Context* ctx, UI_Context* ui) {
 
     F32 averageFrameMs = state->averageDeltaSeconds * 1000.0f;
     F32 fps = (state->averageDeltaSeconds > 0.0f) ? (1.0f / state->averageDeltaSeconds) : 0.0f;
-    app_ui_stat_line(ui, UI_COLOR_TEXT, "frame {:.2}ms  {:.0}fps  |  res {:.0}ns  scope {:.1}ns  drops {}  sites {}",
-                     averageFrameMs, fps, info.resolutionNs, info.overheadNsPerScope,
+    app_ui_stat_line(ui, UI_COLOR_TEXT, "frame {:.2}ms  {:.0}fps  tick {}  clamps {}  |  res {:.0}ns  scope {:.1}ns  drops {}  sites {}",
+                     averageFrameMs, fps, (U32)state->simTickCounter, state->simClampCount,
+                     info.resolutionNs, info.overheadNsPerScope,
                      info.droppedEvents, info.siteCount);
 
     U32 historyCount = 0u;

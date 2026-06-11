@@ -162,7 +162,7 @@ static void app_demo_scene_submit(APP_Context* ctx, AppRendererFrame* rendererFr
 
     app_demo_scene_ensure_materials_(ctx);
 
-    F32 time = (F32)((F64)state->frameCounter / 60.0);
+    F32 time = (F32)state->simTimeSeconds;
     U32 side = CLAMP(demo->gridSide, APP_DEMO_GRID_MIN, APP_DEMO_GRID_MAX);
 
     F32 orbitRadius = (F32)side * APP_SCENE_GRID_SPACING * 0.62f;

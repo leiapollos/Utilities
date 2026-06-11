@@ -2,7 +2,7 @@
 // Created by André Leite on 31/10/2025.
 //
 
-#define APP_CORE_STATE_VERSION 63u
+#define APP_CORE_STATE_VERSION 64u
 
 #if defined(PLATFORM_BUILD_DEBUG)
 #define APP_GFX_DEV_SHADER_SOURCE_ENTRY(name, source) source,
@@ -35,6 +35,27 @@ static void app_ui_panels_submit(APP_Context* ctx, AppRendererFrame* rendererFra
 static U64 app_gfx_newest_shader_source_timestamp(void);
 static void app_gfx_try_build_dev_shaders(APP_Context* ctx);
 #endif
+
+static U32 app_env_u32_(StringU8 name, U32 fallback, U32 minValue, U32 maxValue) {
+    U32 result = fallback;
+    Temp scratch = get_scratch(0, 0);
+    if (scratch.arena) {
+        StringU8 text = OS_get_environment_variable(scratch.arena, name);
+        if (text.data && text.size != 0u) {
+            U64 parsed = 0ull;
+            for (U64 at = 0u; at < text.size; ++at) {
+                U8 ch = text.data[at];
+                if (ch < (U8)'0' || ch > (U8)'9') {
+                    break;
+                }
+                parsed = parsed * 10ull + (U64)(ch - (U8)'0');
+            }
+            result = (U32)CLAMP(parsed, (U64)minValue, (U64)maxValue);
+        }
+        temp_end(&scratch);
+    }
+    return result;
+}
 
 static B32 app_boot(AppHost* host, HOT_StateStore* store) {
     ASSERT_ALWAYS(host != 0);
@@ -98,6 +119,20 @@ static void app_frame(AppHost* host, HOT_StateStore* store, const AppInput* inpu
     state->averageDeltaSeconds = (state->averageDeltaSeconds <= 0.0f)
         ? input->deltaSeconds
         : state->averageDeltaSeconds * 0.95f + input->deltaSeconds * 0.05f;
+    // Fixed-tick sim clock: integer ticks are the canonical clock; the
+    // accumulator remainder keeps render time continuous at any refresh rate.
+    F32 frameDt = (state->simForcedDt > 0.0f) ? state->simForcedDt : input->deltaSeconds;
+    if (frameDt > APP_SIM_MAX_FRAME_DT) {
+        frameDt = APP_SIM_MAX_FRAME_DT;
+        state->simClampCount += 1u;
+    }
+    state->simAccumulator += frameDt;
+    while (state->simAccumulator >= APP_SIM_TICK_DT) {
+        state->simTickCounter += 1ull;
+        state->simAccumulator -= APP_SIM_TICK_DT;
+    }
+    state->simTimeSeconds = (F64)state->simTickCounter / (F64)APP_SIM_TICK_HZ +
+                            (F64)state->simAccumulator;
     for (U32 eventIndex = 0; eventIndex < input->eventCount; ++eventIndex) {
         const OS_GraphicsEvent* event = input->events + eventIndex;
         ASSERT_ALWAYS(event != 0);
@@ -418,6 +453,10 @@ static void app_state_init(APP_Context* ctx, APP_StateKind kind, void* memory) {
             core->windowHeight = ctx->host->windowHeight;
             core->debugOverlayVisible = 1;
             core->profilerVisible = 1;
+            // UTILITIES_FIXED_DT=1 locks every frame to one tick so
+            // frame-indexed captures stay deterministic under load.
+            core->simForcedDt = app_env_u32_(str8("UTILITIES_FIXED_DT"), 0u, 0u, 1u)
+                ? APP_SIM_TICK_DT : 0.0f;
             app_demo_state_reset(&core->demo);
 
             StringU8 eventsDomain = str8((const char*) "events", 6);

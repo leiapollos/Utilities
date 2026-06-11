@@ -1161,7 +1161,7 @@ static void app_world_set_camera(APP_Context* ctx, Vec3F32 eye, Vec3F32 target, 
     world->frameRecord.cameraPos[0] = eye.x;
     world->frameRecord.cameraPos[1] = eye.y;
     world->frameRecord.cameraPos[2] = eye.z;
-    world->frameRecord.time = (F32)((F64)state->frameCounter / 60.0);
+    world->frameRecord.time = (F32)state->simTimeSeconds;
 
     Vec3F32 forward = app_world_vec3_(target.x - eye.x, target.y - eye.y, target.z - eye.z);
     F32 length = vec3_length(forward);
