@@ -2,7 +2,7 @@
 // Created by André Leite on 31/10/2025.
 //
 
-#define APP_CORE_STATE_VERSION 60u
+#define APP_CORE_STATE_VERSION 62u
 
 #if defined(PLATFORM_BUILD_DEBUG)
 #define APP_GFX_DEV_SHADER_SOURCE_ENTRY(name, source) source,

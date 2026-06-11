@@ -3,11 +3,7 @@
 
 #if GFX_SHADER_STAGE_COMPUTE
 
-static const uint WORLD_COMPACT_GROUP_SIZE = 256u;
 static const uint WORLD_ARGS_STRIDE_WORDS = 5u;
-
-groupshared uint sharedScan[WORLD_COMPACT_GROUP_SIZE];
-groupshared uint sharedChunkBase;
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
@@ -51,6 +47,8 @@ void world_cull(uint3 threadId : SV_DispatchThreadID) {
     }
 }
 
+// Also seeds the scatter cursors; cells fill in arrival order (depth-tested
+// bins do not care), transparents never enter the GPU set.
 [shader("compute")]
 [numthreads(1, 1, 1)]
 void world_prefix(uint3 threadId : SV_DispatchThreadID) {
@@ -58,60 +56,26 @@ void world_prefix(uint3 threadId : SV_DispatchThreadID) {
     uint running = 0u;
     for (uint cell = 0u; cell < rootData.cellCount; ++cell) {
         gfx_store_buffer_word(rootData.cellOffsetBuffer, rootData.cellOffsetByteOffset, cell, running);
+        gfx_store_buffer_word(rootData.cellCursorBuffer, rootData.cellCursorByteOffset, cell, running);
         running += gfx_load_buffer_word(rootData.cellCountBuffer, rootData.cellCountByteOffset, cell);
     }
 }
 
-// One threadgroup per cell; walks all renderables in chunks, keeping
-// submission order within the cell (transparent bins rely on it).
 [shader("compute")]
-[numthreads(256, 1, 1)]
-void world_compact(uint3 groupId : SV_GroupID, uint3 localId : SV_GroupThreadID) {
+[numthreads(64, 1, 1)]
+void world_scatter(uint3 threadId : SV_DispatchThreadID) {
     WorldCullRootData rootData = shd_load_WorldCullRootData_root();
-    uint cell = groupId.x;
-    if (cell >= rootData.cellCount) {
+    uint renderableIndex = threadId.x;
+    if (renderableIndex >= rootData.renderableCount) {
         return;
     }
-    uint cellBase = gfx_load_buffer_word(rootData.cellOffsetBuffer, rootData.cellOffsetByteOffset, cell);
-
-    if (localId.x == 0u) {
-        sharedChunkBase = 0u;
+    uint visible = gfx_load_buffer_word(rootData.flagsBuffer, rootData.flagsByteOffset, renderableIndex);
+    if (visible == 0u) {
+        return;
     }
-    GroupMemoryBarrierWithGroupSync();
-
-    for (uint chunkStart = 0u; chunkStart < rootData.renderableCount; chunkStart += WORLD_COMPACT_GROUP_SIZE) {
-        uint renderableIndex = chunkStart + localId.x;
-        uint belongs = 0u;
-        if (renderableIndex < rootData.renderableCount) {
-            uint visible = gfx_load_buffer_word(rootData.flagsBuffer, rootData.flagsByteOffset, renderableIndex);
-            if (visible != 0u) {
-                WorldRenderableRecord renderable = shd_load_WorldRenderableRecord(rootData.renderableBuffer, rootData.renderableByteOffset, renderableIndex);
-                belongs = (renderable.cellIndex == cell) ? 1u : 0u;
-            }
-        }
-
-        sharedScan[localId.x] = belongs;
-        GroupMemoryBarrierWithGroupSync();
-
-        [unroll] for (uint step = 1u; step < WORLD_COMPACT_GROUP_SIZE; step <<= 1u) {
-            uint value = (localId.x >= step) ? sharedScan[localId.x - step] : 0u;
-            GroupMemoryBarrierWithGroupSync();
-            sharedScan[localId.x] += value;
-            GroupMemoryBarrierWithGroupSync();
-        }
-
-        if (belongs != 0u) {
-            uint localPrefix = sharedScan[localId.x] - 1u;
-            gfx_store_buffer_word(rootData.visibleBuffer, rootData.visibleByteOffset,
-                                  cellBase + sharedChunkBase + localPrefix, renderableIndex);
-        }
-        GroupMemoryBarrierWithGroupSync();
-
-        if (localId.x == 0u) {
-            sharedChunkBase += sharedScan[WORLD_COMPACT_GROUP_SIZE - 1u];
-        }
-        GroupMemoryBarrierWithGroupSync();
-    }
+    WorldRenderableRecord renderable = shd_load_WorldRenderableRecord(rootData.renderableBuffer, rootData.renderableByteOffset, renderableIndex);
+    uint slot = gfx_atomic_add_buffer_word(rootData.cellCursorBuffer, rootData.cellCursorByteOffset, renderable.cellIndex, 1u);
+    gfx_store_buffer_word(rootData.visibleBuffer, rootData.visibleByteOffset, slot, renderableIndex);
 }
 
 [shader("compute")]

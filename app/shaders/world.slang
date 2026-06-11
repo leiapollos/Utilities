@@ -34,13 +34,22 @@ struct WorldVertexOut {
     nointerpolation uint materialIndex : TEXCOORD1;
 };
 
+static const uint WORLD_DIRECT_NONE = 0xFFFFFFFFu;
+
 [shader("vertex")]
 WorldVertexOut world_vertex(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID) {
     WorldForwardRootData rootData = shd_load_WorldForwardRootData_root();
     WorldFrameRecord frame = shd_load_WorldFrameRecord(rootData.frameBuffer, rootData.frameByteOffset, 0u);
 
-    uint cellBase = gfx_load_buffer_word(rootData.cellOffsetBuffer, rootData.cellOffsetByteOffset, rootData.cellIndex);
-    uint renderableIndex = gfx_load_buffer_word(rootData.visibleBuffer, rootData.visibleByteOffset, cellBase + instanceId);
+    // Uniform per draw: CPU-sorted transparent runs index the tail directly;
+    // GPU-culled draws go through cell offsets + the visible list.
+    uint renderableIndex;
+    if (rootData.directFirstRenderable != WORLD_DIRECT_NONE) {
+        renderableIndex = rootData.directFirstRenderable + instanceId;
+    } else {
+        uint cellBase = gfx_load_buffer_word(rootData.cellOffsetBuffer, rootData.cellOffsetByteOffset, rootData.cellIndex);
+        renderableIndex = gfx_load_buffer_word(rootData.visibleBuffer, rootData.visibleByteOffset, cellBase + instanceId);
+    }
     WorldRenderableRecord renderable = shd_load_WorldRenderableRecord(rootData.renderableBuffer, rootData.renderableByteOffset, renderableIndex);
     WorldVertexRecord vertex = shd_load_WorldVertexRecord(rootData.vertexBuffer, rootData.vertexByteOffset, vertexId);
 

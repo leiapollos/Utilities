@@ -112,10 +112,10 @@ static void app_ui_stats_panel(APP_Context* ctx, UI_Context* ui) {
                      uiStats->retainedEvictCount, uiStats->duplicateKeyCount);
     app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "ui text  value hits {}  misses {}  uncached {}",
                      uiStats->valueRunHits, uiStats->valueRunMisses, uiStats->valueRunUninsertable);
-    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "world  renderables {}  dropped {}  lanes {}  meshes {}  cells {}",
+    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "world  renderables {}  dropped {}  lanes {}  meshes {}  tdraws {}",
                      state->world.lastRenderableCount, state->world.lastDroppedCount,
                      state->world.laneCount, state->world.meshCount,
-                     APP_WORLD_BIN_COUNT * state->world.meshCount);
+                     state->world.lastTransparentDraws);
 
     if (state->resources.artifactCache) {
         ArtifactStats artifact = artifact_cache_stats(state->resources.artifactCache);

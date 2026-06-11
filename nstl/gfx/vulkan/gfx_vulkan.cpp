@@ -3047,6 +3047,17 @@ static GfxTemp gfx_vulkan_allocate_staging(GfxFrame* frame, U64 size, U64 alignm
     return result;
 }
 
+void* gfx_buffer_contents(GfxDevice* device, GfxBuffer buffer) {
+    if (!device) {
+        return 0;
+    }
+    GfxVulkanBuffer* item = gfx_vulkan_resolve_buffer(device, buffer);
+    if (!item->buffer || item->memoryKind != GfxMemoryKind_Upload) {
+        return 0;
+    }
+    return item->mapped;
+}
+
 B32 gfx_upload_buffer(GfxFrame* frame, GfxBuffer dst, U64 dstOffset, const void* src, U64 size) {
     if (!frame || !frame->device || !src || size == 0u) {
         return 0;

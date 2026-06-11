@@ -1,6 +1,11 @@
 #pragma once
 
-struct AppRendererFrame;
+struct AppRendererFrame {
+    GfxFrame* frame;
+    GfxCommandBuffer* commands;
+};
+
+static AppRendererFrame g_appRendererFrame;
 
 static B32 app_renderer_register_artifact_types(APP_Context* ctx);
 static void app_renderer_watch_files(APP_Context* ctx);

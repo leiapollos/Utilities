@@ -2121,6 +2121,17 @@ static GfxTemp gfx_metal_allocate_staging(GfxFrame* frame, U64 size, U64 alignme
     return result;
 }
 
+void* gfx_buffer_contents(GfxDevice* device, GfxBuffer buffer) {
+    if (!device) {
+        return 0;
+    }
+    GfxMetalBuffer* item = gfx_metal_resolve_buffer(device, buffer);
+    if (!item->buffer || item->memoryKind != GfxMemoryKind_Upload) {
+        return 0;
+    }
+    return [item->buffer contents];
+}
+
 B32 gfx_upload_buffer(GfxFrame* frame, GfxBuffer dst, U64 dstOffset, const void* src, U64 size) {
     if (!frame || !frame->device || !src || size == 0u) {
         return 0;

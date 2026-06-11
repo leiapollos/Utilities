@@ -1,6 +1,7 @@
 #include "app_include.hpp"
 #include "app_include.cpp"
 #include "app.cpp"
+#include "app_world.cpp"
 #include "app_renderer.cpp"
 #include "app_debug_draw.cpp"
 #include "app_ui_panels.cpp"

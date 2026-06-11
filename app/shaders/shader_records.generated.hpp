@@ -200,6 +200,7 @@ struct WorldForwardRootData {
     uint vertexBuffer;
     uint vertexByteOffset;
     uint cellIndex;
+    uint directFirstRenderable;
     uint debugFlags;
 };
 
@@ -218,7 +219,8 @@ WorldForwardRootData shd_load_WorldForwardRootData_root() {
     result.vertexBuffer = gfx_load_root_word(10u);
     result.vertexByteOffset = gfx_load_root_word(11u);
     result.cellIndex = gfx_load_root_word(12u);
-    result.debugFlags = gfx_load_root_word(13u);
+    result.directFirstRenderable = gfx_load_root_word(13u);
+    result.debugFlags = gfx_load_root_word(14u);
     return result;
 }
 
@@ -239,6 +241,8 @@ struct WorldCullRootData {
     uint argsByteOffset;
     uint meshBuffer;
     uint meshByteOffset;
+    uint cellCursorBuffer;
+    uint cellCursorByteOffset;
     uint renderableCount;
     uint cellCount;
     uint meshCount;
@@ -262,9 +266,11 @@ WorldCullRootData shd_load_WorldCullRootData_root() {
     result.argsByteOffset = gfx_load_root_word(13u);
     result.meshBuffer = gfx_load_root_word(14u);
     result.meshByteOffset = gfx_load_root_word(15u);
-    result.renderableCount = gfx_load_root_word(16u);
-    result.cellCount = gfx_load_root_word(17u);
-    result.meshCount = gfx_load_root_word(18u);
+    result.cellCursorBuffer = gfx_load_root_word(16u);
+    result.cellCursorByteOffset = gfx_load_root_word(17u);
+    result.renderableCount = gfx_load_root_word(18u);
+    result.cellCount = gfx_load_root_word(19u);
+    result.meshCount = gfx_load_root_word(20u);
     return result;
 }
 
@@ -416,8 +422,8 @@ struct ShdWorldForwardRootData {
     U32 vertexBuffer;
     U32 vertexByteOffset;
     U32 cellIndex;
+    U32 directFirstRenderable;
     U32 debugFlags;
-    U32 _pad14;
     U32 _pad15;
 };
 static_assert(offsetof(ShdWorldForwardRootData, frameBuffer) == 0u, "ShdWorldForwardRootData.frameBuffer shader ABI offset mismatch");
@@ -433,7 +439,8 @@ static_assert(offsetof(ShdWorldForwardRootData, materialByteOffset) == 36u, "Shd
 static_assert(offsetof(ShdWorldForwardRootData, vertexBuffer) == 40u, "ShdWorldForwardRootData.vertexBuffer shader ABI offset mismatch");
 static_assert(offsetof(ShdWorldForwardRootData, vertexByteOffset) == 44u, "ShdWorldForwardRootData.vertexByteOffset shader ABI offset mismatch");
 static_assert(offsetof(ShdWorldForwardRootData, cellIndex) == 48u, "ShdWorldForwardRootData.cellIndex shader ABI offset mismatch");
-static_assert(offsetof(ShdWorldForwardRootData, debugFlags) == 52u, "ShdWorldForwardRootData.debugFlags shader ABI offset mismatch");
+static_assert(offsetof(ShdWorldForwardRootData, directFirstRenderable) == 52u, "ShdWorldForwardRootData.directFirstRenderable shader ABI offset mismatch");
+static_assert(offsetof(ShdWorldForwardRootData, debugFlags) == 56u, "ShdWorldForwardRootData.debugFlags shader ABI offset mismatch");
 static_assert(sizeof(ShdWorldForwardRootData) == 64u, "ShdWorldForwardRootData shader ABI size mismatch");
 
 struct ShdWorldCullRootData {
@@ -453,11 +460,11 @@ struct ShdWorldCullRootData {
     U32 argsByteOffset;
     U32 meshBuffer;
     U32 meshByteOffset;
+    U32 cellCursorBuffer;
+    U32 cellCursorByteOffset;
     U32 renderableCount;
     U32 cellCount;
     U32 meshCount;
-    U32 _pad19;
-    U32 _pad20;
     U32 _pad21;
     U32 _pad22;
     U32 _pad23;
@@ -478,9 +485,11 @@ static_assert(offsetof(ShdWorldCullRootData, argsBuffer) == 48u, "ShdWorldCullRo
 static_assert(offsetof(ShdWorldCullRootData, argsByteOffset) == 52u, "ShdWorldCullRootData.argsByteOffset shader ABI offset mismatch");
 static_assert(offsetof(ShdWorldCullRootData, meshBuffer) == 56u, "ShdWorldCullRootData.meshBuffer shader ABI offset mismatch");
 static_assert(offsetof(ShdWorldCullRootData, meshByteOffset) == 60u, "ShdWorldCullRootData.meshByteOffset shader ABI offset mismatch");
-static_assert(offsetof(ShdWorldCullRootData, renderableCount) == 64u, "ShdWorldCullRootData.renderableCount shader ABI offset mismatch");
-static_assert(offsetof(ShdWorldCullRootData, cellCount) == 68u, "ShdWorldCullRootData.cellCount shader ABI offset mismatch");
-static_assert(offsetof(ShdWorldCullRootData, meshCount) == 72u, "ShdWorldCullRootData.meshCount shader ABI offset mismatch");
+static_assert(offsetof(ShdWorldCullRootData, cellCursorBuffer) == 64u, "ShdWorldCullRootData.cellCursorBuffer shader ABI offset mismatch");
+static_assert(offsetof(ShdWorldCullRootData, cellCursorByteOffset) == 68u, "ShdWorldCullRootData.cellCursorByteOffset shader ABI offset mismatch");
+static_assert(offsetof(ShdWorldCullRootData, renderableCount) == 72u, "ShdWorldCullRootData.renderableCount shader ABI offset mismatch");
+static_assert(offsetof(ShdWorldCullRootData, cellCount) == 76u, "ShdWorldCullRootData.cellCount shader ABI offset mismatch");
+static_assert(offsetof(ShdWorldCullRootData, meshCount) == 80u, "ShdWorldCullRootData.meshCount shader ABI offset mismatch");
 static_assert(sizeof(ShdWorldCullRootData) == 96u, "ShdWorldCullRootData shader ABI size mismatch");
 
 #endif

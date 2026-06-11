@@ -83,6 +83,7 @@
     vertexBuffer: U32,
     vertexByteOffset: U32,
     cellIndex: U32,
+    directFirstRenderable: U32,
     debugFlags: U32,
 }
 
@@ -103,6 +104,8 @@
     argsByteOffset: U32,
     meshBuffer: U32,
     meshByteOffset: U32,
+    cellCursorBuffer: U32,
+    cellCursorByteOffset: U32,
     renderableCount: U32,
     cellCount: U32,
     meshCount: U32,

@@ -432,6 +432,10 @@ UTILITIES_SHARED_API GfxResourceId gfx_register_buffer(GfxDevice* device, GfxBuf
 UTILITIES_SHARED_API GfxResourceId gfx_register_texture(GfxDevice* device, GfxTexture texture);
 UTILITIES_SHARED_API GfxResourceId gfx_register_sampler(GfxDevice* device, GfxSampler sampler);
 
+// Persistently mapped CPU pointer for GfxMemoryKind_Upload buffers, null
+// otherwise. The caller owns frames-in-flight rotation when writing.
+UTILITIES_SHARED_API void* gfx_buffer_contents(GfxDevice* device, GfxBuffer buffer);
+
 UTILITIES_SHARED_API GfxFrame* gfx_begin_frame(GfxDevice* device);
 UTILITIES_SHARED_API GfxCommandBuffer* gfx_get_command_buffer(GfxFrame* frame);
 UTILITIES_SHARED_API GfxTexture gfx_get_backbuffer(GfxFrame* frame);

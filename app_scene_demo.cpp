@@ -116,6 +116,19 @@ static void app_demo_scene_submit(APP_Context* ctx, AppRendererFrame* rendererFr
                                 mat4_translate(app_world_vec3_(0.0f, -0.05f, 0.0f));
     app_world_push(ctx, world->builtinMeshes[2], 5u, AppWorldBin_Opaque, &groundTransform);
 
+    // A transparent cube nested inside a transparent sphere, both half-sunk
+    // into the ground at the grid center: the opaque plane depth-rejects the
+    // buried halves, the cube shows through the sphere shell (nearest-point
+    // sort draws inner before outer), and the engulfed grid objects exercise
+    // ordering against the shell every orbit.
+    F32 groundY = -0.05f;
+    Mat4x4F32 bigCube = mat4_scale(app_world_vec3_(14.0f, 14.0f, 14.0f)) *
+                        mat4_translate(app_world_vec3_(0.0f, groundY, 0.0f));
+    app_world_push(ctx, world->builtinMeshes[0], 7u, AppWorldBin_Transparent, &bigCube);
+    Mat4x4F32 bigSphere = mat4_scale(app_world_vec3_(26.0f, 26.0f, 26.0f)) *
+                          mat4_translate(app_world_vec3_(0.0f, groundY, 0.0f));
+    app_world_push(ctx, world->builtinMeshes[1], 8u, AppWorldBin_Transparent, &bigSphere);
+
     AppSceneExtractParams extractParams = {};
     extractParams.world = world;
     extractParams.side = side;

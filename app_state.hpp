@@ -105,12 +105,12 @@ struct AppWorldArtifactBridge {
 };
 
 // One per extraction lane; slices of the per-frame arrays, no sharing.
+// Transparent depth/cull happen at merge time on the main thread.
 struct AppWorldLaneWriter {
     ShdWorldRenderableRecord* records;
     U32 count;
     U32 cap;
     ShdWorldRenderableRecord* transparents;
-    F32* transparentDepths;
     U32 transparentCount;
     U32 transparentCap;
     U32 dropped;
@@ -140,6 +140,8 @@ struct AppWorldState {
     GfxResourceId cellCountBufferId;
     GfxBuffer cellOffsetBuffer;
     GfxResourceId cellOffsetBufferId;
+    GfxBuffer cellCursorBuffer;
+    GfxResourceId cellCursorBufferId;
     GfxBuffer visibleBuffer;
     GfxResourceId visibleBufferId;
     GfxBuffer argsBuffer;
@@ -172,10 +174,13 @@ struct AppWorldState {
     AppWorldArtifactBridge artifactBridge;
 
     ShdWorldFrameRecord frameRecord;
+    Vec3F32 cameraForward;
     AppWorldLaneWriter* laneWriters;
     U32 laneCount;
     U32 lastRenderableCount;
     U32 lastDroppedCount;
+    U32 lastTransparentDraws;
+    U32 failLogMask;
     B32 frameOpen;
 };
 
