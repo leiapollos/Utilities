@@ -534,22 +534,41 @@ static AppRendererFrame* app_renderer_begin_frame(APP_Context* ctx) {
     g_appRendererFrame.frame = frame;
     g_appRendererFrame.commands = gfx_get_command_buffer(frame);
 
-    // Publishes may record uploads into the current frame, so the tick runs
-    // with the frame pointer established.
+    // Publishes record uploads into the current frame, parked on the bridge
+    // for the duration of the tick.
     if (ctx->core->resources.artifactCache) {
         PROF_SCOPE("artifact tick");
+        ctx->core->world.artifactBridge.frame = frame;
         artifact_cache_tick(ctx->core->resources.artifactCache, ctx->core->frameCounter, 16u, 16u);
+        ctx->core->world.artifactBridge.frame = 0;
     }
 
-    app_renderer_try_load_font(ctx);
-    app_renderer_try_update_pipeline(ctx);
     app_renderer_try_create_gpu_resources(ctx);
     app_renderer_try_seed_atlas(ctx, frame);
     app_world_try_create_resources_(ctx);
-    app_world_try_update_pipelines_(ctx);
     app_world_ensure_depth_(ctx);
+
+    // File-driven polls run only when the stream published something new or
+    // a resource is still unresolved; the steady state is one stats compare.
+    AppRender2DState* render = &ctx->core->render2d;
+    B32 filesChanged = 1;
+    if (ctx->core->resources.fileStream) {
+        FileStreamStats fileStats = file_stream_stats(ctx->core->resources.fileStream);
+        filesChanged = fileStats.publishCount != render->lastFilePublishCount;
+        render->lastFilePublishCount = fileStats.publishCount;
+    }
+    B32 resourcesSettled = render->font.generation != 0u &&
+                           render->pipeline.generation != 0u &&
+                           ctx->core->world.opaquePipeline.generation != 0u &&
+                           ctx->core->world.assetsSettled;
+    if (filesChanged || !resourcesSettled) {
+        app_renderer_try_load_font(ctx);
+        app_renderer_try_update_pipeline(ctx);
+        app_world_try_update_pipelines_(ctx);
+        app_world_try_load_assets_(ctx);
+    }
+
     app_world_begin_frame_(ctx);
-    app_world_try_load_assets_(ctx);
 
     F32 whiteU = 0.0f;
     F32 whiteV = 0.0f;

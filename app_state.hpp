@@ -57,6 +57,7 @@ struct AppRender2DState {
     GfxStats lastGfxStats;
     Draw2DStats lastDraw2DStats;
 
+    U32 lastFilePublishCount;
     B32 initialized;
     U32 loadLogMask;
 };
@@ -72,6 +73,10 @@ struct AppCoreState;
 #define APP_WORLD_SHADER_COUNT 7u
 #define APP_WORLD_MAX_LANES 16u
 #define APP_WORLD_DEMO_ASSET_COUNT 2u
+#define APP_WORLD_MAX_ASSET_TEXTURES 16u
+// Material slot 0 is the builtin "missing" material (magenta); the allocator
+// never hands it out, so zero-initialized indices fail loudly on screen.
+#define APP_WORLD_MATERIAL_MISSING 0u
 
 enum AppWorldBin {
     AppWorldBin_Opaque = 0,
@@ -102,6 +107,7 @@ struct AppWorldMesh {
 struct AppWorldArtifactBridge {
     GfxDevice* device;
     AppCoreState* state;
+    GfxFrame* frame;
 };
 
 // One per extraction lane; slices of the per-frame arrays, no sharing.
@@ -121,7 +127,7 @@ struct AppWorldState {
 
     SlotMap meshes;
     U32 meshCount;
-    U32 materialCount;
+    U32 materialUsedMask;
 
     GfxBuffer vertexBuffer;
     GfxResourceId vertexBufferId;
@@ -165,12 +171,14 @@ struct AppWorldState {
     B32 meshRecordsDirty;
     B32 materialsDirty;
 
-    GfxTexture assetTextures[APP_WORLD_MAX_MESHES];
+    GfxTexture assetTextures[APP_WORLD_MAX_ASSET_TEXTURES];
     U32 assetTextureCount;
 
     FileHandle assetMeshFiles[APP_WORLD_DEMO_ASSET_COUNT];
     FileHandle assetTextureFiles[APP_WORLD_DEMO_ASSET_COUNT];
     AppWorldMeshHandle assetMeshes[APP_WORLD_DEMO_ASSET_COUNT];
+    U32 assetMaterials[APP_WORLD_DEMO_ASSET_COUNT];
+    B32 assetsSettled;
     AppWorldArtifactBridge artifactBridge;
 
     ShdWorldFrameRecord frameRecord;
@@ -196,6 +204,13 @@ struct AppDemoState {
     B32 threadedExtract;
     U32 maxLanes;
     U32 gridSide;
+
+    // Scene-owned material slots, allocated from the world table once the
+    // world's GPU resources exist.
+    B32 materialsReady;
+    U32 paletteMaterials[6];
+    U32 alphaTestMaterial;
+    U32 transparentMaterials[2];
 };
 
 struct AppCoreState {

@@ -31,7 +31,67 @@ struct AppSceneExtractParams {
     U32 side;
     F32 time;
     B32 animate;
+    U32 paletteMaterials[6];
+    U32 alphaTestMaterial;
+    U32 transparentMaterials[2];
 };
+
+// Allocates the scene's material slots from the world table once the world
+// exists; the scene owns the palette, the world owns only the missing slot.
+static void app_demo_scene_ensure_materials_(APP_Context* ctx) {
+    AppDemoState* demo = &ctx->core->demo;
+    AppWorldState* world = &ctx->core->world;
+    if (demo->materialsReady || !world->gpuResourcesCreated) {
+        return;
+    }
+
+    static const F32 palette[6][4] = {
+        {0.80f, 0.34f, 0.26f, 1.0f},
+        {0.30f, 0.62f, 0.85f, 1.0f},
+        {0.92f, 0.78f, 0.32f, 1.0f},
+        {0.42f, 0.78f, 0.45f, 1.0f},
+        {0.72f, 0.52f, 0.86f, 1.0f},
+        {0.34f, 0.36f, 0.42f, 1.0f},
+    };
+    B32 ok = 1;
+    for (U32 paletteIndex = 0u; paletteIndex < 6u; ++paletteIndex) {
+        ok = ok && app_world_material_alloc(world, &demo->paletteMaterials[paletteIndex]);
+        if (ok) {
+            ShdWorldMaterialRecord record = {};
+            record.baseColor[0] = palette[paletteIndex][0];
+            record.baseColor[1] = palette[paletteIndex][1];
+            record.baseColor[2] = palette[paletteIndex][2];
+            record.baseColor[3] = palette[paletteIndex][3];
+            app_world_material_set(world, demo->paletteMaterials[paletteIndex], &record);
+        }
+    }
+    ok = ok && app_world_material_alloc(world, &demo->alphaTestMaterial);
+    if (ok) {
+        ShdWorldMaterialRecord record = {};
+        record.baseColor[0] = 0.95f;
+        record.baseColor[1] = 0.95f;
+        record.baseColor[2] = 0.95f;
+        record.baseColor[3] = 1.0f;
+        record.flags = APP_WORLD_MATERIAL_FLAG_ALPHA_TEST;
+        app_world_material_set(world, demo->alphaTestMaterial, &record);
+    }
+    static const F32 transparentColors[2][4] = {
+        {0.35f, 0.65f, 0.95f, 0.50f},
+        {0.95f, 0.45f, 0.55f, 0.55f},
+    };
+    for (U32 transparentIndex = 0u; transparentIndex < 2u; ++transparentIndex) {
+        ok = ok && app_world_material_alloc(world, &demo->transparentMaterials[transparentIndex]);
+        if (ok) {
+            ShdWorldMaterialRecord record = {};
+            record.baseColor[0] = transparentColors[transparentIndex][0];
+            record.baseColor[1] = transparentColors[transparentIndex][1];
+            record.baseColor[2] = transparentColors[transparentIndex][2];
+            record.baseColor[3] = transparentColors[transparentIndex][3];
+            app_world_material_set(world, demo->transparentMaterials[transparentIndex], &record);
+        }
+    }
+    demo->materialsReady = ok;
+}
 
 // Per-item extraction body; laneId/laneCount explicit so the single-threaded
 // path runs inline with no SPMD group.
@@ -61,7 +121,7 @@ static void app_scene_extract_range_(const AppSceneExtractParams* params, U64 la
             duckTransform = duckTransform * mat4_translate(app_world_vec3_(
                 ((F32)x - halfSide) * APP_SCENE_GRID_SPACING, 0.0f,
                 ((F32)z - halfSide) * APP_SCENE_GRID_SPACING));
-            app_world_writer_push_(world, writer, world->assetMeshes[0], 9u, AppWorldBin_Opaque, &duckTransform);
+            app_world_writer_push_(world, writer, world->assetMeshes[0], world->assetMaterials[0], AppWorldBin_Opaque, &duckTransform);
             continue;
         }
         if (lane == 1u && world->assetMeshes[1].generation != 0u) {
@@ -73,15 +133,15 @@ static void app_scene_extract_range_(const AppSceneExtractParams* params, U64 la
             avocadoTransform = avocadoTransform * mat4_translate(app_world_vec3_(
                 ((F32)x - halfSide) * APP_SCENE_GRID_SPACING, 0.0f,
                 ((F32)z - halfSide) * APP_SCENE_GRID_SPACING));
-            app_world_writer_push_(world, writer, world->assetMeshes[1], 10u, AppWorldBin_Opaque, &avocadoTransform);
+            app_world_writer_push_(world, writer, world->assetMeshes[1], world->assetMaterials[1], AppWorldBin_Opaque, &avocadoTransform);
             continue;
         }
         if (lane == 3u) {
-            app_world_writer_push_(world, writer, world->builtinMeshes[0], 6u, AppWorldBin_AlphaTest, &transform);
+            app_world_writer_push_(world, writer, world->builtinMeshes[0], params->alphaTestMaterial, AppWorldBin_AlphaTest, &transform);
         } else if (lane == 5u || lane == 7u) {
-            app_world_writer_push_(world, writer, mesh, (lane == 5u) ? 7u : 8u, AppWorldBin_Transparent, &transform);
+            app_world_writer_push_(world, writer, mesh, params->transparentMaterials[(lane == 5u) ? 0u : 1u], AppWorldBin_Transparent, &transform);
         } else {
-            app_world_writer_push_(world, writer, mesh, cellSeed % 6u, AppWorldBin_Opaque, &transform);
+            app_world_writer_push_(world, writer, mesh, params->paletteMaterials[cellSeed % 6u], AppWorldBin_Opaque, &transform);
         }
     }
 }
@@ -100,6 +160,8 @@ static void app_demo_scene_submit(APP_Context* ctx, AppRendererFrame* rendererFr
         return;
     }
 
+    app_demo_scene_ensure_materials_(ctx);
+
     F32 time = (F32)((F64)state->frameCounter / 60.0);
     U32 side = CLAMP(demo->gridSide, APP_DEMO_GRID_MIN, APP_DEMO_GRID_MAX);
 
@@ -114,7 +176,7 @@ static void app_demo_scene_submit(APP_Context* ctx, AppRendererFrame* rendererFr
     Mat4x4F32 groundTransform = mat4_scale(app_world_vec3_((F32)side * APP_SCENE_GRID_SPACING + 8.0f, 1.0f,
                                                             (F32)side * APP_SCENE_GRID_SPACING + 8.0f)) *
                                 mat4_translate(app_world_vec3_(0.0f, -0.05f, 0.0f));
-    app_world_push(ctx, world->builtinMeshes[2], 5u, AppWorldBin_Opaque, &groundTransform);
+    app_world_push(ctx, world->builtinMeshes[2], demo->paletteMaterials[5], AppWorldBin_Opaque, &groundTransform);
 
     // A transparent cube nested inside a transparent sphere, both half-sunk
     // into the ground at the grid center: the opaque plane depth-rejects the
@@ -124,16 +186,20 @@ static void app_demo_scene_submit(APP_Context* ctx, AppRendererFrame* rendererFr
     F32 groundY = -0.05f;
     Mat4x4F32 bigCube = mat4_scale(app_world_vec3_(14.0f, 14.0f, 14.0f)) *
                         mat4_translate(app_world_vec3_(0.0f, groundY, 0.0f));
-    app_world_push(ctx, world->builtinMeshes[0], 7u, AppWorldBin_Transparent, &bigCube);
+    app_world_push(ctx, world->builtinMeshes[0], demo->transparentMaterials[0], AppWorldBin_Transparent, &bigCube);
     Mat4x4F32 bigSphere = mat4_scale(app_world_vec3_(26.0f, 26.0f, 26.0f)) *
                           mat4_translate(app_world_vec3_(0.0f, groundY, 0.0f));
-    app_world_push(ctx, world->builtinMeshes[1], 8u, AppWorldBin_Transparent, &bigSphere);
+    app_world_push(ctx, world->builtinMeshes[1], demo->transparentMaterials[1], AppWorldBin_Transparent, &bigSphere);
 
     AppSceneExtractParams extractParams = {};
     extractParams.world = world;
     extractParams.side = side;
     extractParams.time = time;
     extractParams.animate = demo->animate;
+    MEMCPY(extractParams.paletteMaterials, demo->paletteMaterials, sizeof(extractParams.paletteMaterials));
+    extractParams.alphaTestMaterial = demo->alphaTestMaterial;
+    extractParams.transparentMaterials[0] = demo->transparentMaterials[0];
+    extractParams.transparentMaterials[1] = demo->transparentMaterials[1];
 
     U32 itemCount = side * side;
     U32 dispatchLanes = MIN(world->laneCount, MAX(1u, itemCount / 512u));
