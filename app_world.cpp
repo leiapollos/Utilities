@@ -757,6 +757,9 @@ static B32 app_texture_artifact_publish_(ArtifactPublishContext* publishCtx, Art
         return 0;
     }
 
+    // The blob carries the full mip chain; the whole chain uploads as one
+    // atomic batch (mipCount <= ASSET_TEXTURE_MAX_MIPS was validated above).
+    GfxTextureUploadRegion regions[ASSET_TEXTURE_MAX_MIPS] = {};
     U32 blockBytes = (header->format == ASSET_TEXTURE_FORMAT_BC3) ? 16u : 8u;
     U64 uploadedBytes = 0u;
     U32 mipWidth = header->width;
@@ -767,25 +770,26 @@ static B32 app_texture_artifact_publish_(ArtifactPublishContext* publishCtx, Art
             arena_release(arena);
             return 0;
         }
-        GfxTextureUploadRegion region = {};
-        region.mip = mipIndex;
-        region.layerCount = 1u;
-        region.width = mipWidth;
-        region.height = mipHeight;
-        region.depth = 1u;
+        GfxTextureUploadRegion* region = regions + mipIndex;
+        region->src = blob + header->mipOffsets[mipIndex];
+        region->mip = mipIndex;
+        region->layerCount = 1u;
+        region->width = mipWidth;
+        region->height = mipHeight;
+        region->depth = 1u;
         U64 packedRow = (U64)((mipWidth + 3u) / 4u) * blockBytes;
-        region.bytesPerRow = ((packedRow + GFX_TEXTURE_UPLOAD_BYTES_PER_ROW_ALIGNMENT - 1u) /
-                              GFX_TEXTURE_UPLOAD_BYTES_PER_ROW_ALIGNMENT) *
-                             GFX_TEXTURE_UPLOAD_BYTES_PER_ROW_ALIGNMENT;
-        region.rowsPerImage = (mipHeight + 3u) / 4u;
-        if (!gfx_upload_texture(frame, texture, &region, blob + header->mipOffsets[mipIndex])) {
-            gfx_destroy_texture(bridge->device, texture);
-            arena_release(arena);
-            return 0;
-        }
+        region->bytesPerRow = ((packedRow + GFX_TEXTURE_UPLOAD_BYTES_PER_ROW_ALIGNMENT - 1u) /
+                               GFX_TEXTURE_UPLOAD_BYTES_PER_ROW_ALIGNMENT) *
+                              GFX_TEXTURE_UPLOAD_BYTES_PER_ROW_ALIGNMENT;
+        region->rowsPerImage = (mipHeight + 3u) / 4u;
         uploadedBytes += header->mipSizes[mipIndex];
         mipWidth = MAX(mipWidth / 2u, 1u);
         mipHeight = MAX(mipHeight / 2u, 1u);
+    }
+    if (!gfx_upload_texture(frame, texture, regions, header->mipCount)) {
+        gfx_destroy_texture(bridge->device, texture);
+        arena_release(arena);
+        return 0;
     }
     U32 publishedWidth = header->width;
     U32 publishedHeight = header->height;

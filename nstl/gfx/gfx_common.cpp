@@ -211,6 +211,50 @@ static B32 gfx_validate_texture_upload_region(GfxFormat format,
     return (result.supported && result.inBounds && result.rowLayout && result.sizeValid) ? 1 : 0;
 }
 
+// Batch pre-pass shared by every backend: validates each region and lays the
+// whole batch out in one staging block, each region's offset aligned for
+// copy-engine row addressing. Backends consume the offsets/validations to
+// record uploads all-or-nothing — a batch that cannot fully validate records
+// nothing.
+static B32 gfx_validate_texture_upload_batch(GfxFormat format,
+                                             U32 textureWidth,
+                                             U32 textureHeight,
+                                             U32 textureMipCount,
+                                             const GfxTextureUploadRegion* regions,
+                                             U32 regionCount,
+                                             U64* outStagingOffsets,
+                                             GfxTextureUploadValidation* outValidations,
+                                             U64* outTotalStagingBytes) {
+    if (outTotalStagingBytes) {
+        *outTotalStagingBytes = 0u;
+    }
+    if (!regions || regionCount == 0u ||
+        !outStagingOffsets || !outValidations || !outTotalStagingBytes) {
+        return 0;
+    }
+
+    U64 stagingEnd = 0u;
+    for (U32 at = 0u; at < regionCount; ++at) {
+        if (!gfx_validate_texture_upload_region(format, textureWidth, textureHeight,
+                                                textureMipCount, regions + at,
+                                                outValidations + at)) {
+            return 0;
+        }
+        if (!regions[at].src) {
+            return 0;
+        }
+        U64 offset = align_pow2(stagingEnd, GFX_TEXTURE_UPLOAD_BYTES_PER_ROW_ALIGNMENT);
+        U64 sourceBytes = outValidations[at].sourceBytesPerImage;
+        if (offset < stagingEnd || sourceBytes > ((U64)-1) - offset) {
+            return 0;
+        }
+        outStagingOffsets[at] = offset;
+        stagingEnd = offset + sourceBytes;
+    }
+    *outTotalStagingBytes = stagingEnd;
+    return 1;
+}
+
 static B32 gfx_resource_table_init(GfxResourceTable* table, Arena* arena, U32 capacity) {
     if (!table || !arena || capacity <= 1u) {
         return 0;

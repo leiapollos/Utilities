@@ -28,6 +28,13 @@
 #include "nstl/prof/prof_include.hpp"
 #include "nstl/prof/prof_include.cpp"
 
+// Backend-shared gfx validation/layout code (no GPU, no live window) — the
+// texture upload batch pre-pass is pure CPU and tested here. os_graphics.hpp
+// is declarations only; the platform window backend stays out of this TU.
+#include "nstl/os/graphics/os_graphics.hpp"
+#include "nstl/gfx/gfx.hpp"
+#include "nstl/gfx/gfx_common.cpp"
+
 // Host-side text (FreeType + kbts) so the glyph-cache statics are in-TU.
 #include "nstl/text/text_include.hpp"
 #include "nstl/text/text_include.cpp"
@@ -92,6 +99,7 @@ static Vec4F32 test_mul_point_(const Mat4x4F32* m, Vec3F32 p) {
 #include "test_frustum_cull.cpp"
 #include "test_winding.cpp"
 #include "test_addressing.cpp"
+#include "test_gfx_upload.cpp"
 #include "test_ordering.cpp"
 #include "test_text_ui.cpp"
 #include "test_base.cpp"
@@ -111,6 +119,7 @@ void entry_point(void) {
         {"frustum_cull", test_frustum_cull_},
         {"winding", test_winding_},
         {"addressing", test_addressing_},
+        {"gfx_upload", test_gfx_upload_},
         {"ordering", test_ordering_},
         {"text_ui", test_text_ui_},
         {"base", test_base_},

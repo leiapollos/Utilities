@@ -231,6 +231,7 @@ struct GfxTextureDesc {
 };
 
 struct GfxTextureUploadRegion {
+    const void* src;
     U32 mip;
     U32 layer;
     U32 layerCount;
@@ -441,7 +442,10 @@ UTILITIES_SHARED_API GfxCommandBuffer* gfx_get_command_buffer(GfxFrame* frame);
 UTILITIES_SHARED_API GfxTexture gfx_get_backbuffer(GfxFrame* frame);
 UTILITIES_SHARED_API GfxTemp gfx_allocate_temp(GfxFrame* frame, U64 size, U64 alignment);
 UTILITIES_SHARED_API B32 gfx_upload_buffer(GfxFrame* frame, GfxBuffer dst, U64 dstOffset, const void* src, U64 size);
-UTILITIES_SHARED_API B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRegion* region, const void* src);
+// Uploads every region as one atomic batch: all regions validate and the
+// whole batch fits frame staging, or nothing is recorded. Each region carries
+// its own source pixels; after success the texture is sampleable.
+UTILITIES_SHARED_API B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRegion* regions, U32 regionCount);
 
 UTILITIES_SHARED_API void gfx_render_pass(GfxCommandBuffer* commands, const GfxRenderPassDesc* desc, const GfxDrawArea* areas, U32 areaCount);
 UTILITIES_SHARED_API void gfx_compute_pass(GfxCommandBuffer* commands, const GfxComputePassDesc* desc, const GfxDispatch* dispatches, U32 dispatchCount);

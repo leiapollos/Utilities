@@ -3118,8 +3118,8 @@ B32 gfx_upload_buffer(GfxFrame* frame, GfxBuffer dst, U64 dstOffset, const void*
     return 1;
 }
 
-B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRegion* region, const void* src) {
-    if (!frame || !frame->device || !region || !src) {
+B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRegion* regions, U32 regionCount) {
+    if (!frame || !frame->device || !regions || regionCount == 0u) {
         return 0;
     }
 
@@ -3136,46 +3136,77 @@ B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRe
         return 0;
     }
 
-    GfxTextureUploadValidation validation = {};
-    B32 validRegion = gfx_validate_texture_upload_region(texture->format,
-                                                          texture->width,
-                                                          texture->height,
-                                                          texture->mipCount,
-                                                          region,
-                                                          &validation);
-    gfx_vulkan_api_assert(device, validation.supported);
-    gfx_vulkan_api_assert(device, validation.inBounds);
-    gfx_vulkan_api_assert(device, validation.rowLayout);
-    gfx_vulkan_api_assert(device, validation.sizeValid);
-    if (!validRegion) {
+    Temp scratch = get_scratch(0, 0u);
+    if (!scratch.arena) {
+        return 0;
+    }
+    DEFER_REF(temp_end(&scratch));
+
+    U64* stagingOffsets = ARENA_PUSH_ARRAY(scratch.arena, U64, regionCount);
+    GfxTextureUploadValidation* validations = ARENA_PUSH_ARRAY(scratch.arena, GfxTextureUploadValidation, regionCount);
+    VkBufferImageCopy* copies = ARENA_PUSH_ARRAY(scratch.arena, VkBufferImageCopy, regionCount);
+    if (!stagingOffsets || !validations || !copies) {
+        return 0;
+    }
+
+    U64 totalStagingBytes = 0u;
+    B32 validBatch = gfx_validate_texture_upload_batch(texture->format,
+                                                       texture->width,
+                                                       texture->height,
+                                                       texture->mipCount,
+                                                       regions,
+                                                       regionCount,
+                                                       stagingOffsets,
+                                                       validations,
+                                                       &totalStagingBytes);
+    gfx_vulkan_api_assert(device, validBatch);
+    if (!validBatch) {
         if (gfx_vulkan_api_validation_enabled(device)) {
-            LOG_ERROR("gfx", "gfx_upload_texture invalid upload region");
+            LOG_ERROR("gfx", "gfx_upload_texture invalid upload batch");
         }
         return 0;
     }
 
-    U64 sourceBytesPerImage = validation.sourceBytesPerImage;
-
-    GfxTemp temp = gfx_vulkan_allocate_staging(frame, sourceBytesPerImage, GFX_TEXTURE_UPLOAD_BYTES_PER_ROW_ALIGNMENT);
+    // The whole batch stages as one block; if it cannot fit, nothing has been
+    // recorded yet and the upload fails atomically.
+    GfxTemp temp = gfx_vulkan_allocate_staging(frame, totalStagingBytes, GFX_TEXTURE_UPLOAD_BYTES_PER_ROW_ALIGNMENT);
     ASSERT_DEBUG(temp.cpu != 0 && "gfx_upload_texture ran out of frame staging memory");
     if (!temp.cpu) {
-        LOG_ERROR("gfx", "gfx_upload_texture ran out of frame staging memory (size={})", sourceBytesPerImage);
+        LOG_ERROR("gfx", "gfx_upload_texture ran out of frame staging memory (size={})", totalStagingBytes);
         return 0;
     }
-
-    MEMCPY(temp.cpu, src, sourceBytesPerImage);
     GfxVulkanBuffer* uploadBuffer = gfx_vulkan_resolve_buffer(device, temp.gpu.buffer);
     if (!uploadBuffer->buffer) {
         return 0;
     }
 
     VkImageAspectFlags aspect = gfx_vulkan_image_aspect(texture->format);
+    MEMSET(copies, 0, sizeof(VkBufferImageCopy) * regionCount);
+    for (U32 at = 0u; at < regionCount; ++at) {
+        const GfxTextureUploadRegion* region = regions + at;
+        const GfxTextureUploadValidation* validation = validations + at;
+        MEMCPY((U8*)temp.cpu + stagingOffsets[at], region->src, validation->sourceBytesPerImage);
+
+        copies[at].bufferOffset = temp.gpu.offset + stagingOffsets[at];
+        copies[at].bufferRowLength = (U32)((region->bytesPerRow / validation->bytesPerBlock) * validation->blockWidth);
+        copies[at].bufferImageHeight = region->rowsPerImage * validation->blockHeight;
+        copies[at].imageSubresource.aspectMask = aspect;
+        copies[at].imageSubresource.mipLevel = region->mip;
+        copies[at].imageSubresource.baseArrayLayer = region->layer;
+        copies[at].imageSubresource.layerCount = region->layerCount;
+        copies[at].imageOffset = {(S32)region->x, (S32)region->y, (S32)region->z};
+        copies[at].imageExtent = {region->width, region->height, region->depth};
+    }
+
+    // texture->layout is one scalar for the whole image, so layout transitions
+    // must cover every subresource; the batch records exactly one barrier pair
+    // no matter how many regions it carries.
     VkImageSubresourceRange subresourceRange = {};
     subresourceRange.aspectMask = aspect;
-    subresourceRange.baseMipLevel = region->mip;
-    subresourceRange.levelCount = 1u;
-    subresourceRange.baseArrayLayer = region->layer;
-    subresourceRange.layerCount = region->layerCount;
+    subresourceRange.baseMipLevel = 0u;
+    subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
+    subresourceRange.baseArrayLayer = 0u;
+    subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
 
     VkImageMemoryBarrier2 toTransfer = {};
     toTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
@@ -3194,22 +3225,12 @@ B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRe
     dependency.pImageMemoryBarriers = &toTransfer;
     vkCmdPipelineBarrier2(frame->commandBuffer, &dependency);
 
-    VkBufferImageCopy copy = {};
-    copy.bufferOffset = temp.gpu.offset;
-    copy.bufferRowLength = (U32)((region->bytesPerRow / validation.bytesPerBlock) * validation.blockWidth);
-    copy.bufferImageHeight = region->rowsPerImage * validation.blockHeight;
-    copy.imageSubresource.aspectMask = aspect;
-    copy.imageSubresource.mipLevel = region->mip;
-    copy.imageSubresource.baseArrayLayer = region->layer;
-    copy.imageSubresource.layerCount = region->layerCount;
-    copy.imageOffset = {(S32)region->x, (S32)region->y, (S32)region->z};
-    copy.imageExtent = {region->width, region->height, region->depth};
     vkCmdCopyBufferToImage(frame->commandBuffer,
                            uploadBuffer->buffer,
                            texture->image,
                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                           1u,
-                           &copy);
+                           regionCount,
+                           copies);
 
     VkImageMemoryBarrier2 toSampled = {};
     toSampled.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;

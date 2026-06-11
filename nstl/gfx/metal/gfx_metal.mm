@@ -2200,8 +2200,8 @@ B32 gfx_upload_buffer(GfxFrame* frame, GfxBuffer dst, U64 dstOffset, const void*
     return 1;
 }
 
-B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRegion* region, const void* src) {
-    if (!frame || !frame->device || !region || !src) {
+B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRegion* regions, U32 regionCount) {
+    if (!frame || !frame->device || !regions || regionCount == 0u) {
         return 0;
     }
 
@@ -2217,66 +2217,84 @@ B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRe
         return 0;
     }
 
-    GfxTextureUploadValidation validation = {};
-    B32 validRegion = gfx_validate_texture_upload_region(texture->format,
-                                                         texture->width,
-                                                         texture->height,
-                                                         texture->mipCount,
-                                                         region,
-                                                         &validation);
-    gfx_metal_api_assert(frame->device, validation.supported);
-    gfx_metal_api_assert(frame->device, validation.inBounds);
-    gfx_metal_api_assert(frame->device, validation.rowLayout);
-    gfx_metal_api_assert(frame->device, validation.sizeValid);
-    if (!validRegion) {
-        if (gfx_metal_api_validation_enabled(frame->device)) {
-            LOG_ERROR("gfx", "gfx_upload_texture invalid upload region");
-        }
+    Temp scratch = get_scratch(0, 0u);
+    if (!scratch.arena) {
+        return 0;
+    }
+    DEFER_REF(temp_end(&scratch));
+
+    U64* stagingOffsets = ARENA_PUSH_ARRAY(scratch.arena, U64, regionCount);
+    GfxTextureUploadValidation* validations = ARENA_PUSH_ARRAY(scratch.arena, GfxTextureUploadValidation, regionCount);
+    if (!stagingOffsets || !validations) {
         return 0;
     }
 
-    U64 sourceBytesPerImage = validation.sourceBytesPerImage;
+    U64 totalStagingBytes = 0u;
+    B32 validBatch = gfx_validate_texture_upload_batch(texture->format,
+                                                       texture->width,
+                                                       texture->height,
+                                                       texture->mipCount,
+                                                       regions,
+                                                       regionCount,
+                                                       stagingOffsets,
+                                                       validations,
+                                                       &totalStagingBytes);
+    gfx_metal_api_assert(frame->device, validBatch);
+    if (!validBatch) {
+        if (gfx_metal_api_validation_enabled(frame->device)) {
+            LOG_ERROR("gfx", "gfx_upload_texture invalid upload batch");
+        }
+        return 0;
+    }
 
     ASSERT_DEBUG(frame->commandBuffer != 0);
     if (!frame->commandBuffer) {
         return 0;
     }
 
-    GfxTemp temp = gfx_metal_allocate_staging(frame, sourceBytesPerImage, GFX_TEXTURE_UPLOAD_BYTES_PER_ROW_ALIGNMENT);
+    // The whole batch stages as one block; if it cannot fit, nothing has been
+    // recorded yet and the upload fails atomically.
+    GfxTemp temp = gfx_metal_allocate_staging(frame, totalStagingBytes, GFX_TEXTURE_UPLOAD_BYTES_PER_ROW_ALIGNMENT);
     ASSERT_DEBUG(temp.cpu != 0 && "gfx_upload_texture ran out of frame staging memory");
     if (!temp.cpu) {
-        LOG_ERROR("gfx", "gfx_upload_texture ran out of frame staging memory (size={})", sourceBytesPerImage);
+        LOG_ERROR("gfx", "gfx_upload_texture ran out of frame staging memory (size={})", totalStagingBytes);
         return 0;
     }
 
-    MEMCPY(temp.cpu, src, sourceBytesPerImage);
     GfxMetalBuffer* uploadBuffer = gfx_metal_resolve_buffer(frame->device, temp.gpu.buffer);
     ASSERT_DEBUG(uploadBuffer->buffer != 0);
     if (!uploadBuffer->buffer) {
         return 0;
     }
 
+    // One blit encoder carries every region in the batch.
     id<MTLBlitCommandEncoder> blit = [[frame->commandBuffer blitCommandEncoder] retain];
     ASSERT_DEBUG(blit != 0);
     if (!blit) {
         return 0;
     }
 
-    MTLOrigin origin = MTLOriginMake((NSUInteger)region->x,
-                                    (NSUInteger)region->y,
-                                    (NSUInteger)region->z);
-    MTLSize size = MTLSizeMake((NSUInteger)region->width,
-                               (NSUInteger)region->height,
-                               (NSUInteger)region->depth);
-    [blit copyFromBuffer:uploadBuffer->buffer
-            sourceOffset:(NSUInteger)temp.gpu.offset
-       sourceBytesPerRow:(NSUInteger)region->bytesPerRow
-     sourceBytesPerImage:(NSUInteger)sourceBytesPerImage
-              sourceSize:size
-               toTexture:texture->texture
-        destinationSlice:(NSUInteger)region->layer
-        destinationLevel:(NSUInteger)region->mip
-       destinationOrigin:origin];
+    for (U32 at = 0u; at < regionCount; ++at) {
+        const GfxTextureUploadRegion* region = regions + at;
+        U64 sourceBytesPerImage = validations[at].sourceBytesPerImage;
+        MEMCPY((U8*)temp.cpu + stagingOffsets[at], region->src, sourceBytesPerImage);
+
+        MTLOrigin origin = MTLOriginMake((NSUInteger)region->x,
+                                         (NSUInteger)region->y,
+                                         (NSUInteger)region->z);
+        MTLSize size = MTLSizeMake((NSUInteger)region->width,
+                                   (NSUInteger)region->height,
+                                   (NSUInteger)region->depth);
+        [blit copyFromBuffer:uploadBuffer->buffer
+                sourceOffset:(NSUInteger)(temp.gpu.offset + stagingOffsets[at])
+           sourceBytesPerRow:(NSUInteger)region->bytesPerRow
+         sourceBytesPerImage:(NSUInteger)sourceBytesPerImage
+                  sourceSize:size
+                   toTexture:texture->texture
+            destinationSlice:(NSUInteger)region->layer
+            destinationLevel:(NSUInteger)region->mip
+           destinationOrigin:origin];
+    }
     [blit endEncoding];
     [blit release];
     return 1;

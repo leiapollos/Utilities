@@ -337,17 +337,31 @@ static void app_renderer_try_create_gpu_resources(APP_Context* ctx) {
     render->atlasSeeded = 0;
 }
 
-static void app_renderer_upload_atlas(APP_Context* ctx, GfxFrame* frame, const TextAtlasUpload* upload) {
-    GfxTextureUploadRegion region = {};
-    region.layerCount = 1u;
-    region.x = upload->x;
-    region.y = upload->y;
-    region.width = upload->width;
-    region.height = upload->height;
-    region.depth = 1u;
-    region.bytesPerRow = upload->pitch;
-    region.rowsPerImage = upload->height;
-    gfx_upload_texture(frame, ctx->core->render2d.atlasTexture, &region, upload->pixels);
+// Uploads a frame's worth of atlas dirty rects as one batch (one barrier
+// pair / blit encoder no matter how many glyphs landed this frame).
+static void app_renderer_upload_atlas(APP_Context* ctx, GfxFrame* frame,
+                                      const TextAtlasUpload* uploads, U32 uploadCount) {
+    if (uploadCount == 0u) {
+        return;
+    }
+    GfxTextureUploadRegion* regions = ARENA_PUSH_ARRAY(ctx->host->frameArena, GfxTextureUploadRegion, uploadCount);
+    if (!regions) {
+        return;
+    }
+    MEMSET(regions, 0, sizeof(GfxTextureUploadRegion) * uploadCount);
+    for (U32 at = 0u; at < uploadCount; ++at) {
+        const TextAtlasUpload* upload = uploads + at;
+        regions[at].src = upload->pixels;
+        regions[at].layerCount = 1u;
+        regions[at].x = upload->x;
+        regions[at].y = upload->y;
+        regions[at].width = upload->width;
+        regions[at].height = upload->height;
+        regions[at].depth = 1u;
+        regions[at].bytesPerRow = upload->pitch;
+        regions[at].rowsPerImage = upload->height;
+    }
+    gfx_upload_texture(frame, ctx->core->render2d.atlasTexture, regions, uploadCount);
 }
 
 static void app_renderer_try_seed_atlas(APP_Context* ctx, GfxFrame* frame) {
@@ -360,7 +374,7 @@ static void app_renderer_try_seed_atlas(APP_Context* ctx, GfxFrame* frame) {
     if (fullUpload.width == 0u) {
         return;
     }
-    app_renderer_upload_atlas(ctx, frame, &fullUpload);
+    app_renderer_upload_atlas(ctx, frame, &fullUpload, 1u);
     render->atlasSeeded = 1;
 }
 
@@ -589,9 +603,7 @@ static void app_renderer_submit_text(APP_Context* ctx, AppRendererFrame* rendere
     }
 
     if (ctx->core->render2d.gpuResourcesCreated) {
-        for (U32 uploadIndex = 0u; uploadIndex < drawData->uploadCount; ++uploadIndex) {
-            app_renderer_upload_atlas(ctx, rendererFrame->frame, drawData->uploads + uploadIndex);
-        }
+        app_renderer_upload_atlas(ctx, rendererFrame->frame, drawData->uploads, drawData->uploadCount);
     }
     draw2d_glyph_quads(&ctx->core->render2d.draw2d, layer, (const Draw2DQuad*)drawData->quads, drawData->quadCount, 0.0f, 0.0f);
 }
@@ -603,9 +615,7 @@ static void app_renderer_apply_text_uploads(APP_Context* ctx, AppRendererFrame* 
     if (rendererFrame == 0 || uploads == 0 || !ctx->core->render2d.gpuResourcesCreated) {
         return;
     }
-    for (U32 uploadIndex = 0u; uploadIndex < uploadCount; ++uploadIndex) {
-        app_renderer_upload_atlas(ctx, rendererFrame->frame, uploads + uploadIndex);
-    }
+    app_renderer_upload_atlas(ctx, rendererFrame->frame, uploads, uploadCount);
 }
 
 static void app_renderer_end_frame(APP_Context* ctx, AppRendererFrame* rendererFrame) {
