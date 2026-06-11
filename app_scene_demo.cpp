@@ -2,25 +2,22 @@
 // Created by André Leite on 10/06/2026.
 //
 
-#define APP_SCENE_GRID_SPACING 2.2f
-
-static Mat4x4F32 app_scene_object_transform_(U32 x, U32 z, U32 side, F32 time, B32 animate) {
-    F32 half = (F32)(side - 1u) * 0.5f;
-    F32 worldX = ((F32)x - half) * APP_SCENE_GRID_SPACING;
-    F32 worldZ = ((F32)z - half) * APP_SCENE_GRID_SPACING;
-    U32 cellSeed = x * 31u + z * 17u;
-    F32 height = 0.5f + (F32)((cellSeed >> 2u) % 5u) * 0.22f;
-
+// Cell geometry comes from the shared classifier (app_scene_kernels.hpp)
+// so the rendered grid and the collision world can never drift; only the
+// render-side dressing (spin, bob) lives here, gated on the cell's
+// animate eligibility so ghosts and colliders stay honest.
+static Mat4x4F32 app_scene_cell_transform_(const AppSceneCell* cell, F32 time, B32 animate) {
+    B32 animated = animate && cell->animateEligible;
     // Row-vector convention: compose left to right, scale -> rotate -> translate.
-    Mat4x4F32 transform = mat4_scale(app_world_vec3_(1.0f, height, 1.0f));
-    if (animate && (cellSeed % 7u) == 0u) {
+    Mat4x4F32 transform = mat4_scale(app_world_vec3_(1.0f, cell->height, 1.0f));
+    if (animated) {
         QuatF32 spin = quat_from_axis_angle(app_world_vec3_(0.0f, 1.0f, 0.0f),
-                                            time * (0.6f + (F32)(cellSeed % 5u) * 0.25f));
+                                            time * (0.6f + (F32)(cell->cellSeed % 5u) * 0.25f));
         transform = transform * quat_to_mat4(spin);
     }
-    transform = transform * mat4_translate(app_world_vec3_(worldX, height * 0.5f, worldZ));
-    if (animate && (cellSeed % 7u) == 0u) {
-        F32 bob = 0.35f * (0.5f + 0.5f * SIN_F32(time * 1.7f + (F32)cellSeed * 0.61f));
+    transform = transform * mat4_translate(app_world_vec3_(cell->worldX, cell->height * 0.5f, cell->worldZ));
+    if (animated) {
+        F32 bob = 0.35f * (0.5f + 0.5f * SIN_F32(time * 1.7f + (F32)cell->cellSeed * 0.61f));
         transform.v[3][1] += bob;
     }
     return transform;
@@ -145,28 +142,33 @@ static void app_scene_extract_range_(const AppSceneExtractParams* params, U64 la
     for (U64 item = range.min; item < range.max; ++item) {
         U32 x = (U32)(item % side);
         U32 z = (U32)(item / side);
-        U32 cellSeed = x * 31u + z * 17u;
-        Mat4x4F32 transform = app_scene_object_transform_(x, z, side, time, animate);
+        AppSceneCell cell = app_scene_classify_cell_(x, z, side);
 
-        AppWorldMeshHandle mesh = ((cellSeed & 3u) == 0u) ? world->builtinMeshes[1]
-                                                          : world->builtinMeshes[0];
-        U32 lane = cellSeed % 11u;
-        if ((lane == 9u && world->models[0]) || (lane == 1u && world->models[1])) {
-            const AppWorldModelResources* model = world->models[(lane == 9u) ? 0u : 1u];
-            F32 halfSide = (F32)(side - 1u) * 0.5f;
-            Vec3F32 position = app_world_vec3_(((F32)x - halfSide) * APP_SCENE_GRID_SPACING, 0.9f,
-                                               ((F32)z - halfSide) * APP_SCENE_GRID_SPACING);
-            Mat4x4F32 placement = app_scene_model_placement_(model, 1.3f, position,
-                                                             (F32)cellSeed * ((lane == 9u) ? 0.7f : 1.3f));
-            app_scene_push_model_(world, writer, model, AppWorldBin_Opaque, &placement);
-            continue;
+        if (cell.kind == AppSceneCell_ModelProxy) {
+            U32 modelIndex = (cell.lane == 9u) ? 0u : 1u;
+            if (world->models[modelIndex]) {
+                const AppWorldModelResources* model = world->models[modelIndex];
+                Vec3F32 position = app_world_vec3_(cell.worldX, APP_SCENE_MODEL_PROXY_Y, cell.worldZ);
+                Mat4x4F32 placement = app_scene_model_placement_(model, APP_SCENE_MODEL_PROXY_RADIUS,
+                                                                 position,
+                                                                 (F32)cell.cellSeed * ((cell.lane == 9u) ? 0.7f : 1.3f));
+                app_scene_push_model_(world, writer, model, AppWorldBin_Opaque, &placement);
+                continue;
+            }
+            // Unpublished model: render the plain cell below while the
+            // proxy collider already stands in — asset arrival timing is
+            // not a sim input.
         }
-        if (lane == 3u) {
+
+        Mat4x4F32 transform = app_scene_cell_transform_(&cell, time, animate);
+        AppWorldMeshHandle mesh = cell.sphereMesh ? world->builtinMeshes[1]
+                                                  : world->builtinMeshes[0];
+        if (cell.lane == 3u) {
             app_world_writer_push_(world, writer, world->builtinMeshes[0], params->alphaTestMaterial, AppWorldBin_AlphaTest, &transform);
-        } else if (lane == 5u || lane == 7u) {
-            app_world_writer_push_(world, writer, mesh, params->transparentMaterials[(lane == 5u) ? 0u : 1u], AppWorldBin_Transparent, &transform);
+        } else if (cell.lane == 5u || cell.lane == 7u) {
+            app_world_writer_push_(world, writer, mesh, params->transparentMaterials[(cell.lane == 5u) ? 0u : 1u], AppWorldBin_Transparent, &transform);
         } else {
-            app_world_writer_push_(world, writer, mesh, params->paletteMaterials[cellSeed % 6u], AppWorldBin_Opaque, &transform);
+            app_world_writer_push_(world, writer, mesh, params->paletteMaterials[cell.cellSeed % 6u], AppWorldBin_Opaque, &transform);
         }
     }
 }
@@ -207,10 +209,30 @@ static void app_demo_scene_submit(APP_Context* ctx, AppRendererFrame* rendererFr
                              orbitRadius * 4.0f);
     }
 
-    Mat4x4F32 groundTransform = mat4_scale(app_world_vec3_((F32)side * APP_SCENE_GRID_SPACING + 8.0f, 1.0f,
-                                                            (F32)side * APP_SCENE_GRID_SPACING + 8.0f)) *
+    // The plaza sits outside the grid edge; size the ground to cover it.
+    F32 groundSpan = (F32)side * APP_SCENE_GRID_SPACING + 2.0f * (APP_SCENE_SPAWN_MARGIN + 20.0f);
+    Mat4x4F32 groundTransform = mat4_scale(app_world_vec3_(groundSpan, 1.0f, groundSpan)) *
                                 mat4_translate(app_world_vec3_(0.0f, -0.05f, 0.0f));
     app_world_push(ctx, world->builtinMeshes[2], demo->paletteMaterials[5], AppWorldBin_Opaque, &groundTransform);
+
+    // Spawn plaza, rendered straight from the collider table (the inverse
+    // derivation from the grid: the table is the single source of truth).
+    {
+        AppScenePlayground playground;
+        F32 gridExtentForPlaza = app_scene_grid_extent_(side);
+        app_scene_build_playground_(gridExtentForPlaza + APP_SCENE_SPAWN_MARGIN,
+                                    -(gridExtentForPlaza + APP_SCENE_SPAWN_MARGIN), &playground);
+        for (U32 at = 0u; at < playground.count; ++at) {
+            const AppCollider* collider = playground.colliders + at;
+            Mat4x4F32 plazaTransform = mat4_scale(app_world_vec3_(collider->halfExtents.x * 2.0f,
+                                                                  collider->halfExtents.y * 2.0f,
+                                                                  collider->halfExtents.z * 2.0f)) *
+                                       quat_to_mat4(collider->orientation) *
+                                       mat4_translate(collider->center);
+            app_world_push(ctx, world->builtinMeshes[0], demo->paletteMaterials[2], AppWorldBin_Opaque,
+                           &plazaTransform);
+        }
+    }
 
     if (demo->playerMode) {
         // Unit sphere mesh has radius 0.5; scale to the player's radius.
@@ -279,6 +301,9 @@ static void app_demo_scene_submit(APP_Context* ctx, AppRendererFrame* rendererFr
 
     if (demo->showBounds) {
         app_debug_draw_world_bounds(ctx, 256u);
+        if (demo->playerMode) {
+            app_debug_draw_contacts(ctx, &state->game.lastTickStats);
+        }
     }
 
     if (state->render2d.textContext != 0 && state->render2d.font.generation != 0u) {

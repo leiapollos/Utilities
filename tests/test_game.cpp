@@ -5,6 +5,15 @@
 // input replay depends on.
 //
 
+// Statics: an AppColliderSet is half a megabyte — too big for a stack
+// frame. Empty set = the pre-U17 plane-only world, bit-identical.
+static AppColliderSet test_game_noColliders_;
+static AppGameTickStats test_game_tickStats_;
+
+static void test_game_tick_(AppPlayerState* player, const AppGameActions* actions, U64 tick) {
+    app_game_tick_(player, actions, &test_game_noColliders_, tick, &test_game_tickStats_);
+}
+
 static AppGameActions test_game_script_(U64 tick) {
     AppGameActions actions = {};
     if (tick < 60u) {
@@ -21,7 +30,7 @@ static void test_game_run_script_(AppPlayerState* player, U64 tickCount) {
     MEMSET(player, 0, sizeof(*player));
     for (U64 tick = 0u; tick < tickCount; ++tick) {
         AppGameActions actions = test_game_script_(tick);
-        app_game_tick_(player, &actions, tick);
+        test_game_tick_(player, &actions, tick);
     }
 }
 
@@ -37,7 +46,7 @@ static void test_game_(void) {
     AppPlayerState player = {};
     AppGameActions idle = {};
     for (U32 tick = 0u; tick < 120u; ++tick) {
-        app_game_tick_(&player, &idle, tick);
+        test_game_tick_(&player, &idle, tick);
     }
     TEST_CHECK(player.grounded);
     TEST_CHECK_NEAR(player.position.y, APP_GAME_GROUND_Y + APP_GAME_PLAYER_RADIUS, 1e-5f);
@@ -48,7 +57,7 @@ static void test_game_(void) {
     run.moveX = 1.0f;
     F32 maxSpeed = 0.0f;
     for (U32 tick = 0u; tick < 240u; ++tick) {
-        app_game_tick_(&player, &run, tick);
+        test_game_tick_(&player, &run, tick);
         F32 speed = SQRT_F32(player.velocity.x * player.velocity.x +
                              player.velocity.z * player.velocity.z);
         maxSpeed = MAX(maxSpeed, speed);
@@ -60,12 +69,12 @@ static void test_game_(void) {
     // Jump leaves the ground, peaks, and lands back on it.
     AppGameActions jump = {};
     jump.jump = 1;
-    app_game_tick_(&player, &jump, 0u);
+    test_game_tick_(&player, &jump, 0u);
     TEST_CHECK(!player.grounded);
     F32 peak = player.position.y;
     B32 landed = 0;
     for (U32 tick = 0u; tick < 240u && !landed; ++tick) {
-        app_game_tick_(&player, &idle, tick);
+        test_game_tick_(&player, &idle, tick);
         peak = MAX(peak, player.position.y);
         landed = player.grounded;
     }
@@ -74,7 +83,7 @@ static void test_game_(void) {
 
     // Friction alone stops a grounded run.
     for (U32 tick = 0u; tick < 240u; ++tick) {
-        app_game_tick_(&player, &idle, tick);
+        test_game_tick_(&player, &idle, tick);
     }
     TEST_CHECK_NEAR(player.velocity.x, 0.0f, 1e-4f);
     TEST_CHECK_NEAR(player.velocity.z, 0.0f, 1e-4f);

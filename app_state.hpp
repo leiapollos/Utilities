@@ -289,18 +289,23 @@ struct AppGameState {
     F32 cameraPitch;
     F32 cameraDistance;
     Vec3F32 cameraTarget; // smoothed look target
+    AppGameTickStats lastTickStats; // observability only, never sim input
+    U64 lastTickNanos;
 };
 
-// The serialized subset: player + camera rig + sim clock. Explicit struct
-// rather than AppGameState so transient input (keyDown, drag) never
-// reaches disk; also the payload of the save file and the replay's
-// initial state.
+// The serialized subset: the closure of the sim's inputs (player + camera
+// rig + sim clock + the grid side the colliders derive from). Explicit
+// struct rather than AppGameState so transient input (keyDown, drag)
+// never reaches disk; also the payload of the save file and the replay's
+// initial state. Every future input the tick reads must enter this struct
+// the same day it is added, or replay rots.
 struct AppGameSaveState {
     AppPlayerState player;
     F32 cameraYaw;
     F32 cameraPitch;
     F32 cameraDistance;
     Vec3F32 cameraTarget;
+    U32 gridSide; // world-defining sim input: the collision world derives from it
     U64 simTickCounter;
 };
 
@@ -344,6 +349,8 @@ struct AppCoreState {
     U32 simClampCount;
     AppGameState game;
     AppReplayState replay;
+    AppColliderSet colliders; // derived from gridSide; rebuilt, never saved
+    U32 colliderBuiltSide;    // 0 = never built
     B32 debugOverlayVisible;
     B32 profilerVisible;
     B32 profFlatView;

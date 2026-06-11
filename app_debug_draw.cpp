@@ -74,6 +74,36 @@ static void app_debug_draw_world_bounds(APP_Context* ctx, U32 maxBounds) {
     }
 }
 
+// Last-tick contact normals as world-space whiskers: foot of the line at
+// the contact point on the sphere surface, tip one unit along the normal.
+static void app_debug_draw_contacts(APP_Context* ctx, const AppGameTickStats* stats) {
+    AppCoreState* state = ctx->core;
+    AppWorldState* world = &state->world;
+    if (!world->frameOpen) {
+        return;
+    }
+    F32 windowWidth = (F32)state->windowWidth;
+    F32 windowHeight = (F32)state->windowHeight;
+    U32 count = MIN(stats->contactCount, APP_GAME_RESOLVE_MAX_ITERATIONS);
+    for (U32 at = 0u; at < count; ++at) {
+        Vec3F32 point = stats->contactPoints[at];
+        Vec3F32 normal = stats->contactNormals[at];
+        F32 footX;
+        F32 footY;
+        F32 tipX;
+        F32 tipY;
+        if (!app_debug_project_point_(&world->frameRecord, windowWidth, windowHeight,
+                                      point.x, point.y, point.z, &footX, &footY) ||
+            !app_debug_project_point_(&world->frameRecord, windowWidth, windowHeight,
+                                      point.x + normal.x, point.y + normal.y, point.z + normal.z,
+                                      &tipX, &tipY)) {
+            continue;
+        }
+        debug_draw_line(ctx, footX, footY, tipX, tipY, 2.0f, 0xE8843AFFu);
+        debug_draw_box(ctx, footX - 3.0f, footY - 3.0f, footX + 3.0f, footY + 3.0f, 1.0f, 0xE8843AFFu);
+    }
+}
+
 static void debug_draw_text(APP_Context* ctx, AppRendererFrame* rendererFrame, F32 x, F32 y, F32 pixelSize, U32 rgba8, StringU8 text) {
     AppRender2DState* render = &ctx->core->render2d;
     if (render->textContext == 0 || render->font.generation == 0u || text.size == 0u) {

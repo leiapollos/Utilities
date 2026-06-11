@@ -47,6 +47,7 @@
 #include "app/shaders/shader_records.generated.hpp"
 #include "app_world_kernels.hpp"
 #include "app_game_kernels.hpp"
+#include "app_scene_kernels.hpp"
 #include "nstl/audio/audio_mixer.hpp"
 
 #include <stdio.h>
@@ -103,6 +104,7 @@ static Vec4F32 test_mul_point_(const Mat4x4F32* m, Vec3F32 p) {
 #include "test_text_ui.cpp"
 #include "test_base.cpp"
 #include "test_game.cpp"
+#include "test_collision.cpp"
 #include "test_audio.cpp"
 
 typedef void TestSuiteProc(void);
@@ -123,6 +125,7 @@ void entry_point(void) {
         {"text_ui", test_text_ui_},
         {"base", test_base_},
         {"game", test_game_},
+        {"collision", test_collision_},
         {"audio", test_audio_},
     };
 

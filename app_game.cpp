@@ -131,10 +131,10 @@ static void app_game_camera_(AppCoreState* state, F32 frameDt, Vec3F32* outEye, 
 // runtime-owned, not cooked assets.
 
 #define APP_SAVE_MAGIC 0x56415355u  // "USAV"
-#define APP_SAVE_VERSION 1u
+#define APP_SAVE_VERSION 3u // v3: U18 world function changed (plaza); v2 added gridSide (U17)
 #define APP_SAVE_PATH "saves/player.usav"
 #define APP_REPLAY_MAGIC 0x50455255u // "UREP"
-#define APP_REPLAY_VERSION 1u
+#define APP_REPLAY_VERSION 3u // v3: U18 world function changed (plaza); v2 added gridSide (U17)
 #define APP_REPLAY_PATH "saves/session.urep"
 
 struct AppSaveFileHeader {
@@ -156,6 +156,7 @@ static AppGameSaveState app_game_save_capture_(const AppCoreState* state) {
     save.cameraPitch = state->game.cameraPitch;
     save.cameraDistance = state->game.cameraDistance;
     save.cameraTarget = state->game.cameraTarget;
+    save.gridSide = state->demo.gridSide;
     save.simTickCounter = state->simTickCounter;
     return save;
 }
@@ -170,6 +171,12 @@ static void app_game_save_apply_(AppCoreState* state, const AppGameSaveState* sa
     state->game.cameraInitialized = 1;
     state->simTickCounter = save->simTickCounter;
     state->simAccumulator = 0.0f;
+    // The grid side is a sim input (the collision world derives from it):
+    // restoring the state means restoring the world, immediately — the
+    // first replayed tick must not run against the old colliders.
+    state->demo.gridSide = CLAMP(save->gridSide, APP_DEMO_GRID_MIN, APP_DEMO_GRID_MAX);
+    app_scene_build_colliders_(state->demo.gridSide, &state->colliders);
+    state->colliderBuiltSide = state->demo.gridSide;
 }
 
 static void app_game_save_write_(AppCoreState* state) {

@@ -2,7 +2,7 @@
 // Created by André Leite on 31/10/2025.
 //
 
-#define APP_CORE_STATE_VERSION 69u
+#define APP_CORE_STATE_VERSION 71u
 
 #if defined(PLATFORM_BUILD_DEBUG)
 #define APP_GFX_DEV_SHADER_SOURCE_ENTRY(name, source) source,
@@ -97,6 +97,9 @@ static B32 app_after_reload(AppHost* host, HOT_StateStore* store) {
     }
 
     ctx.core->reloadCount += 1u;
+    // Edits to the classifier must land in the live world like every
+    // other hot-reloaded data path: force a collider rebuild next frame.
+    ctx.core->colliderBuiltSide = 0u;
     return 1;
 }
 
@@ -124,6 +127,27 @@ static void app_frame(AppHost* host, HOT_StateStore* store, const AppInput* inpu
     // One action sample per frame; catch-up ticks share it.
     app_game_fold_events_(state, input);
     AppGameActions actions = app_game_sample_actions_(state);
+    // The collision world derives from the grid side alone; rebuild on
+    // change, before any tick can read it. A live grid change invalidates
+    // a running replay's world, so the replay stops first (a recording
+    // keeps everything up to the change — no tick under the new grid has
+    // run yet). Save/replay loads rebuild inside apply, so this trigger
+    // only fires for the slider and env knob.
+    U32 colliderSide = CLAMP(state->demo.gridSide, APP_DEMO_GRID_MIN, APP_DEMO_GRID_MAX);
+    if (state->colliderBuiltSide != colliderSide) {
+        if (state->replay.mode != AppReplayMode_Idle) {
+            LOG_INFO("replay", "Grid {} -> {} invalidates the session; stopping",
+                     state->colliderBuiltSide, colliderSide);
+            app_game_replay_stop_(state);
+        }
+        app_scene_build_colliders_(colliderSide, &state->colliders);
+        state->colliderBuiltSide = colliderSide;
+        LOG_INFO("game", "Collision world rebuilt: {} colliders ({} dropped) side {}",
+                 state->colliders.count, state->colliders.dropped, colliderSide);
+        if (state->colliders.dropped != 0u) {
+            LOG_ERROR("game", "Collider cap exceeded: {} dropped", state->colliders.dropped);
+        }
+    }
     F32 frameDt = (state->simForcedDt > 0.0f) ? state->simForcedDt : input->deltaSeconds;
     if (frameDt > APP_SIM_MAX_FRAME_DT) {
         frameDt = APP_SIM_MAX_FRAME_DT;
@@ -143,7 +167,12 @@ static void app_frame(AppHost* host, HOT_StateStore* store, const AppInput* inpu
             // the sim never knows audio exists.
             state->game.playerPrevPosition = state->game.player.position;
             B32 wasGrounded = state->game.player.grounded;
-            app_game_tick_(&state->game.player, &tickActions, state->simTickCounter);
+            AppGameTickStats tickStats = {};
+            U64 tickBeginNanos = OS_get_time_nanoseconds();
+            app_game_tick_(&state->game.player, &tickActions, &state->colliders,
+                           state->simTickCounter, &tickStats);
+            state->game.lastTickNanos = OS_get_time_nanoseconds() - tickBeginNanos;
+            state->game.lastTickStats = tickStats;
             if (wasGrounded && !state->game.player.grounded &&
                 state->game.player.velocity.y > 0.0f) {
                 audio_play(host->audioSystem, state->audio.sounds[AppSound_Jump],
@@ -505,16 +534,21 @@ static void app_state_init(APP_Context* ctx, APP_StateKind kind, void* memory) {
             // frame-indexed captures stay deterministic under load.
             core->simForcedDt = app_env_u32_(str8("UTILITIES_FIXED_DT"), 0u, 0u, 1u)
                 ? APP_SIM_TICK_DT : 0.0f;
-            // Spawn clear of the transparent centerpiece and the showcase
-            // corners (Lantern +x+z, Buggy -x-z).
-            core->game.player.position.x = 36.0f;
+            app_demo_state_reset(&core->demo);
+            // Spawn just outside the grid's +x/-z corner: the grid is
+            // impassable terrain now (cell gaps are narrower than the
+            // player), so spawning inside it would wedge the resolve
+            // between two cells on the first tick. The free corner is
+            // also clear of the showcase models (Lantern +x+z,
+            // Buggy -x-z).
+            F32 gridExtent = app_scene_grid_extent_(core->demo.gridSide);
+            core->game.player.position.x = gridExtent + APP_SCENE_SPAWN_MARGIN;
             core->game.player.position.y = APP_GAME_GROUND_Y + APP_GAME_PLAYER_RADIUS;
-            core->game.player.position.z = -36.0f;
+            core->game.player.position.z = -(gridExtent + APP_SCENE_SPAWN_MARGIN);
             core->game.playerPrevPosition = core->game.player.position;
             // The ambience publish auto-plays when the toggle is already on,
             // so the knob just preloads the toggle.
             core->audio.ambienceOn = (B32) app_env_u32_(str8("UTILITIES_DEMO_AMBIENCE"), 0u, 0u, 1u);
-            app_demo_state_reset(&core->demo);
 
             StringU8 eventsDomain = str8((const char*) "events", 6);
             set_log_domain_level(eventsDomain, LogLevel_Debug);

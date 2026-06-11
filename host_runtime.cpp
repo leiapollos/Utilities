@@ -43,6 +43,7 @@ static const char* HOST_HOT_MODULE_INPUTS[] = {
     "app_include.cpp",
     "app_game.cpp",
     "app_game_kernels.hpp",
+    "app_scene_kernels.hpp",
     "app.cpp",
     "app_world.cpp",
     "app_world_kernels.hpp",

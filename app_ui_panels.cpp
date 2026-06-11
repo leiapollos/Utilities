@@ -160,6 +160,12 @@ static void app_ui_stats_panel(APP_Context* ctx, UI_Context* ui) {
                          audioStats.voicesDropped, audioStats.commandsDropped,
                          audioStats.lastCallbackNanos / 1000ull, audioStats.maxCallbackNanos / 1000ull);
     }
+    if (state->demo.playerMode) {
+        const AppGameTickStats* tick = &state->game.lastTickStats;
+        app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "collision  colliders {}  contacts {}  depth {}  tick {}us",
+                         state->colliders.count, tick->contactCount,
+                         (F64)tick->deepestDepth, state->game.lastTickNanos / 1000ull);
+    }
 
     if (state->resources.artifactCache) {
         ArtifactStats artifact = artifact_cache_stats(state->resources.artifactCache);
