@@ -154,6 +154,7 @@ struct GfxDevice {
     id<MTLCounterSet> timestampCounterSet;
     U64 lastProfTick;
     MTLTimestamp lastGpuTimestamp;
+    F64 profTicksPerGpuTick;
 
     GfxStats stats;
 };
@@ -1979,15 +1980,19 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
         MTLTimestamp gpuNow = 0u;
         [device->metalDevice sampleTimestamps:&cpuIgnored gpuTimestamp:&gpuNow];
         U64 profNow = prof_tick();
-        F64 profTicksPerGpuTick = 0.0;
-        if (gpuNow > device->lastGpuTimestamp && profNow > device->lastProfTick) {
-            profTicksPerGpuTick = (F64)(profNow - device->lastProfTick) /
-                                  (F64)(gpuNow - device->lastGpuTimestamp);
-        }
+        // The anchor pair is FIXED at device create: resolved samples come
+        // from frames-in-flight-old GPU work, so any per-frame anchor can
+        // leapfrog them and the begin >= anchor guard then drops every
+        // span (the original always-stalls-after-two-frames bug). Only
+        // the tick rate refreshes, from the ever-longer create-to-now
+        // baseline.
         U64 anchorGpu = device->lastGpuTimestamp;
         U64 anchorProf = device->lastProfTick;
-        device->lastProfTick = profNow;
-        device->lastGpuTimestamp = gpuNow;
+        if (gpuNow > anchorGpu && profNow > anchorProf) {
+            device->profTicksPerGpuTick = (F64)(profNow - anchorProf) /
+                                          (F64)(gpuNow - anchorGpu);
+        }
+        F64 profTicksPerGpuTick = device->profTicksPerGpuTick;
 
         NSData* sampleData =
             [frame->timestampSamples resolveCounterRange:NSMakeRange(0u, 2u * frame->timedPassCount)];
