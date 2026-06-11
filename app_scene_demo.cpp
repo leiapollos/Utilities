@@ -93,6 +93,36 @@ static void app_demo_scene_ensure_materials_(APP_Context* ctx) {
     demo->materialsReady = ok;
 }
 
+// Spawns every instance of a published model; the placement applies after
+// each instance's model-space transform (row-vector: local first).
+static void app_scene_push_model_(AppWorldState* world, AppWorldLaneWriter* writer,
+                                  const AppWorldModelResources* model, AppWorldBin bin,
+                                  const Mat4x4F32* placement) {
+    for (U32 at = 0u; at < model->instanceCount; ++at) {
+        const AppWorldModelInstanceRef* instance = model->instances + at;
+        Mat4x4F32 transform = instance->transform * (*placement);
+        app_world_writer_push_(world, writer, instance->mesh, instance->materialSlot, bin, &transform);
+    }
+}
+
+// Uniform scale to a target world radius, spin, then land the model's
+// bounds center exactly on position.
+static Mat4x4F32 app_scene_model_placement_(const AppWorldModelResources* model, F32 targetRadius,
+                                            Vec3F32 position, F32 yawRadians) {
+    F32 scale = (model->boundsRadius > 1e-6f) ? (targetRadius / model->boundsRadius) : 1.0f;
+    Mat4x4F32 placement = mat4_scale(app_world_vec3_(scale, scale, scale)) *
+                          quat_to_mat4(quat_from_axis_angle(app_world_vec3_(0.0f, 1.0f, 0.0f), yawRadians));
+    Vec3F32 center = app_world_vec3_(model->boundsCenter[0], model->boundsCenter[1], model->boundsCenter[2]);
+    Vec3F32 placedCenter;
+    placedCenter.x = center.x * placement.v[0][0] + center.y * placement.v[1][0] + center.z * placement.v[2][0];
+    placedCenter.y = center.x * placement.v[0][1] + center.y * placement.v[1][1] + center.z * placement.v[2][1];
+    placedCenter.z = center.x * placement.v[0][2] + center.y * placement.v[1][2] + center.z * placement.v[2][2];
+    placement.v[3][0] = position.x - placedCenter.x;
+    placement.v[3][1] = position.y - placedCenter.y;
+    placement.v[3][2] = position.z - placedCenter.z;
+    return placement;
+}
+
 // Per-item extraction body; laneId/laneCount explicit so the single-threaded
 // path runs inline with no SPMD group.
 static void app_scene_extract_range_(const AppSceneExtractParams* params, U64 laneId, U64 laneCount) {
@@ -112,28 +142,14 @@ static void app_scene_extract_range_(const AppSceneExtractParams* params, U64 la
         AppWorldMeshHandle mesh = ((cellSeed & 3u) == 0u) ? world->builtinMeshes[1]
                                                           : world->builtinMeshes[0];
         U32 lane = cellSeed % 11u;
-        if (lane == 9u && world->assetMeshes[0].generation != 0u) {
+        if ((lane == 9u && world->models[0]) || (lane == 1u && world->models[1])) {
+            const AppWorldModelResources* model = world->models[(lane == 9u) ? 0u : 1u];
             F32 halfSide = (F32)(side - 1u) * 0.5f;
-            Mat4x4F32 duckTransform = mat4_scale(app_world_vec3_(0.012f, 0.012f, 0.012f));
-            QuatF32 duckSpin = quat_from_axis_angle(app_world_vec3_(0.0f, 1.0f, 0.0f),
-                                                    (F32)cellSeed * 0.7f);
-            duckTransform = duckTransform * quat_to_mat4(duckSpin);
-            duckTransform = duckTransform * mat4_translate(app_world_vec3_(
-                ((F32)x - halfSide) * APP_SCENE_GRID_SPACING, 0.0f,
-                ((F32)z - halfSide) * APP_SCENE_GRID_SPACING));
-            app_world_writer_push_(world, writer, world->assetMeshes[0], world->assetMaterials[0], AppWorldBin_Opaque, &duckTransform);
-            continue;
-        }
-        if (lane == 1u && world->assetMeshes[1].generation != 0u) {
-            F32 halfSide = (F32)(side - 1u) * 0.5f;
-            Mat4x4F32 avocadoTransform = mat4_scale(app_world_vec3_(22.0f, 22.0f, 22.0f));
-            QuatF32 avocadoSpin = quat_from_axis_angle(app_world_vec3_(0.0f, 1.0f, 0.0f),
-                                                       (F32)cellSeed * 1.3f);
-            avocadoTransform = avocadoTransform * quat_to_mat4(avocadoSpin);
-            avocadoTransform = avocadoTransform * mat4_translate(app_world_vec3_(
-                ((F32)x - halfSide) * APP_SCENE_GRID_SPACING, 0.0f,
-                ((F32)z - halfSide) * APP_SCENE_GRID_SPACING));
-            app_world_writer_push_(world, writer, world->assetMeshes[1], world->assetMaterials[1], AppWorldBin_Opaque, &avocadoTransform);
+            Vec3F32 position = app_world_vec3_(((F32)x - halfSide) * APP_SCENE_GRID_SPACING, 0.9f,
+                                               ((F32)z - halfSide) * APP_SCENE_GRID_SPACING);
+            Mat4x4F32 placement = app_scene_model_placement_(model, 1.3f, position,
+                                                             (F32)cellSeed * ((lane == 9u) ? 0.7f : 1.3f));
+            app_scene_push_model_(world, writer, model, AppWorldBin_Opaque, &placement);
             continue;
         }
         if (lane == 3u) {
@@ -190,6 +206,22 @@ static void app_demo_scene_submit(APP_Context* ctx, AppRendererFrame* rendererFr
     Mat4x4F32 bigSphere = mat4_scale(app_world_vec3_(26.0f, 26.0f, 26.0f)) *
                           mat4_translate(app_world_vec3_(0.0f, groundY, 0.0f));
     app_world_push(ctx, world->builtinMeshes[1], demo->transparentMaterials[1], AppWorldBin_Transparent, &bigSphere);
+
+    // Showcase models at opposite grid edges: Lantern (node transforms) and
+    // Buggy (148 deduped sections, 236 instances through mesh reuse).
+    F32 gridExtent = (F32)side * APP_SCENE_GRID_SPACING * 0.5f;
+    if (world->models[2]) {
+        Mat4x4F32 placement = app_scene_model_placement_(world->models[2], 12.0f,
+                                                         app_world_vec3_(gridExtent * 0.5f, 10.0f, gridExtent * 0.5f),
+                                                         time * 0.25f);
+        app_scene_push_model_(world, world->laneWriters, world->models[2], AppWorldBin_Opaque, &placement);
+    }
+    if (world->models[3]) {
+        Mat4x4F32 placement = app_scene_model_placement_(world->models[3], 16.0f,
+                                                         app_world_vec3_(-gridExtent * 0.5f, 13.0f, -gridExtent * 0.5f),
+                                                         time * -0.2f);
+        app_scene_push_model_(world, world->laneWriters, world->models[3], AppWorldBin_Opaque, &placement);
+    }
 
     AppSceneExtractParams extractParams = {};
     extractParams.world = world;

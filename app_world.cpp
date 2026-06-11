@@ -27,21 +27,28 @@ static const char* APP_WORLD_SHADER_PATHS[APP_WORLD_SHADER_COUNT] = {
     APP_SHADER_WORLD_ARGS_RUNTIME_PATH,
 };
 
-// Demo asset policy: which cooked assets exist. Module rodata; hot state
-// stores handles and dynamically allocated material indices.
+// Demo asset policy: which cooked models exist. Module rodata; hot state
+// stores the published model resources. A model's textures cook as
+// "<stem>_tex<N>.utex" siblings; the runtime derives those paths.
 struct AppWorldDemoAssetDesc {
-    const char* meshPath;
-    const char* texturePath;
-    const char* meshLabel;
-    const char* textureLabel;
+    const char* modelPath;
+    const char* modelLabel;
 };
 
 static const AppWorldDemoAssetDesc APP_WORLD_DEMO_ASSETS[APP_WORLD_DEMO_ASSET_COUNT] = {
-    {"app/assets/cooked/Duck.umsh", "app/assets/cooked/Duck.utex",
-     "assets/Duck.umsh", "assets/Duck.utex"},
-    {"app/assets/cooked/Avocado.umsh", "app/assets/cooked/Avocado.utex",
-     "assets/Avocado.umsh", "assets/Avocado.utex"},
+    {"app/assets/cooked/Duck.umdl", "assets/Duck.umdl"},
+    {"app/assets/cooked/Avocado.umdl", "assets/Avocado.umdl"},
+    {"app/assets/cooked/Lantern.umdl", "assets/Lantern.umdl"},
+    {"app/assets/cooked/Buggy.umdl", "assets/Buggy.umdl"},
 };
+
+// "<dir>/<stem>.umdl" -> "<dir>/<stem>_tex<N>.utex"
+static StringU8 app_world_model_texture_path_(Arena* arena, const char* modelPath, U32 textureLocal) {
+    StringU8 path = str8(modelPath);
+    StringU8 base = path;
+    base.size = (path.size > 5u) ? path.size - 5u : 0u;
+    return str8_fmt(arena, "{}_tex{}.utex", base, textureLocal);
+}
 
 
 static void app_world_resource_cache_reset_(APP_Context* ctx) {
@@ -67,12 +74,12 @@ static void app_world_watch_files_(APP_Context* ctx) {
     StringU8 exeDir = OS_get_executable_directory(scratch.arena);
     for (U32 assetIndex = 0u; assetIndex < APP_WORLD_DEMO_ASSET_COUNT; ++assetIndex) {
         const AppWorldDemoAssetDesc* asset = APP_WORLD_DEMO_ASSETS + assetIndex;
-        StringU8 meshPath = str8_concat(scratch.arena, exeDir, str8("/../"));
-        meshPath = str8_concat(scratch.arena, meshPath, str8(asset->meshPath));
-        StringU8 texturePath = str8_concat(scratch.arena, exeDir, str8("/../"));
-        texturePath = str8_concat(scratch.arena, texturePath, str8(asset->texturePath));
-        state->world.assetMeshFiles[assetIndex] = file_watch(state->resources.fileStream, meshPath, 0u);
-        state->world.assetTextureFiles[assetIndex] = file_watch(state->resources.fileStream, texturePath, 0u);
+        StringU8 modelPath = str8_concat(scratch.arena, exeDir, str8("/../"));
+        modelPath = str8_concat(scratch.arena, modelPath, str8(asset->modelPath));
+        state->world.assetModelFiles[assetIndex] = file_watch(state->resources.fileStream, modelPath, 0u);
+        // Texture watches are model-driven: the publish proc watches exactly
+        // the textureCount the cooked model declares (a boot-time guess would
+        // leave permanently-failing watches screaming in the stats).
     }
 
     for (U32 shaderIndex = 0u; shaderIndex < APP_WORLD_SHADER_COUNT; ++shaderIndex) {
@@ -126,7 +133,7 @@ static const U32 APP_WORLD_COMPUTE_GROUP_SIZES[5] = {
 
 static U32 app_world_cell_count_(const AppWorldState* world) {
     (void)world;
-    return APP_WORLD_BIN_COUNT * APP_WORLD_MAX_MESHES;
+    return APP_WORLD_CELL_COUNT;
 }
 
 static Vec3F32 app_world_vec3_(F32 x, F32 y, F32 z) {
@@ -193,10 +200,10 @@ static void app_world_release_mesh_(GfxDevice* device, AppWorldState* world, App
 
 static B32 app_world_material_alloc(AppWorldState* world, U32* outIndex) {
     for (U32 index = APP_WORLD_MATERIAL_MISSING + 1u; index < APP_WORLD_MAX_MATERIALS; ++index) {
-        if (FLAGS_HAS(world->materialUsedMask, 1u << index)) {
+        if (FLAGS_HAS(world->materialUsedMask, 1ull << index)) {
             continue;
         }
-        world->materialUsedMask |= 1u << index;
+        world->materialUsedMask |= 1ull << index;
         MEMSET(&world->materialRecords[index], 0, sizeof(world->materialRecords[index]));
         world->materialsDirty = 1;
         *outIndex = index;
@@ -207,7 +214,7 @@ static B32 app_world_material_alloc(AppWorldState* world, U32* outIndex) {
 }
 
 static void app_world_material_set(AppWorldState* world, U32 index, const ShdWorldMaterialRecord* record) {
-    if (index >= APP_WORLD_MAX_MATERIALS || !FLAGS_HAS(world->materialUsedMask, 1u << index)) {
+    if (index >= APP_WORLD_MAX_MATERIALS || !FLAGS_HAS(world->materialUsedMask, 1ull << index)) {
         return;
     }
     world->materialRecords[index] = *record;
@@ -218,7 +225,7 @@ static void app_world_material_release(AppWorldState* world, U32 index) {
     if (index <= APP_WORLD_MATERIAL_MISSING || index >= APP_WORLD_MAX_MATERIALS) {
         return;
     }
-    world->materialUsedMask &= ~(1u << index);
+    world->materialUsedMask &= ~(1ull << index);
     // In-flight references to the freed slot show the missing color until
     // the slot is reused.
     world->materialRecords[index] = world->materialRecords[APP_WORLD_MATERIAL_MISSING];
@@ -420,15 +427,16 @@ static B32 app_world_try_create_resources_(APP_Context* ctx) {
 // ////////////////////////
 // Cooked asset decode (mesh + texture artifacts)
 
-#define APP_ARTIFACT_TYPE_MESH 0x4D455348u
+#define APP_ARTIFACT_TYPE_MODEL 0x4C444D55u
 #define APP_ARTIFACT_TYPE_TEXTURE 0x54455855u
 #define APP_ARTIFACT_PUBLISHED_MARK 1ull
 
-// materialIndex rides the request so the texture publish knows its target
-// material; mesh requests ignore it.
+// assetIndex names the demo-asset slot; textureLocal is the model-local
+// texture index for texture requests (model requests ignore it).
 struct AppAssetRequest {
     ContentHash hash;
-    U32 materialIndex;
+    U32 assetIndex;
+    U32 textureLocal;
 };
 
 static B32 app_asset_build_blob_(ArtifactBuildContext* buildCtx, U32 expectedMagic, U64 minimumSize,
@@ -462,79 +470,200 @@ static B32 app_asset_build_blob_(ArtifactBuildContext* buildCtx, U32 expectedMag
     return 1;
 }
 
-static B32 app_mesh_artifact_build_(ArtifactBuildContext* buildCtx, ArtifactValue* outValue, U64* outBytes) {
-    return app_asset_build_blob_(buildCtx, ASSET_MESH_MAGIC, sizeof(AssetMeshHeader), outValue, outBytes);
+static B32 app_model_artifact_build_(ArtifactBuildContext* buildCtx, ArtifactValue* outValue, U64* outBytes) {
+    return app_asset_build_blob_(buildCtx, ASSET_MODEL_MAGIC, sizeof(AssetModelHeader), outValue, outBytes);
 }
 
 static B32 app_texture_artifact_build_(ArtifactBuildContext* buildCtx, ArtifactValue* outValue, U64* outBytes) {
     return app_asset_build_blob_(buildCtx, ASSET_TEXTURE_MAGIC, sizeof(AssetTextureHeader), outValue, outBytes);
 }
 
-static B32 app_mesh_artifact_publish_(ArtifactPublishContext* publishCtx, ArtifactValue buildValue,
-                                      ArtifactValue* outValue, U64* outBytes) {
+static B32 app_model_artifact_publish_(ArtifactPublishContext* publishCtx, ArtifactValue buildValue,
+                                       ArtifactValue* outValue, U64* outBytes) {
     AppWorldArtifactBridge* bridge = (AppWorldArtifactBridge*)publishCtx->typeUserData;
     Arena* arena = (Arena*)buildValue.u64[0];
     const U8* blob = (const U8*)buildValue.u64[1];
     U64 blobSize = buildValue.u64[2];
-    if (!bridge || !bridge->device || !bridge->state || !blob) {
+    const AppAssetRequest* request = (const AppAssetRequest*)publishCtx->requestData;
+    if (!bridge || !bridge->device || !bridge->state || !blob ||
+        !request || publishCtx->requestDataSize < sizeof(AppAssetRequest) ||
+        request->assetIndex >= APP_WORLD_DEMO_ASSET_COUNT) {
         arena_release(arena);
         return 0;
     }
     AppWorldState* world = &bridge->state->world;
 
-    const AssetMeshHeader* header = (const AssetMeshHeader*)blob;
+    const AssetModelHeader* header = (const AssetModelHeader*)blob;
+    U64 sectionBytes = (U64)header->sectionCount * sizeof(AssetModelSection);
+    U64 instanceBytes = (U64)header->instanceCount * sizeof(AssetModelInstance);
+    U64 materialBytes = (U64)header->materialCount * sizeof(AssetModelMaterial);
     U64 vertexBytes = (U64)header->vertexCount * sizeof(ShdWorldVertexRecord);
     U64 indexBytes = (U64)header->indexCount * sizeof(U32);
-    if (header->version != ASSET_MESH_VERSION ||
-        sizeof(AssetMeshHeader) + vertexBytes + indexBytes > blobSize) {
+    U64 expectedSize = sizeof(AssetModelHeader) + sectionBytes + instanceBytes + materialBytes +
+                       vertexBytes + indexBytes;
+    if (header->version != ASSET_MODEL_VERSION ||
+        header->sectionCount == 0u || header->instanceCount == 0u || header->materialCount == 0u ||
+        header->textureCount > APP_WORLD_MODEL_MAX_TEXTURES ||
+        header->vertexCount == 0u || header->indexCount == 0u ||
+        expectedSize > blobSize) {
+        LOG_ERROR("asset", "Model blob rejected (asset {})", request->assetIndex);
+        arena_release(arena);
+        return 0;
+    }
+    const AssetModelSection* sections = (const AssetModelSection*)(blob + sizeof(AssetModelHeader));
+    const AssetModelInstance* instances = (const AssetModelInstance*)((const U8*)sections + sectionBytes);
+    const AssetModelMaterial* materials = (const AssetModelMaterial*)((const U8*)instances + instanceBytes);
+    const U8* vertexData = (const U8*)materials + materialBytes;
+    const U8* indexData = vertexData + vertexBytes;
+
+    GfxBufferDesc vertexDesc = {};
+    vertexDesc.name = "model vertices";
+    vertexDesc.size = vertexBytes;
+    vertexDesc.usageFlags = GfxBufferUsageFlags_Storage;
+    vertexDesc.memoryKind = GfxMemoryKind_Upload;
+    vertexDesc.initialData = vertexData;
+    GfxBuffer vertexBuffer = gfx_create_buffer(bridge->device, &vertexDesc);
+
+    GfxBufferDesc indexDesc = {};
+    indexDesc.name = "model indices";
+    indexDesc.size = indexBytes;
+    indexDesc.usageFlags = GfxBufferUsageFlags_Index;
+    indexDesc.memoryKind = GfxMemoryKind_Upload;
+    indexDesc.initialData = indexData;
+    GfxBuffer indexBuffer = gfx_create_buffer(bridge->device, &indexDesc);
+    GfxResourceId vertexBufferId = gfx_register_buffer(bridge->device, vertexBuffer);
+    if (vertexBuffer.generation == 0u || indexBuffer.generation == 0u || vertexBufferId.index == 0u) {
+        gfx_destroy_buffer(bridge->device, vertexBuffer);
+        gfx_destroy_buffer(bridge->device, indexBuffer);
         arena_release(arena);
         return 0;
     }
 
-    GfxBufferDesc vertexDesc = {};
-    vertexDesc.name = "asset mesh vertices";
-    vertexDesc.size = vertexBytes;
-    vertexDesc.usageFlags = GfxBufferUsageFlags_Storage;
-    vertexDesc.memoryKind = GfxMemoryKind_Upload;
-    vertexDesc.initialData = blob + sizeof(AssetMeshHeader);
-    GfxBuffer vertexBuffer = gfx_create_buffer(bridge->device, &vertexDesc);
+    Arena* modelArena = arena_alloc(.arenaSize = MB(4), .committedSize = KB(64));
+    AppWorldModelResources* resources = modelArena ? ARENA_PUSH_STRUCT(modelArena, AppWorldModelResources) : 0;
+    AppWorldMeshHandle* sectionMeshes = resources
+        ? ARENA_PUSH_ARRAY(modelArena, AppWorldMeshHandle, header->sectionCount) : 0;
+    AppWorldModelMaterialRef* materialRefs = resources
+        ? ARENA_PUSH_ARRAY(modelArena, AppWorldModelMaterialRef, header->materialCount) : 0;
+    AppWorldModelInstanceRef* instanceRefs = resources
+        ? ARENA_PUSH_ARRAY(modelArena, AppWorldModelInstanceRef, header->instanceCount) : 0;
+    if (!resources || !sectionMeshes || !materialRefs || !instanceRefs) {
+        gfx_destroy_buffer(bridge->device, vertexBuffer);
+        gfx_destroy_buffer(bridge->device, indexBuffer);
+        if (modelArena) {
+            arena_release(modelArena);
+        }
+        arena_release(arena);
+        return 0;
+    }
+    MEMSET(resources, 0, sizeof(*resources));
 
-    GfxBufferDesc indexDesc = {};
-    indexDesc.name = "asset mesh indices";
-    indexDesc.size = indexBytes;
-    indexDesc.usageFlags = GfxBufferUsageFlags_Index;
-    indexDesc.memoryKind = GfxMemoryKind_Upload;
-    indexDesc.initialData = blob + sizeof(AssetMeshHeader) + vertexBytes;
-    GfxBuffer indexBuffer = gfx_create_buffer(bridge->device, &indexDesc);
-    GfxResourceId vertexBufferId = gfx_register_buffer(bridge->device, vertexBuffer);
+    B32 failed = 0;
+    U32 registeredSections = 0u;
+    for (U32 section = 0u; section < header->sectionCount; ++section) {
+        const AssetModelSection* source = sections + section;
+        Vec3F32 center = app_world_vec3_(source->boundsCenter[0], source->boundsCenter[1], source->boundsCenter[2]);
+        Vec3F32 extents = app_world_vec3_(source->boundsExtents[0], source->boundsExtents[1], source->boundsExtents[2]);
+        sectionMeshes[section] = app_world_register_mesh_(world, source->firstIndex, source->indexCount,
+                                                          source->baseVertex, vertexBuffer, vertexBufferId,
+                                                          indexBuffer, 0, center, extents);
+        if (sectionMeshes[section].generation == 0u) {
+            failed = 1;
+            break;
+        }
+        registeredSections += 1u;
+    }
 
-    U32 vertexCount = header->vertexCount;
-    U32 indexCount = header->indexCount;
-    Vec3F32 center = app_world_vec3_(header->boundsCenter[0], header->boundsCenter[1], header->boundsCenter[2]);
-    Vec3F32 extents = app_world_vec3_(header->boundsExtents[0], header->boundsExtents[1], header->boundsExtents[2]);
+    U32 allocatedMaterials = 0u;
+    for (U32 material = 0u; !failed && material < header->materialCount; ++material) {
+        if (!app_world_material_alloc(world, &materialRefs[material].worldSlot)) {
+            failed = 1;
+            break;
+        }
+        allocatedMaterials += 1u;
+        materialRefs[material].textureLocal = materials[material].textureIndex;
+        ShdWorldMaterialRecord record = {};
+        record.baseColor[0] = materials[material].baseColor[0];
+        record.baseColor[1] = materials[material].baseColor[1];
+        record.baseColor[2] = materials[material].baseColor[2];
+        record.baseColor[3] = materials[material].baseColor[3];
+        app_world_material_set(world, materialRefs[material].worldSlot, &record);
+    }
+
+    for (U32 instance = 0u; !failed && instance < header->instanceCount; ++instance) {
+        const AssetModelInstance* source = instances + instance;
+        if (source->sectionIndex >= header->sectionCount || source->materialIndex >= header->materialCount) {
+            failed = 1;
+            break;
+        }
+        instanceRefs[instance].mesh = sectionMeshes[source->sectionIndex];
+        instanceRefs[instance].materialSlot = materialRefs[source->materialIndex].worldSlot;
+        MEMCPY(&instanceRefs[instance].transform, source->transform, sizeof(instanceRefs[instance].transform));
+    }
+
+    if (failed) {
+        for (U32 section = 0u; section < registeredSections; ++section) {
+            app_world_release_mesh_(bridge->device, world, sectionMeshes[section]);
+        }
+        for (U32 material = 0u; material < allocatedMaterials; ++material) {
+            app_world_material_release(world, materialRefs[material].worldSlot);
+        }
+        gfx_destroy_buffer(bridge->device, vertexBuffer);
+        gfx_destroy_buffer(bridge->device, indexBuffer);
+        arena_release(modelArena);
+        arena_release(arena);
+        LOG_ERROR("asset", "Model publish failed (asset {})", request->assetIndex);
+        return 0;
+    }
+
+    resources->vertexBuffer = vertexBuffer;
+    resources->indexBuffer = indexBuffer;
+    resources->vertexBufferId = vertexBufferId;
+    resources->sectionCount = header->sectionCount;
+    resources->sections = sectionMeshes;
+    resources->materialCount = header->materialCount;
+    resources->materials = materialRefs;
+    resources->instanceCount = header->instanceCount;
+    resources->instances = instanceRefs;
+    resources->textureCount = header->textureCount;
+    resources->boundsCenter[0] = header->boundsCenter[0];
+    resources->boundsCenter[1] = header->boundsCenter[1];
+    resources->boundsCenter[2] = header->boundsCenter[2];
+    resources->boundsRadius = header->boundsRadius;
+    world->models[request->assetIndex] = resources;
+
+    // Watch the sibling texture files this model declares; file_watch
+    // dedupes by path so republish is idempotent.
+    if (bridge->state->resources.fileStream && resources->textureCount != 0u) {
+        Temp scratch = get_scratch(0, 0);
+        if (scratch.arena) {
+            StringU8 exeDir = OS_get_executable_directory(scratch.arena);
+            for (U32 textureLocal = 0u;
+                 textureLocal < resources->textureCount && textureLocal < APP_WORLD_MODEL_MAX_TEXTURES;
+                 ++textureLocal) {
+                StringU8 path = str8_concat(scratch.arena, exeDir, str8("/../"));
+                path = str8_concat(scratch.arena, path,
+                                   app_world_model_texture_path_(scratch.arena,
+                                                                 APP_WORLD_DEMO_ASSETS[request->assetIndex].modelPath,
+                                                                 textureLocal));
+                world->assetModelTextureFiles[request->assetIndex][textureLocal] =
+                    file_watch(bridge->state->resources.fileStream, path, 0u);
+            }
+            temp_end(&scratch);
+        }
+    }
+
+    // The blob (and header) die here; log from the resources copy.
     arena_release(arena);
 
-    if (vertexBuffer.generation == 0u || indexBuffer.generation == 0u || vertexBufferId.index == 0u) {
-        gfx_destroy_buffer(bridge->device, vertexBuffer);
-        gfx_destroy_buffer(bridge->device, indexBuffer);
-        return 0;
-    }
-
-    AppWorldMeshHandle handle = app_world_register_mesh_(world, 0u, indexCount, 0u,
-                                                         vertexBuffer, vertexBufferId, indexBuffer, 1,
-                                                         center, extents);
-    if (handle.generation == 0u) {
-        gfx_destroy_buffer(bridge->device, vertexBuffer);
-        gfx_destroy_buffer(bridge->device, indexBuffer);
-        return 0;
-    }
-
-    outValue->u64[0] = handle.index;
-    outValue->u64[1] = handle.generation;
-    outValue->u64[2] = 0ull;
+    outValue->u64[0] = (U64)modelArena;
+    outValue->u64[1] = (U64)resources;
+    outValue->u64[2] = request->assetIndex;
     outValue->u64[3] = APP_ARTIFACT_PUBLISHED_MARK;
     *outBytes = vertexBytes + indexBytes;
-    LOG_INFO("asset", "Mesh published: {} vertices {} indices", vertexCount, indexCount);
+    LOG_INFO("asset", "Model published: {} sections {} instances {} materials {} textures",
+             resources->sectionCount, resources->instanceCount, resources->materialCount,
+             resources->textureCount);
     return 1;
 }
 
@@ -625,18 +754,31 @@ static B32 app_texture_artifact_publish_(ArtifactPublishContext* publishCtx, Art
         world->assetTextureCount += 1u;
     }
 
+    // Bind every model material that references this model-local texture.
     const AppAssetRequest* request = (const AppAssetRequest*)publishCtx->requestData;
-    U32 materialIndex = (request && publishCtx->requestDataSize >= sizeof(AppAssetRequest))
-        ? request->materialIndex : APP_WORLD_MATERIAL_MISSING;
-    if (materialIndex > APP_WORLD_MATERIAL_MISSING && materialIndex < APP_WORLD_MAX_MATERIALS &&
-        FLAGS_HAS(world->materialUsedMask, 1u << materialIndex)) {
-        ShdWorldMaterialRecord* material = &world->materialRecords[materialIndex];
-        material->textureIndex = textureId.index;
-        material->samplerIndex = world->worldSamplerId.index;
-        material->flags |= APP_WORLD_MATERIAL_FLAG_TEXTURED;
-        world->materialsDirty = 1;
-    } else {
-        LOG_ERROR("asset", "Texture publish targets unallocated material {}; left unbound", materialIndex);
+    U32 boundCount = 0u;
+    if (request && publishCtx->requestDataSize >= sizeof(AppAssetRequest) &&
+        request->assetIndex < APP_WORLD_DEMO_ASSET_COUNT) {
+        AppWorldModelResources* resources = world->models[request->assetIndex];
+        for (U32 at = 0u; resources && at < resources->materialCount; ++at) {
+            const AppWorldModelMaterialRef* ref = resources->materials + at;
+            if (ref->textureLocal != request->textureLocal ||
+                ref->worldSlot >= APP_WORLD_MAX_MATERIALS ||
+                !FLAGS_HAS(world->materialUsedMask, 1ull << ref->worldSlot)) {
+                continue;
+            }
+            ShdWorldMaterialRecord* material = &world->materialRecords[ref->worldSlot];
+            material->textureIndex = textureId.index;
+            material->samplerIndex = world->worldSamplerId.index;
+            material->flags |= APP_WORLD_MATERIAL_FLAG_TEXTURED;
+            world->materialsDirty = 1;
+            boundCount += 1u;
+        }
+    }
+    if (boundCount == 0u) {
+        LOG_ERROR("asset", "Texture publish bound no materials (asset {} tex {})",
+                  request ? request->assetIndex : 0xFFFFFFFFu,
+                  request ? request->textureLocal : 0xFFFFFFFFu);
     }
 
     outValue->u64[0] = texture.index;
@@ -648,7 +790,7 @@ static B32 app_texture_artifact_publish_(ArtifactPublishContext* publishCtx, Art
     return 1;
 }
 
-static void app_mesh_artifact_destroy_(void* typeUserData, ArtifactValue value) {
+static void app_model_artifact_destroy_(void* typeUserData, ArtifactValue value) {
     AppWorldArtifactBridge* bridge = (AppWorldArtifactBridge*)typeUserData;
     if (!bridge || !bridge->device || !bridge->state) {
         return;
@@ -658,10 +800,25 @@ static void app_mesh_artifact_destroy_(void* typeUserData, ArtifactValue value) 
         arena_release(arena);
         return;
     }
-    AppWorldMeshHandle handle = {};
-    handle.index = (U32)value.u64[0];
-    handle.generation = (U32)value.u64[1];
-    app_world_release_mesh_(bridge->device, &bridge->state->world, handle);
+    AppWorldState* world = &bridge->state->world;
+    Arena* modelArena = (Arena*)value.u64[0];
+    AppWorldModelResources* resources = (AppWorldModelResources*)value.u64[1];
+    U32 assetIndex = (U32)value.u64[2];
+    for (U32 section = 0u; section < resources->sectionCount; ++section) {
+        app_world_release_mesh_(bridge->device, world, resources->sections[section]);
+    }
+    for (U32 material = 0u; material < resources->materialCount; ++material) {
+        app_world_material_release(world, resources->materials[material].worldSlot);
+    }
+    gfx_destroy_buffer(bridge->device, resources->vertexBuffer);
+    gfx_destroy_buffer(bridge->device, resources->indexBuffer);
+    // A supersede has already pointed models[] at the replacement; only a
+    // terminal destroy (eviction, shutdown) still owns the slot.
+    if (assetIndex < APP_WORLD_DEMO_ASSET_COUNT && world->models[assetIndex] == resources) {
+        world->models[assetIndex] = 0;
+    }
+    arena_release(modelArena);
+    LOG_INFO("asset", "Model destroyed (asset {})", assetIndex);
 }
 
 static void app_texture_artifact_destroy_(void* typeUserData, ArtifactValue value) {
@@ -713,14 +870,14 @@ static B32 app_world_register_artifact_types_(APP_Context* ctx) {
     state->world.artifactBridge.device = ctx->host->gfxDevice;
     state->world.artifactBridge.state = state;
 
-    ArtifactTypeDesc meshType = {};
-    meshType.typeId = APP_ARTIFACT_TYPE_MESH;
-    meshType.name = str8("mesh");
-    meshType.buildProc = app_mesh_artifact_build_;
-    meshType.publishProc = app_mesh_artifact_publish_;
-    meshType.destroyProc = app_mesh_artifact_destroy_;
-    meshType.userData = &state->world.artifactBridge;
-    if (!artifact_register_type(state->resources.artifactCache, &meshType)) {
+    ArtifactTypeDesc modelType = {};
+    modelType.typeId = APP_ARTIFACT_TYPE_MODEL;
+    modelType.name = str8("model");
+    modelType.buildProc = app_model_artifact_build_;
+    modelType.publishProc = app_model_artifact_publish_;
+    modelType.destroyProc = app_model_artifact_destroy_;
+    modelType.userData = &state->world.artifactBridge;
+    if (!artifact_register_type(state->resources.artifactCache, &modelType)) {
         return 0;
     }
 
@@ -752,49 +909,14 @@ static void app_world_try_load_assets_(APP_Context* ctx) {
     for (U32 assetIndex = 0u; assetIndex < APP_WORLD_DEMO_ASSET_COUNT; ++assetIndex) {
         const AppWorldDemoAssetDesc* asset = APP_WORLD_DEMO_ASSETS + assetIndex;
 
-        if (world->assetMaterials[assetIndex] == APP_WORLD_MATERIAL_MISSING) {
-            U32 materialIndex = 0u;
-            if (!app_world_material_alloc(world, &materialIndex)) {
-                settled = 0;
-                continue;
-            }
-            ShdWorldMaterialRecord record = {};
-            record.baseColor[0] = 1.0f;
-            record.baseColor[1] = 1.0f;
-            record.baseColor[2] = 1.0f;
-            record.baseColor[3] = 1.0f;
-            app_world_material_set(world, materialIndex, &record);
-            world->assetMaterials[assetIndex] = materialIndex;
-        }
-
-        FileView meshView = file_view(state->resources.fileStream, world->assetMeshFiles[assetIndex]);
-        if (meshView.status == FileStatus_Ready && !content_hash_is_zero(meshView.hash)) {
+        FileView modelView = file_view(state->resources.fileStream, world->assetModelFiles[assetIndex]);
+        if (modelView.status == FileStatus_Ready && !content_hash_is_zero(modelView.hash)) {
             AppAssetRequest request = {};
-            request.hash = meshView.hash;
-            request.materialIndex = world->assetMaterials[assetIndex];
-            ArtifactResult result = artifact_get(state->resources.artifactCache, APP_ARTIFACT_TYPE_MESH,
-                                                 app_artifact_key_from_label(asset->meshLabel),
-                                                 meshView.generation, &request, sizeof(request),
-                                                 ArtifactGetFlags_None, 0u);
-            if (result.status == ArtifactStatus_Ready &&
-                result.value.u64[3] == APP_ARTIFACT_PUBLISHED_MARK) {
-                world->assetMeshes[assetIndex].index = (U32)result.value.u64[0];
-                world->assetMeshes[assetIndex].generation = (U32)result.value.u64[1];
-            } else {
-                settled = 0;
-            }
-        } else {
-            settled = 0;
-        }
-
-        FileView textureView = file_view(state->resources.fileStream, world->assetTextureFiles[assetIndex]);
-        if (textureView.status == FileStatus_Ready && !content_hash_is_zero(textureView.hash)) {
-            AppAssetRequest request = {};
-            request.hash = textureView.hash;
-            request.materialIndex = world->assetMaterials[assetIndex];
-            ArtifactResult result = artifact_get(state->resources.artifactCache, APP_ARTIFACT_TYPE_TEXTURE,
-                                                 app_artifact_key_from_label(asset->textureLabel),
-                                                 textureView.generation, &request, sizeof(request),
+            request.hash = modelView.hash;
+            request.assetIndex = assetIndex;
+            ArtifactResult result = artifact_get(state->resources.artifactCache, APP_ARTIFACT_TYPE_MODEL,
+                                                 app_artifact_key_from_label(asset->modelLabel),
+                                                 modelView.generation, &request, sizeof(request),
                                                  ArtifactGetFlags_None, 0u);
             if (result.status != ArtifactStatus_Ready ||
                 result.value.u64[3] != APP_ARTIFACT_PUBLISHED_MARK) {
@@ -802,6 +924,44 @@ static void app_world_try_load_assets_(APP_Context* ctx) {
             }
         } else {
             settled = 0;
+        }
+
+        // The published model declares how many sibling textures exist.
+        const AppWorldModelResources* resources = world->models[assetIndex];
+        if (!resources) {
+            settled = 0;
+            continue;
+        }
+        for (U32 textureLocal = 0u; textureLocal < resources->textureCount; ++textureLocal) {
+            if (world->assetModelTextureFiles[assetIndex][textureLocal].generation == 0u) {
+                settled = 0;
+                continue;
+            }
+            FileView textureView = file_view(state->resources.fileStream,
+                                             world->assetModelTextureFiles[assetIndex][textureLocal]);
+            if (textureView.status != FileStatus_Ready || content_hash_is_zero(textureView.hash)) {
+                settled = 0;
+                continue;
+            }
+            AppAssetRequest request = {};
+            request.hash = textureView.hash;
+            request.assetIndex = assetIndex;
+            request.textureLocal = textureLocal;
+            Temp scratch = get_scratch(0, 0);
+            if (!scratch.arena) {
+                settled = 0;
+                continue;
+            }
+            StringU8 label = str8_fmt(scratch.arena, "{}#tex{}", str8(asset->modelLabel), textureLocal);
+            ArtifactResult result = artifact_get(state->resources.artifactCache, APP_ARTIFACT_TYPE_TEXTURE,
+                                                 artifact_key_from_bytes(label.data, label.size),
+                                                 textureView.generation, &request, sizeof(request),
+                                                 ArtifactGetFlags_None, 0u);
+            temp_end(&scratch);
+            if (result.status != ArtifactStatus_Ready ||
+                result.value.u64[3] != APP_ARTIFACT_PUBLISHED_MARK) {
+                settled = 0;
+            }
         }
     }
     world->assetsSettled = settled;
@@ -1073,7 +1233,11 @@ static void app_world_writer_push_(AppWorldState* world, AppWorldLaneWriter* wri
     record.boundsExtents[1] = mesh->boundsExtents.y * maxScale;
     record.boundsExtents[2] = mesh->boundsExtents.z * maxScale;
     record.materialIndex = materialIndex;
-    record.cellIndex = (U32)bin * APP_WORLD_MAX_MESHES + meshHandle.index;
+    // Transparents are CPU-direct and own no GPU cell; their cellIndex is
+    // just the mesh slot for run grouping in the sorted tail.
+    record.cellIndex = (bin == AppWorldBin_Transparent)
+        ? meshHandle.index
+        : (U32)bin * APP_WORLD_MAX_MESHES + meshHandle.index;
     record.flags = 0u;
 
     if (bin == AppWorldBin_Transparent) {
@@ -1399,7 +1563,7 @@ static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame
     depthTarget.storeOp = GfxStoreOp_DontCare;
     depthTarget.clearDepth = 1.0f;
 
-    U32 maxDrawUses = 7u + APP_WORLD_MAX_MESHES + world->assetTextureCount;
+    U32 maxDrawUses = 7u + APP_WORLD_DEMO_ASSET_COUNT + world->assetTextureCount;
     GfxResourceUse* drawUses = ARENA_PUSH_ARRAY(ctx->host->frameArena, GfxResourceUse, maxDrawUses);
     if (!drawUses) {
         app_world_fail_once_(world, AppWorldFailLog_DrawAlloc, "forward pass allocation failed");
@@ -1443,18 +1607,18 @@ static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame
     drawUses[drawUseCount].shaderStages = GfxShaderStageFlags_Fragment;
     drawUses[drawUseCount].buffer = world->materialBuffer;
     drawUseCount += 1u;
-    for (U32 meshSlot = 0u; meshSlot < APP_WORLD_MAX_MESHES; ++meshSlot) {
-        if (!slot_map_is_occupied(&world->meshes, meshSlot)) {
-            continue;
-        }
-        AppWorldMesh* slotMesh = (AppWorldMesh*)slot_map_item_at(&world->meshes, meshSlot);
-        if (!slotMesh->ownsBuffers) {
+    // Residency contract (U6): every buffer the resource table reaches must
+    // appear in the pass uses. Model sections share one vertex buffer per
+    // model — declare per model, not per slot.
+    for (U32 assetIndex = 0u; assetIndex < APP_WORLD_DEMO_ASSET_COUNT; ++assetIndex) {
+        const AppWorldModelResources* model = world->models[assetIndex];
+        if (!model) {
             continue;
         }
         drawUses[drawUseCount].kind = GfxResourceUseKind_Buffer;
         drawUses[drawUseCount].accessFlags = GfxResourceAccessFlags_ShaderRead;
         drawUses[drawUseCount].shaderStages = GfxShaderStageFlags_Vertex;
-        drawUses[drawUseCount].buffer = slotMesh->vertexBuffer;
+        drawUses[drawUseCount].buffer = model->vertexBuffer;
         drawUseCount += 1u;
     }
     for (U32 at = 0u; at < world->assetTextureCount; ++at) {
@@ -1488,11 +1652,7 @@ static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame
     }
     U32 drawCount = 0u;
     for (U32 cell = 0u; cell < cellCount; ++cell) {
-        U32 bin = cell / APP_WORLD_MAX_MESHES;
         U32 meshSlot = cell % APP_WORLD_MAX_MESHES;
-        if (bin == (U32)AppWorldBin_Transparent) {
-            continue;
-        }
         if (!slot_map_is_occupied(&world->meshes, meshSlot)) {
             continue;
         }

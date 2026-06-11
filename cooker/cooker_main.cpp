@@ -11,6 +11,7 @@
 #include "nstl/base/base_include.cpp"
 
 #include "app/assets/asset_formats.hpp"
+#include "cooker_math.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_STDIO
@@ -21,6 +22,7 @@
 #include "third_party/stb/stb_dxt.h"
 
 #include <stdio.h>
+#include <math.h>
 
 // ////////////////////////
 // Minimal JSON (arena DOM, glTF subset: no surrogate escapes)
@@ -397,7 +399,8 @@ static B32 gltf_accessor_view(GlbFile* glb, JsonValue* root, U32 accessorIndex, 
 }
 
 // ////////////////////////
-// Mesh cooking
+// Model cooking: walk the default scene, flatten node transforms, dedupe
+// primitives into sections and materials by value, emit one UMDL.
 
 struct CookedVertex {
     F32 position[3];
@@ -405,13 +408,187 @@ struct CookedVertex {
     F32 uv[2];
 };
 
-static B32 cook_mesh(Arena* arena, GlbFile* glb, StringU8 outPath) {
-    JsonValue* root = glb->json;
-    JsonValue* primitive = json_index(json_get(json_index(json_get(root, "meshes"), 0u), "primitives"), 0u);
-    if (!primitive) {
-        fprintf(stderr, "cooker: no mesh primitive\n");
-        return 0;
+#define COOK_MAX_SECTIONS 1024u
+#define COOK_MAX_INSTANCES 4096u
+#define COOK_MAX_MATERIALS 256u
+#define COOK_MAX_TEXTURES 64u
+
+static F32 json_f32(JsonValue* value, F32 fallback) {
+    return (value && value->kind == JsonKind_Number) ? (F32)value->number : fallback;
+}
+
+struct CookModel {
+    U32 sectionMesh[COOK_MAX_SECTIONS];
+    U32 sectionPrim[COOK_MAX_SECTIONS];
+    AssetModelSection sections[COOK_MAX_SECTIONS];
+    U32 sectionCount;
+    AssetModelInstance instances[COOK_MAX_INSTANCES];
+    U32 instanceCount;
+    AssetModelMaterial materials[COOK_MAX_MATERIALS];
+    U32 materialCount;
+    U32 textureImages[COOK_MAX_TEXTURES];
+    U32 textureCount;
+    B32 failed;
+};
+
+static U32 cook_model_section_(CookModel* model, U32 meshIndex, U32 primIndex) {
+    for (U32 at = 0u; at < model->sectionCount; ++at) {
+        if (model->sectionMesh[at] == meshIndex && model->sectionPrim[at] == primIndex) {
+            return at;
+        }
     }
+    if (model->sectionCount >= COOK_MAX_SECTIONS) {
+        fprintf(stderr, "cooker: section cap exceeded\n");
+        model->failed = 1;
+        return 0u;
+    }
+    U32 section = model->sectionCount;
+    model->sectionCount += 1u;
+    model->sectionMesh[section] = meshIndex;
+    model->sectionPrim[section] = primIndex;
+    return section;
+}
+
+static U32 cook_model_material_(CookModel* model, JsonValue* root, U32 gltfMaterial) {
+    F32 factor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    U32 sourceImage = 0xFFFFFFFFu;
+    JsonValue* material = json_index(json_get(root, "materials"), gltfMaterial);
+    if (material) {
+        JsonValue* pbr = json_get(material, "pbrMetallicRoughness");
+        JsonValue* factorValue = json_get(pbr, "baseColorFactor");
+        if (factorValue) {
+            for (U32 at = 0u; at < 4u; ++at) {
+                factor[at] = json_f32(json_index(factorValue, at), 1.0f);
+            }
+        }
+        JsonValue* baseColorTexture = json_get(pbr, "baseColorTexture");
+        if (baseColorTexture) {
+            JsonValue* texture = json_index(json_get(root, "textures"),
+                                            json_u32(json_get(baseColorTexture, "index"), 0xFFFFFFFFu));
+            sourceImage = json_u32(json_get(texture, "source"), 0xFFFFFFFFu);
+        }
+    }
+
+    U32 textureLocal = ASSET_MODEL_NO_TEXTURE;
+    if (sourceImage != 0xFFFFFFFFu) {
+        for (U32 at = 0u; at < model->textureCount; ++at) {
+            if (model->textureImages[at] == sourceImage) {
+                textureLocal = at;
+                break;
+            }
+        }
+        if (textureLocal == ASSET_MODEL_NO_TEXTURE) {
+            if (model->textureCount >= COOK_MAX_TEXTURES) {
+                fprintf(stderr, "cooker: texture cap exceeded\n");
+                model->failed = 1;
+                return 0u;
+            }
+            textureLocal = model->textureCount;
+            model->textureImages[model->textureCount] = sourceImage;
+            model->textureCount += 1u;
+        }
+    }
+
+    for (U32 at = 0u; at < model->materialCount; ++at) {
+        const AssetModelMaterial* existing = model->materials + at;
+        if (existing->textureIndex == textureLocal &&
+            existing->baseColor[0] == factor[0] && existing->baseColor[1] == factor[1] &&
+            existing->baseColor[2] == factor[2] && existing->baseColor[3] == factor[3]) {
+            return at;
+        }
+    }
+    if (model->materialCount >= COOK_MAX_MATERIALS) {
+        fprintf(stderr, "cooker: material cap exceeded\n");
+        model->failed = 1;
+        return 0u;
+    }
+    U32 result = model->materialCount;
+    model->materialCount += 1u;
+    AssetModelMaterial* cooked = model->materials + result;
+    cooked->baseColor[0] = factor[0];
+    cooked->baseColor[1] = factor[1];
+    cooked->baseColor[2] = factor[2];
+    cooked->baseColor[3] = factor[3];
+    cooked->textureIndex = textureLocal;
+    cooked->pad0 = cooked->pad1 = cooked->pad2 = 0u;
+    return result;
+}
+
+static void cook_model_walk_(CookModel* model, JsonValue* root, U32 nodeIndex, const F32* parentTransform) {
+    JsonValue* node = json_index(json_get(root, "nodes"), nodeIndex);
+    if (!node || model->failed) {
+        return;
+    }
+
+    F32 local[16];
+    JsonValue* matrixValue = json_get(node, "matrix");
+    if (matrixValue) {
+        for (U32 at = 0u; at < 16u; ++at) {
+            local[at] = json_f32(json_index(matrixValue, at), (at % 5u == 0u) ? 1.0f : 0.0f);
+        }
+    } else {
+        F32 t[3] = {0.0f, 0.0f, 0.0f};
+        F32 q[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+        F32 s[3] = {1.0f, 1.0f, 1.0f};
+        JsonValue* translation = json_get(node, "translation");
+        JsonValue* rotation = json_get(node, "rotation");
+        JsonValue* scale = json_get(node, "scale");
+        for (U32 at = 0u; at < 3u; ++at) {
+            t[at] = json_f32(json_index(translation, at), 0.0f);
+            s[at] = json_f32(json_index(scale, at), 1.0f);
+        }
+        for (U32 at = 0u; at < 4u; ++at) {
+            q[at] = json_f32(json_index(rotation, at), (at == 3u) ? 1.0f : 0.0f);
+        }
+        asset_mat_from_trs(t, q, s, local);
+    }
+    F32 world[16];
+    asset_mat_mul(local, parentTransform, world);
+
+    U32 meshIndex = json_u32(json_get(node, "mesh"), 0xFFFFFFFFu);
+    if (meshIndex != 0xFFFFFFFFu) {
+        JsonValue* primitives = json_get(json_index(json_get(root, "meshes"), meshIndex), "primitives");
+        for (U32 prim = 0u;; ++prim) {
+            JsonValue* primitive = json_index(primitives, prim);
+            if (!primitive) {
+                break;
+            }
+            U32 section = cook_model_section_(model, meshIndex, prim);
+            U32 material = cook_model_material_(model, root,
+                                                json_u32(json_get(primitive, "material"), 0xFFFFFFFFu));
+            if (model->failed) {
+                return;
+            }
+            if (model->instanceCount >= COOK_MAX_INSTANCES) {
+                fprintf(stderr, "cooker: instance cap exceeded\n");
+                model->failed = 1;
+                return;
+            }
+            AssetModelInstance* instance = model->instances + model->instanceCount;
+            model->instanceCount += 1u;
+            instance->sectionIndex = section;
+            instance->materialIndex = material;
+            MEMCPY(instance->transform, world, sizeof(instance->transform));
+        }
+    }
+
+    JsonValue* children = json_get(node, "children");
+    for (U32 child = 0u;; ++child) {
+        JsonValue* childValue = json_index(children, child);
+        if (!childValue) {
+            break;
+        }
+        cook_model_walk_(model, root, json_u32(childValue, 0xFFFFFFFFu), world);
+    }
+}
+
+static B32 cook_model_extract_section_(Arena* arena, GlbFile* glb, CookModel* model, U32 section,
+                                       CookedVertex** ioVertices, U32* ioVertexCount,
+                                       U32** ioIndices, U32* ioIndexCount) {
+    JsonValue* root = glb->json;
+    JsonValue* primitive = json_index(json_get(json_index(json_get(root, "meshes"), model->sectionMesh[section]),
+                                                "primitives"),
+                                      model->sectionPrim[section]);
     JsonValue* attributes = json_get(primitive, "attributes");
 
     GltfAccessorView positions = {};
@@ -420,77 +597,69 @@ static B32 cook_mesh(Arena* arena, GlbFile* glb, StringU8 outPath) {
     GltfAccessorView indices = {};
     if (!gltf_accessor_view(glb, root, json_u32(json_get(attributes, "POSITION"), 0xFFFFFFFFu), &positions) ||
         positions.componentType != 5126 || positions.componentCount != 3u) {
-        fprintf(stderr, "cooker: POSITION accessor unsupported\n");
+        fprintf(stderr, "cooker: POSITION accessor unsupported (section %u)\n", section);
         return 0;
     }
     if (!gltf_accessor_view(glb, root, json_u32(json_get(attributes, "NORMAL"), 0xFFFFFFFFu), &normals) ||
         normals.componentType != 5126 || normals.componentCount != 3u) {
-        fprintf(stderr, "cooker: NORMAL accessor unsupported\n");
+        fprintf(stderr, "cooker: NORMAL accessor unsupported (section %u)\n", section);
         return 0;
     }
-    if (!gltf_accessor_view(glb, root, json_u32(json_get(attributes, "TEXCOORD_0"), 0xFFFFFFFFu), &uvs) ||
-        uvs.componentType != 5126 || uvs.componentCount != 2u) {
-        fprintf(stderr, "cooker: TEXCOORD_0 accessor unsupported\n");
-        return 0;
-    }
+    B32 hasUv = gltf_accessor_view(glb, root, json_u32(json_get(attributes, "TEXCOORD_0"), 0xFFFFFFFFu), &uvs) &&
+                uvs.componentType == 5126 && uvs.componentCount == 2u;
     if (!gltf_accessor_view(glb, root, json_u32(json_get(primitive, "indices"), 0xFFFFFFFFu), &indices) ||
         indices.componentCount != 1u ||
         (indices.componentType != 5123 && indices.componentType != 5125)) {
-        fprintf(stderr, "cooker: index accessor unsupported\n");
+        fprintf(stderr, "cooker: index accessor unsupported (section %u)\n", section);
         return 0;
     }
 
-    U32 vertexCount = positions.count;
-    CookedVertex* vertices = ARENA_PUSH_ARRAY(arena, CookedVertex, vertexCount);
+    CookedVertex* vertices = ARENA_PUSH_ARRAY(arena, CookedVertex, positions.count);
+    U32* cookedIndices = ARENA_PUSH_ARRAY(arena, U32, indices.count);
+    if (!vertices || !cookedIndices) {
+        return 0;
+    }
+
     F32 boundsMin[3] = {1e30f, 1e30f, 1e30f};
     F32 boundsMax[3] = {-1e30f, -1e30f, -1e30f};
-    for (U32 vertexIndex = 0u; vertexIndex < vertexCount; ++vertexIndex) {
+    for (U32 vertexIndex = 0u; vertexIndex < positions.count; ++vertexIndex) {
         const F32* position = (const F32*)(positions.data + (U64)vertexIndex * positions.stride);
         const F32* normal = (const F32*)(normals.data + (U64)vertexIndex * normals.stride);
-        const F32* uv = (const F32*)(uvs.data + (U64)vertexIndex * uvs.stride);
         for (U32 axis = 0u; axis < 3u; ++axis) {
             vertices[vertexIndex].position[axis] = position[axis];
             vertices[vertexIndex].normal[axis] = normal[axis];
             boundsMin[axis] = MIN(boundsMin[axis], position[axis]);
             boundsMax[axis] = MAX(boundsMax[axis], position[axis]);
         }
-        vertices[vertexIndex].uv[0] = uv[0];
-        vertices[vertexIndex].uv[1] = uv[1];
+        if (hasUv) {
+            const F32* uv = (const F32*)(uvs.data + (U64)vertexIndex * uvs.stride);
+            vertices[vertexIndex].uv[0] = uv[0];
+            vertices[vertexIndex].uv[1] = uv[1];
+        } else {
+            vertices[vertexIndex].uv[0] = 0.0f;
+            vertices[vertexIndex].uv[1] = 0.0f;
+        }
     }
-
-    U32* cookedIndices = ARENA_PUSH_ARRAY(arena, U32, indices.count);
     for (U32 indexIndex = 0u; indexIndex < indices.count; ++indexIndex) {
         const U8* source = indices.data + (U64)indexIndex * indices.stride;
         cookedIndices[indexIndex] = (indices.componentType == 5123) ? (U32)(*(const U16*)source)
                                                                     : (*(const U32*)source);
     }
 
-    AssetMeshHeader meshHeader = {};
-    meshHeader.magic = ASSET_MESH_MAGIC;
-    meshHeader.version = ASSET_MESH_VERSION;
-    meshHeader.vertexCount = vertexCount;
-    meshHeader.indexCount = indices.count;
+    AssetModelSection* cooked = model->sections + section;
+    cooked->firstIndex = *ioIndexCount;
+    cooked->indexCount = indices.count;
+    cooked->baseVertex = *ioVertexCount;
+    cooked->pad0 = 0u;
     for (U32 axis = 0u; axis < 3u; ++axis) {
-        meshHeader.boundsCenter[axis] = (boundsMin[axis] + boundsMax[axis]) * 0.5f;
-        meshHeader.boundsExtents[axis] = (boundsMax[axis] - boundsMin[axis]) * 0.5f;
+        cooked->boundsCenter[axis] = (boundsMin[axis] + boundsMax[axis]) * 0.5f;
+        cooked->boundsExtents[axis] = (boundsMax[axis] - boundsMin[axis]) * 0.5f;
     }
 
-    char* pathCStr = ARENA_PUSH_ARRAY(arena, char, outPath.size + 1);
-    MEMCPY(pathCStr, outPath.data, outPath.size);
-    pathCStr[outPath.size] = '\0';
-    OS_Handle file = OS_file_open(pathCStr, OS_FileOpenMode_Create);
-    if (!file.handle) {
-        fprintf(stderr, "cooker: cannot open output mesh\n");
-        return 0;
-    }
-    OS_file_write(file, sizeof(meshHeader), &meshHeader);
-    OS_file_write(file, sizeof(CookedVertex) * vertexCount, vertices);
-    OS_file_write(file, sizeof(U32) * indices.count, cookedIndices);
-    OS_file_close(file);
-
-    printf("cooker: mesh %u vertices %u indices bounds (%.2f %.2f %.2f)\n",
-           vertexCount, indices.count,
-           (F64)meshHeader.boundsExtents[0], (F64)meshHeader.boundsExtents[1], (F64)meshHeader.boundsExtents[2]);
+    *ioVertices = vertices;
+    *ioVertexCount += positions.count;
+    *ioIndices = cookedIndices;
+    *ioIndexCount += indices.count;
     return 1;
 }
 
@@ -535,12 +704,12 @@ static U32 cook_texture_mip_(Arena* arena, const U8* rgba, U32 width, U32 height
     return totalSize;
 }
 
-static B32 cook_texture(Arena* arena, GlbFile* glb, StringU8 outPath) {
+static B32 cook_texture_image(Arena* arena, GlbFile* glb, U32 imageIndex, StringU8 outPath) {
     JsonValue* root = glb->json;
-    JsonValue* image = json_index(json_get(root, "images"), 0u);
+    JsonValue* image = json_index(json_get(root, "images"), imageIndex);
     if (!image) {
-        printf("cooker: no image, skipping texture\n");
-        return 1;
+        fprintf(stderr, "cooker: image %u missing\n", imageIndex);
+        return 0;
     }
     JsonValue* bufferView = json_index(json_get(root, "bufferViews"), json_u32(json_get(image, "bufferView"), 0xFFFFFFFFu));
     if (!bufferView) {
@@ -640,6 +809,127 @@ static B32 cook_texture(Arena* arena, GlbFile* glb, StringU8 outPath) {
     return 1;
 }
 
+// The whole default scene cooks into one UMDL plus one UTEX per unique
+// baseColor image, named "<stem>_tex<N>.utex" — the runtime derives the
+// texture paths from the model path by the same convention.
+static B32 cook_model(Arena* arena, GlbFile* glb, StringU8 outputDir, StringU8 stem) {
+    JsonValue* root = glb->json;
+    CookModel* model = ARENA_PUSH_STRUCT(arena, CookModel);
+    if (!model) {
+        return 0;
+    }
+    MEMSET(model, 0, sizeof(*model));
+
+    F32 identity[16];
+    asset_mat_identity(identity);
+    JsonValue* scene = json_index(json_get(root, "scenes"), json_u32(json_get(root, "scene"), 0u));
+    JsonValue* roots = json_get(scene, "nodes");
+    for (U32 rootAt = 0u;; ++rootAt) {
+        JsonValue* rootValue = json_index(roots, rootAt);
+        if (!rootValue) {
+            break;
+        }
+        cook_model_walk_(model, root, json_u32(rootValue, 0xFFFFFFFFu), identity);
+    }
+    if (model->failed || model->instanceCount == 0u || model->sectionCount == 0u) {
+        fprintf(stderr, "cooker: scene walk produced no instances\n");
+        return 0;
+    }
+
+    CookedVertex* sectionVertices[COOK_MAX_SECTIONS];
+    U32* sectionIndices[COOK_MAX_SECTIONS];
+    U32 vertexTotal = 0u;
+    U32 indexTotal = 0u;
+    for (U32 section = 0u; section < model->sectionCount; ++section) {
+        if (!cook_model_extract_section_(arena, glb, model, section,
+                                         &sectionVertices[section], &vertexTotal,
+                                         &sectionIndices[section], &indexTotal)) {
+            return 0;
+        }
+    }
+
+    // Model bounds: conservative box over every instance's transformed
+    // section sphere.
+    F32 modelMin[3] = {1e30f, 1e30f, 1e30f};
+    F32 modelMax[3] = {-1e30f, -1e30f, -1e30f};
+    for (U32 at = 0u; at < model->instanceCount; ++at) {
+        const AssetModelInstance* instance = model->instances + at;
+        const AssetModelSection* section = model->sections + instance->sectionIndex;
+        F32 worldCenter[3];
+        asset_mat_transform_point(instance->transform, section->boundsCenter, worldCenter);
+        F32 maxScale = 0.0f;
+        for (U32 row = 0u; row < 3u; ++row) {
+            const F32* r = instance->transform + row * 4u;
+            F32 lengthSq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
+            if (lengthSq > maxScale) {
+                maxScale = lengthSq;
+            }
+        }
+        maxScale = sqrtf(maxScale);
+        F32 radius = sqrtf(section->boundsExtents[0] * section->boundsExtents[0] +
+                           section->boundsExtents[1] * section->boundsExtents[1] +
+                           section->boundsExtents[2] * section->boundsExtents[2]) * maxScale;
+        for (U32 axis = 0u; axis < 3u; ++axis) {
+            modelMin[axis] = MIN(modelMin[axis], worldCenter[axis] - radius);
+            modelMax[axis] = MAX(modelMax[axis], worldCenter[axis] + radius);
+        }
+    }
+
+    AssetModelHeader header = {};
+    header.magic = ASSET_MODEL_MAGIC;
+    header.version = ASSET_MODEL_VERSION;
+    header.sectionCount = model->sectionCount;
+    header.instanceCount = model->instanceCount;
+    header.materialCount = model->materialCount;
+    header.textureCount = model->textureCount;
+    header.vertexCount = vertexTotal;
+    header.indexCount = indexTotal;
+    F32 halfDiagonal[3];
+    for (U32 axis = 0u; axis < 3u; ++axis) {
+        header.boundsCenter[axis] = (modelMin[axis] + modelMax[axis]) * 0.5f;
+        halfDiagonal[axis] = (modelMax[axis] - modelMin[axis]) * 0.5f;
+    }
+    header.boundsRadius = sqrtf(halfDiagonal[0] * halfDiagonal[0] +
+                                halfDiagonal[1] * halfDiagonal[1] +
+                                halfDiagonal[2] * halfDiagonal[2]);
+
+    StringU8 modelPath = str8_fmt(arena, "{}/{}.umdl", outputDir, stem);
+    char* pathCStr = ARENA_PUSH_ARRAY(arena, char, modelPath.size + 1);
+    MEMCPY(pathCStr, modelPath.data, modelPath.size);
+    pathCStr[modelPath.size] = '\0';
+    OS_Handle file = OS_file_open(pathCStr, OS_FileOpenMode_Create);
+    if (!file.handle) {
+        fprintf(stderr, "cooker: cannot open output model\n");
+        return 0;
+    }
+    OS_file_write(file, sizeof(header), &header);
+    OS_file_write(file, sizeof(AssetModelSection) * model->sectionCount, model->sections);
+    OS_file_write(file, sizeof(AssetModelInstance) * model->instanceCount, model->instances);
+    OS_file_write(file, sizeof(AssetModelMaterial) * model->materialCount, model->materials);
+    for (U32 section = 0u; section < model->sectionCount; ++section) {
+        U32 count = (section + 1u < model->sectionCount)
+            ? model->sections[section + 1u].baseVertex - model->sections[section].baseVertex
+            : vertexTotal - model->sections[section].baseVertex;
+        OS_file_write(file, sizeof(CookedVertex) * count, sectionVertices[section]);
+    }
+    for (U32 section = 0u; section < model->sectionCount; ++section) {
+        OS_file_write(file, sizeof(U32) * model->sections[section].indexCount, sectionIndices[section]);
+    }
+    OS_file_close(file);
+
+    printf("cooker: model %u sections %u instances %u materials %u textures %u verts %u indices radius %.2f\n",
+           model->sectionCount, model->instanceCount, model->materialCount, model->textureCount,
+           vertexTotal, indexTotal, (F64)header.boundsRadius);
+
+    for (U32 texture = 0u; texture < model->textureCount; ++texture) {
+        StringU8 texturePath = str8_fmt(arena, "{}/{}_tex{}.utex", outputDir, stem, texture);
+        if (!cook_texture_image(arena, glb, model->textureImages[texture], texturePath)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 // ////////////////////////
 // Entry
 
@@ -690,13 +980,7 @@ int main(int argc, char** argv) {
     }
 
     StringU8 stem = cooker_stem_(inputPath);
-    StringU8 meshPath = str8_fmt(arena, "{}/{}.umsh", outputDir, stem);
-    StringU8 texturePath = str8_fmt(arena, "{}/{}.utex", outputDir, stem);
-
-    if (!cook_mesh(arena, &glb, meshPath)) {
-        return 1;
-    }
-    if (!cook_texture(arena, &glb, texturePath)) {
+    if (!cook_model(arena, &glb, outputDir, stem)) {
         return 1;
     }
     printf("cooker: cooked '%.*s'\n", (int)inputPath.size, (const char*)inputPath.data);

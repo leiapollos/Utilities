@@ -66,14 +66,19 @@ struct AppCoreState;
 
 #define APP_WORLD_MAX_RENDERABLES 16384u
 #define APP_WORLD_MAX_TRANSPARENTS (APP_WORLD_MAX_RENDERABLES / 4u)
-#define APP_WORLD_MAX_MESHES 8u
-#define APP_WORLD_MAX_MATERIALS 16u
+#define APP_WORLD_MAX_MESHES 512u
+#define APP_WORLD_MAX_MATERIALS 64u
 #define APP_WORLD_BIN_COUNT 3u
+// Transparents are CPU-direct since U8; only opaque + alpha-test own GPU
+// cells.
+#define APP_WORLD_GPU_BIN_COUNT 2u
+#define APP_WORLD_CELL_COUNT (APP_WORLD_GPU_BIN_COUNT * APP_WORLD_MAX_MESHES)
 #define APP_WORLD_FRAME_BUFFER_COUNT 2u
 #define APP_WORLD_SHADER_COUNT 7u
 #define APP_WORLD_MAX_LANES 16u
-#define APP_WORLD_DEMO_ASSET_COUNT 2u
-#define APP_WORLD_MAX_ASSET_TEXTURES 16u
+#define APP_WORLD_DEMO_ASSET_COUNT 4u
+#define APP_WORLD_MAX_ASSET_TEXTURES 64u
+#define APP_WORLD_MODEL_MAX_TEXTURES 4u
 // Material slot 0 is the builtin "missing" material (magenta); the allocator
 // never hands it out, so zero-initialized indices fail loudly on screen.
 #define APP_WORLD_MATERIAL_MISSING 0u
@@ -110,6 +115,35 @@ struct AppWorldArtifactBridge {
     GfxFrame* frame;
 };
 
+struct AppWorldModelMaterialRef {
+    U32 worldSlot;
+    U32 textureLocal; // model-local texture index, ASSET_MODEL_NO_TEXTURE if none
+};
+
+struct AppWorldModelInstanceRef {
+    AppWorldMeshHandle mesh;
+    U32 materialSlot; // world material table index
+    Mat4x4F32 transform; // model space
+};
+
+// One published model generation, owned by an arena carried in the artifact
+// value; world->models[] points at the current generation and the artifact
+// destroy releases everything (sections, materials, buffers, arena).
+struct AppWorldModelResources {
+    GfxBuffer vertexBuffer;
+    GfxBuffer indexBuffer;
+    GfxResourceId vertexBufferId;
+    U32 sectionCount;
+    AppWorldMeshHandle* sections;
+    U32 materialCount;
+    AppWorldModelMaterialRef* materials;
+    U32 instanceCount;
+    AppWorldModelInstanceRef* instances;
+    U32 textureCount;
+    F32 boundsCenter[3];
+    F32 boundsRadius;
+};
+
 // One per extraction lane; slices of the per-frame arrays, no sharing.
 // Transparent depth/cull happen at merge time on the main thread.
 struct AppWorldLaneWriter {
@@ -127,7 +161,7 @@ struct AppWorldState {
 
     SlotMap meshes;
     U32 meshCount;
-    U32 materialUsedMask;
+    U64 materialUsedMask;
 
     GfxBuffer vertexBuffer;
     GfxResourceId vertexBufferId;
@@ -174,10 +208,9 @@ struct AppWorldState {
     GfxTexture assetTextures[APP_WORLD_MAX_ASSET_TEXTURES];
     U32 assetTextureCount;
 
-    FileHandle assetMeshFiles[APP_WORLD_DEMO_ASSET_COUNT];
-    FileHandle assetTextureFiles[APP_WORLD_DEMO_ASSET_COUNT];
-    AppWorldMeshHandle assetMeshes[APP_WORLD_DEMO_ASSET_COUNT];
-    U32 assetMaterials[APP_WORLD_DEMO_ASSET_COUNT];
+    FileHandle assetModelFiles[APP_WORLD_DEMO_ASSET_COUNT];
+    FileHandle assetModelTextureFiles[APP_WORLD_DEMO_ASSET_COUNT][APP_WORLD_MODEL_MAX_TEXTURES];
+    AppWorldModelResources* models[APP_WORLD_DEMO_ASSET_COUNT];
     B32 assetsSettled;
     AppWorldArtifactBridge artifactBridge;
 
