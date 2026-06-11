@@ -42,6 +42,20 @@ static const AppWorldDemoAssetDesc APP_WORLD_DEMO_ASSETS[APP_WORLD_DEMO_ASSET_CO
     {"app/assets/cooked/Buggy.umdl", "assets/Buggy.umdl"},
 };
 
+// Cooked sounds ride the same path: watch -> artifact -> publish into the
+// host audio buffer table. Indexed by AppSound.
+struct AppAudioSoundDesc {
+    const char* soundPath;
+    const char* soundLabel;
+};
+
+static const AppAudioSoundDesc APP_AUDIO_SOUND_DESCS[AppSound_Count] = {
+    {"app/assets/cooked/jump.uaud", "assets/jump.uaud"},
+    {"app/assets/cooked/land.uaud", "assets/land.uaud"},
+    {"app/assets/cooked/click.uaud", "assets/click.uaud"},
+    {"app/assets/cooked/ambience.uaud", "assets/ambience.uaud"},
+};
+
 // "<dir>/<stem>.umdl" -> "<dir>/<stem>_tex<N>.utex"
 static StringU8 app_world_model_texture_path_(Arena* arena, const char* modelPath, U32 textureLocal) {
     StringU8 path = str8(modelPath);
@@ -86,6 +100,12 @@ static void app_world_watch_files_(APP_Context* ctx) {
         StringU8 worldPath = str8_concat(scratch.arena, exeDir, str8("/../"));
         worldPath = str8_concat(scratch.arena, worldPath, str8(APP_WORLD_SHADER_PATHS[shaderIndex]));
         state->world.shaderFiles[shaderIndex] = file_watch(state->resources.fileStream, worldPath, 0u);
+    }
+
+    for (U32 soundIndex = 0u; soundIndex < AppSound_Count; ++soundIndex) {
+        StringU8 soundPath = str8_concat(scratch.arena, exeDir, str8("/../"));
+        soundPath = str8_concat(scratch.arena, soundPath, str8(APP_AUDIO_SOUND_DESCS[soundIndex].soundPath));
+        state->audio.soundFiles[soundIndex] = file_watch(state->resources.fileStream, soundPath, 0u);
     }
 }
 
@@ -429,6 +449,7 @@ static B32 app_world_try_create_resources_(APP_Context* ctx) {
 
 #define APP_ARTIFACT_TYPE_MODEL 0x4C444D55u
 #define APP_ARTIFACT_TYPE_TEXTURE 0x54455855u
+#define APP_ARTIFACT_TYPE_AUDIO 0x44554155u
 #define APP_ARTIFACT_PUBLISHED_MARK 1ull
 
 // assetIndex names the demo-asset slot; textureLocal is the model-local
@@ -860,6 +881,96 @@ static void app_texture_artifact_destroy_(void* typeUserData, ArtifactValue valu
     gfx_destroy_texture(bridge->device, texture);
 }
 
+static B32 app_audio_artifact_build_(ArtifactBuildContext* buildCtx, ArtifactValue* outValue, U64* outBytes) {
+    return app_asset_build_blob_(buildCtx, ASSET_AUDIO_MAGIC, sizeof(AssetAudioHeader), outValue, outBytes);
+}
+
+static B32 app_audio_artifact_publish_(ArtifactPublishContext* publishCtx, ArtifactValue buildValue,
+                                       ArtifactValue* outValue, U64* outBytes) {
+    AppWorldArtifactBridge* bridge = (AppWorldArtifactBridge*)publishCtx->typeUserData;
+    Arena* arena = (Arena*)buildValue.u64[0];
+    const U8* blob = (const U8*)buildValue.u64[1];
+    U64 blobSize = buildValue.u64[2];
+    const AppAssetRequest* request = (const AppAssetRequest*)publishCtx->requestData;
+    if (!bridge || !bridge->audioSystem || !bridge->state || !blob ||
+        !request || publishCtx->requestDataSize < sizeof(AppAssetRequest) ||
+        request->assetIndex >= AppSound_Count) {
+        arena_release(arena);
+        return 0;
+    }
+
+    const AssetAudioHeader* header = (const AssetAudioHeader*)blob;
+    U64 sampleBytes = (U64)header->frameCount * header->channelCount * sizeof(F32);
+    if (header->version != ASSET_AUDIO_VERSION ||
+        header->sampleRate != ASSET_AUDIO_SAMPLE_RATE ||
+        header->channelCount != ASSET_AUDIO_CHANNELS ||
+        header->frameCount == 0u ||
+        sizeof(AssetAudioHeader) + sampleBytes > blobSize) {
+        LOG_ERROR("asset", "Audio blob rejected (sound {})", request->assetIndex);
+        arena_release(arena);
+        return 0;
+    }
+
+    AudioBufferDesc desc = {};
+    desc.frameCount = header->frameCount;
+    desc.loopBegin = header->loopBegin;
+    desc.loopEnd = header->loopEnd;
+    desc.samples = (const F32*)(blob + sizeof(AssetAudioHeader));
+    AudioBufferHandle handle = audio_buffer_create(bridge->audioSystem, &desc);
+    if (handle.generation == 0u) {
+        arena_release(arena);
+        return 0;
+    }
+
+    AppAudioState* audio = &bridge->state->audio;
+    audio->sounds[request->assetIndex] = handle;
+    // Republishing the ambience bed killed its looping voice through the
+    // generation bump; restart it so the toggle stays truthful.
+    if (request->assetIndex == AppSound_Ambience && audio->ambienceOn) {
+        audio_play(bridge->audioSystem, handle, APP_SOUND_GAIN_AMBIENCE, 1);
+    }
+
+    // The blob (and header) die here; log from locals only (the U6 class).
+    U32 frameCount = header->frameCount;
+    arena_release(arena);
+
+    outValue->u64[0] = ((U64)handle.index << 32u) | (U64)handle.generation;
+    outValue->u64[1] = request->assetIndex;
+    outValue->u64[2] = 0ull;
+    outValue->u64[3] = APP_ARTIFACT_PUBLISHED_MARK;
+    *outBytes = sampleBytes;
+    LOG_INFO("asset", "Sound published: sound {} frames {} (slot {} gen {})",
+             request->assetIndex, frameCount, handle.index, handle.generation);
+    return 1;
+}
+
+static void app_audio_artifact_destroy_(void* typeUserData, ArtifactValue value) {
+    AppWorldArtifactBridge* bridge = (AppWorldArtifactBridge*)typeUserData;
+    if (!bridge || !bridge->state) {
+        return;
+    }
+    if (value.u64[3] != APP_ARTIFACT_PUBLISHED_MARK) {
+        Arena* arena = (Arena*)value.u64[0];
+        arena_release(arena);
+        return;
+    }
+    AudioBufferHandle handle = {};
+    handle.index = (U32)(value.u64[0] >> 32u);
+    handle.generation = (U32)value.u64[0];
+    U32 soundIndex = (U32)value.u64[1];
+    // A supersede has already rebound sounds[]; only a terminal destroy
+    // still owns the slot.
+    AppAudioState* audio = &bridge->state->audio;
+    if (soundIndex < AppSound_Count &&
+        audio->sounds[soundIndex].index == handle.index &&
+        audio->sounds[soundIndex].generation == handle.generation) {
+        AudioBufferHandle zero = {};
+        audio->sounds[soundIndex] = zero;
+    }
+    audio_buffer_destroy(bridge->audioSystem, handle);
+    LOG_INFO("asset", "Sound destroyed (sound {} slot {} gen {})", soundIndex, handle.index, handle.generation);
+}
+
 static B32 app_world_register_artifact_types_(APP_Context* ctx) {
     ASSERT_ALWAYS(ctx != 0);
     AppCoreState* state = ctx->core;
@@ -868,6 +979,7 @@ static B32 app_world_register_artifact_types_(APP_Context* ctx) {
     }
 
     state->world.artifactBridge.device = ctx->host->gfxDevice;
+    state->world.artifactBridge.audioSystem = ctx->host->audioSystem;
     state->world.artifactBridge.state = state;
 
     ArtifactTypeDesc modelType = {};
@@ -889,6 +1001,17 @@ static B32 app_world_register_artifact_types_(APP_Context* ctx) {
     textureType.destroyProc = app_texture_artifact_destroy_;
     textureType.userData = &state->world.artifactBridge;
     if (!artifact_register_type(state->resources.artifactCache, &textureType)) {
+        return 0;
+    }
+
+    ArtifactTypeDesc audioType = {};
+    audioType.typeId = APP_ARTIFACT_TYPE_AUDIO;
+    audioType.name = str8("audio");
+    audioType.buildProc = app_audio_artifact_build_;
+    audioType.publishProc = app_audio_artifact_publish_;
+    audioType.destroyProc = app_audio_artifact_destroy_;
+    audioType.userData = &state->world.artifactBridge;
+    if (!artifact_register_type(state->resources.artifactCache, &audioType)) {
         return 0;
     }
     return 1;
@@ -967,6 +1090,39 @@ static void app_world_try_load_assets_(APP_Context* ctx) {
     world->assetsSettled = settled;
 }
 
+// Same shape as the model poll: resolve every sound through the artifact
+// cache and record whether the set is settled for the current generations.
+static void app_audio_try_load_sounds_(APP_Context* ctx) {
+    AppCoreState* state = ctx->core;
+    AppAudioState* audio = &state->audio;
+
+    if (!state->resources.fileStream || !state->resources.artifactCache ||
+        !ctx->host->audioSystem) {
+        return;
+    }
+
+    B32 settled = 1;
+    for (U32 soundIndex = 0u; soundIndex < AppSound_Count; ++soundIndex) {
+        FileView soundView = file_view(state->resources.fileStream, audio->soundFiles[soundIndex]);
+        if (soundView.status != FileStatus_Ready || content_hash_is_zero(soundView.hash)) {
+            settled = 0;
+            continue;
+        }
+        AppAssetRequest request = {};
+        request.hash = soundView.hash;
+        request.assetIndex = soundIndex;
+        ArtifactResult result = artifact_get(state->resources.artifactCache, APP_ARTIFACT_TYPE_AUDIO,
+                                             app_artifact_key_from_label(APP_AUDIO_SOUND_DESCS[soundIndex].soundLabel),
+                                             soundView.generation, &request, sizeof(request),
+                                             ArtifactGetFlags_None, 0u);
+        if (result.status != ArtifactStatus_Ready ||
+            result.value.u64[3] != APP_ARTIFACT_PUBLISHED_MARK) {
+            settled = 0;
+        }
+    }
+    audio->settled = settled;
+}
+
 static B32 app_world_create_graphics_pipeline_(APP_Context* ctx, ContentHash vertexHash, ContentHash fragmentHash,
                                                B32 transparent, GfxPipeline* outPipeline) {
     *outPipeline = {};
@@ -1007,10 +1163,11 @@ static B32 app_world_create_graphics_pipeline_(APP_Context* ctx, ContentHash ver
     desc.topology = GfxPrimitiveTopology_TriangleList;
     // Closed transparent meshes cull their interiors: one blended layer per
     // surface instead of front+back double tint in index order. Outward
-    // triangles project CLOCKWISE under the row-vector view.proj, so front
-    // is CW here or back-face culling would remove the surfaces instead.
+    // triangles project COUNTER-clockwise under the y-up projection (the
+    // old CW declaration was calibrated against the upside-down image the
+    // pre-fix Y-flipped projection produced).
     desc.raster.cullMode = transparent ? GfxCullMode_Back : GfxCullMode_None;
-    desc.raster.frontFace = GfxFrontFace_CW;
+    desc.raster.frontFace = GfxFrontFace_CCW;
     desc.depth.depthTestEnabled = 1;
     desc.depth.depthWriteEnabled = transparent ? 0 : 1;
     desc.depth.compareOp = GfxCompareOp_Less;

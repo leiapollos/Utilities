@@ -1,5 +1,6 @@
 #include "app_include.hpp"
 #include "app_include.cpp"
+#include "app_game.cpp"
 #include "app.cpp"
 #include "app_world.cpp"
 #include "app_renderer.cpp"

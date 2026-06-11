@@ -1218,6 +1218,8 @@ static int configure_runtime_executable(Sob_Arena* arena, Sob_Target* target, Bu
     sob_target_link(target, "Cocoa", .kind = Sob_LibKind_Framework);
     sob_target_link(target, "QuartzCore", .kind = Sob_LibKind_Framework);
     sob_target_link(target, "Metal", .kind = Sob_LibKind_Framework);
+    sob_target_link(target, "AudioToolbox", .kind = Sob_LibKind_Framework);
+    sob_target_link(target, "CoreAudio", .kind = Sob_LibKind_Framework);
 #elif SOB_WINDOWS
     sob_target_link(target, "user32");
     sob_target_link(target, "gdi32");
@@ -1225,6 +1227,7 @@ static int configure_runtime_executable(Sob_Arena* arena, Sob_Target* target, Bu
     sob_target_link(target, "advapi32");
     sob_target_link(target, "cfgmgr32");
     sob_target_link(target, "shlwapi");
+    sob_target_link(target, "ole32");
     if (!configure_windows_vulkan_vendor(arena, target)) {
         return 0;
     }
@@ -1349,6 +1352,10 @@ static const char* COOK_ASSET_SOURCES[] = {
     "app/assets/src/Avocado.glb",
     "app/assets/src/Lantern.glb",
     "app/assets/src/Buggy.glb",
+    "app/assets/src/jump.wav",
+    "app/assets/src/land.wav",
+    "app/assets/src/click.wav",
+    "app/assets/src/ambience.wav",
 };
 
 static S32 build_and_run_cooker(BuildMode mode) {

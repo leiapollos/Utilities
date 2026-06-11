@@ -6,6 +6,7 @@
 
 #include "core/os_core.hpp"
 #include "graphics/os_graphics.hpp"
+#include "audio/os_audio.hpp"
 
 #if defined(PLATFORM_OS_WINDOWS)
 #include "core/windows/os_core_windows.hpp"

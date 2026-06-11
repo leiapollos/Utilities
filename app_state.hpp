@@ -111,6 +111,7 @@ struct AppWorldMesh {
 
 struct AppWorldArtifactBridge {
     GfxDevice* device;
+    AudioSystem* audioSystem;
     AppCoreState* state;
     GfxFrame* frame;
 };
@@ -235,6 +236,7 @@ struct AppDemoState {
     B32 showBounds;
     B32 animate;
     B32 threadedExtract;
+    B32 playerMode;
     U32 maxLanes;
     U32 gridSide;
 
@@ -244,11 +246,89 @@ struct AppDemoState {
     U32 paletteMaterials[6];
     U32 alphaTestMaterial;
     U32 transparentMaterials[2];
+    U32 playerMaterial;
 };
 
-#define APP_SIM_TICK_HZ 60u
-#define APP_SIM_TICK_DT (1.0f / (F32)APP_SIM_TICK_HZ)
-#define APP_SIM_MAX_FRAME_DT 0.25f
+// APP_SIM_TICK_* live in app_game_kernels.hpp with the tick they drive.
+
+// Cooked sounds, published into the host's audio buffer table through the
+// artifact cache (the GfxBuffer pattern: the module owns handles, the host
+// owns the PCM, so playback survives module reloads).
+enum AppSound {
+    AppSound_Jump = 0u,
+    AppSound_Land = 1u,
+    AppSound_Click = 2u,
+    AppSound_Ambience = 3u,
+    AppSound_Count = 4u,
+};
+
+#define APP_SOUND_GAIN_JUMP 0.5f
+#define APP_SOUND_GAIN_LAND 0.7f
+#define APP_SOUND_GAIN_CLICK 0.9f
+#define APP_SOUND_GAIN_AMBIENCE 0.6f
+
+struct AppAudioState {
+    FileHandle soundFiles[AppSound_Count];
+    AudioBufferHandle sounds[AppSound_Count];
+    B32 settled;
+    B32 ambienceOn;
+};
+
+#define APP_GAME_MAX_KEYS 256u
+
+// Action layer + player sim + follow camera. The player ticks inside the
+// fixed-tick drain when the demo's player mode is on; the camera rig is
+// render-time state.
+struct AppGameState {
+    AppPlayerState player;
+    Vec3F32 playerPrevPosition; // position at the previous tick, for render interpolation
+    B32 keyDown[APP_GAME_MAX_KEYS];
+    B32 cameraDragging;
+    B32 cameraInitialized;
+    F32 cameraYaw;
+    F32 cameraPitch;
+    F32 cameraDistance;
+    Vec3F32 cameraTarget; // smoothed look target
+};
+
+// The serialized subset: player + camera rig + sim clock. Explicit struct
+// rather than AppGameState so transient input (keyDown, drag) never
+// reaches disk; also the payload of the save file and the replay's
+// initial state.
+struct AppGameSaveState {
+    AppPlayerState player;
+    F32 cameraYaw;
+    F32 cameraPitch;
+    F32 cameraDistance;
+    Vec3F32 cameraTarget;
+    U64 simTickCounter;
+};
+
+// Input replay: actions per tick from a recorded start state, with a
+// player checksum every APP_REPLAY_CHECK_INTERVAL ticks. Playback feeds
+// the drain loop instead of live input; the first checksum mismatch
+// names the exact diverging tick. Indexed by ticks relative to start, so
+// recording and playback are frame-rate independent by construction.
+#define APP_REPLAY_MAX_TICKS 18000u // 5 minutes at 60 Hz
+#define APP_REPLAY_CHECK_INTERVAL 60u
+#define APP_REPLAY_MAX_CHECKS (APP_REPLAY_MAX_TICKS / APP_REPLAY_CHECK_INTERVAL)
+
+enum AppReplayMode {
+    AppReplayMode_Idle = 0u,
+    AppReplayMode_Recording = 1u,
+    AppReplayMode_Playing = 2u,
+};
+
+struct AppReplayState {
+    U32 mode;
+    U32 cursor;    // ticks recorded / consumed, relative to start
+    U32 tickCount; // loaded replay length (playback only)
+    U32 checkCount;
+    U64 divergedAtTick; // absolute sim tick of first mismatch; 0 = clean
+    AppGameSaveState initial;
+    AppGameActions actions[APP_REPLAY_MAX_TICKS];
+    U64 checksums[APP_REPLAY_MAX_CHECKS];
+};
 
 struct AppCoreState {
     U32 windowWidth;
@@ -262,6 +342,8 @@ struct AppCoreState {
     F32 simForcedDt;
     F64 simTimeSeconds;
     U32 simClampCount;
+    AppGameState game;
+    AppReplayState replay;
     B32 debugOverlayVisible;
     B32 profilerVisible;
     B32 profFlatView;
@@ -275,6 +357,7 @@ struct AppCoreState {
     AppRender2DState render2d;
     AppWorldState world;
     AppDemoState demo;
+    AppAudioState audio;
     UI_State ui;
 };
 

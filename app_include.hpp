@@ -11,6 +11,7 @@
 #include "app/shaders/shader_manifest.h"
 #include "app/shaders/shader_records.generated.hpp"
 #include "app/assets/asset_formats.hpp"
+#include "app_game_kernels.hpp"
 #include "app_state.hpp"
 #include "app_renderer.hpp"
 #include "app_debug_draw.hpp"

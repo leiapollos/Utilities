@@ -69,4 +69,19 @@ static void test_math_(void) {
     Mat4x4F32 reversed = projection * view;
     Vec4F32 degenerate = test_mul_point_(&reversed, test_vec3_(0.0f, 0.0f, 0.0f));
     TEST_CHECK(degenerate.w == 0.0f);
+
+    // Screen orientation (the upside-down-world bug, found by the human in
+    // player mode): Metal NDC is y-up, so a world point ABOVE the view
+    // center must land at POSITIVE clip y, and with eye on -Z looking +Z
+    // the camera-right axis is -X (right-handed), so world +X lands at
+    // NEGATIVE clip x. The original camera commit shipped a Vulkan-style
+    // Y-flip in the projection that inverted the whole image.
+    Mat4x4F32 level = app_world_camera_view_proj_(test_vec3_(0.0f, 0.0f, -10.0f),
+                                                  test_vec3_(0.0f, 0.0f, 0.0f), up,
+                                                  fovY, 1.0f, zNear, zFar);
+    Vec4F32 above = test_mul_point_(&level, test_vec3_(0.0f, 1.0f, 0.0f));
+    TEST_CHECK(above.w > 0.0f);
+    TEST_CHECK(above.y / above.w > 0.0f);
+    Vec4F32 worldRight = test_mul_point_(&level, test_vec3_(1.0f, 0.0f, 0.0f));
+    TEST_CHECK(worldRight.x / worldRight.w < 0.0f);
 }

@@ -14,6 +14,7 @@ static void app_demo_state_reset(AppDemoState* demo) {
     demo->showBounds = 0;
     demo->animate = 1;
     demo->threadedExtract = (B32)app_env_u32_(str8("UTILITIES_DEMO_THREADED"), 1u, 0u, 1u);
+    demo->playerMode = (B32)app_env_u32_(str8("UTILITIES_DEMO_PLAYER"), 0u, 0u, 1u);
     demo->maxLanes = app_env_u32_(str8("UTILITIES_DEMO_MAX_LANES"), APP_WORLD_MAX_LANES,
                                   1u, APP_WORLD_MAX_LANES);
     demo->gridSide = app_env_u32_(str8("UTILITIES_DEMO_GRID"), 48u,
@@ -47,6 +48,63 @@ static void app_ui_controls_panel(APP_Context* ctx, UI_Context* ui) {
     ui_checkbox(ui, str8("cull bounds"), &demo->showBounds);
     ui_checkbox(ui, str8("animate"), &demo->animate);
     ui_checkbox(ui, str8("threaded extract"), &demo->threadedExtract);
+    ui_checkbox(ui, str8("player mode"), &demo->playerMode);
+    AppAudioState* audio = &ctx->core->audio;
+    if (ui_checkbox(ui, str8("ambience"), &audio->ambienceOn)) {
+        if (audio->ambienceOn) {
+            audio_play(ctx->host->audioSystem, audio->sounds[AppSound_Ambience],
+                       APP_SOUND_GAIN_AMBIENCE, 1);
+        } else {
+            audio_stop(ctx->host->audioSystem, audio->sounds[AppSound_Ambience]);
+        }
+    }
+
+    AppCoreState* core = ctx->core;
+    AppReplayState* replay = &core->replay;
+    ui_row_begin(ui, ui_grow(1.0f), ui_fit());
+    if (ui_button(ui, str8("save [F5]###persist_save")).clicked) {
+        app_game_save_write_(core);
+    }
+    if (ui_button(ui, str8("load [F9]###persist_load")).clicked) {
+        app_game_save_read_(core);
+    }
+    if (ui_button(ui, replay->mode == AppReplayMode_Recording
+                          ? str8("stop rec [F6]###replay_rec")
+                          : str8("record [F6]###replay_rec")).clicked) {
+        if (replay->mode == AppReplayMode_Recording) {
+            app_game_record_stop_(core);
+        } else {
+            app_game_record_start_(core);
+        }
+    }
+    if (ui_button(ui, replay->mode == AppReplayMode_Playing
+                          ? str8("stop play [F7]###replay_play")
+                          : str8("replay [F7]###replay_play")).clicked) {
+        if (replay->mode == AppReplayMode_Playing) {
+            app_game_replay_stop_(core);
+        } else {
+            app_game_replay_start_(core);
+        }
+    }
+    ui_row_end(ui);
+    {
+        const char* modeName = replay->mode == AppReplayMode_Recording ? "recording"
+                             : replay->mode == AppReplayMode_Playing ? "playing"
+                             : "idle";
+        StringU8 status;
+        if (replay->divergedAtTick != 0ull) {
+            status = str8_fmt(ui->frameArena, "replay {} {}/{}  DIVERGED @{}",
+                              str8(modeName), replay->cursor,
+                              replay->mode == AppReplayMode_Recording ? APP_REPLAY_MAX_TICKS
+                                                                      : replay->tickCount,
+                              replay->divergedAtTick);
+        } else {
+            status = str8_fmt(ui->frameArena, "replay {} {}/{}", str8(modeName), replay->cursor,
+                              replay->mode == AppReplayMode_Recording ? APP_REPLAY_MAX_TICKS
+                                                                      : replay->tickCount);
+        }
+        ui_label(ui, status);
+    }
 
     ui_row_begin(ui, ui_grow(1.0f), ui_fit());
     if (ui_button(ui, str8("reset demo")).clicked) {
@@ -95,6 +153,13 @@ static void app_ui_stats_panel(APP_Context* ctx, UI_Context* ui) {
                      state->world.lastRenderableCount, state->world.lastDroppedCount,
                      state->world.laneCount, state->world.meshCount,
                      state->world.lastTransparentDraws);
+    {
+        AudioStats audioStats = audio_stats(ctx->host->audioSystem);
+        app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "audio  voices {}/{}  buffers {}  drop v{} c{}  cb {}us max {}us",
+                         audioStats.voicesActive, AUDIO_VOICE_COUNT, audioStats.buffersLive,
+                         audioStats.voicesDropped, audioStats.commandsDropped,
+                         audioStats.lastCallbackNanos / 1000ull, audioStats.maxCallbackNanos / 1000ull);
+    }
 
     if (state->resources.artifactCache) {
         ArtifactStats artifact = artifact_cache_stats(state->resources.artifactCache);
@@ -363,6 +428,12 @@ static void app_ui_panels_submit(APP_Context* ctx, AppRendererFrame* rendererFra
             PROF_SCOPE("profiler panel");
             app_ui_profiler_panel(ctx, ui);
         }
+    }
+
+    // One site for the whole UI: any widget click this frame ticks.
+    if (ui->clickedKey != 0u) {
+        audio_play(ctx->host->audioSystem, state->audio.sounds[AppSound_Click],
+                   APP_SOUND_GAIN_CLICK, 0);
     }
 
     UI_Output output = {};

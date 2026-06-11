@@ -2,7 +2,7 @@
 // Created by André Leite on 31/10/2025.
 //
 
-#define APP_CORE_STATE_VERSION 65u
+#define APP_CORE_STATE_VERSION 69u
 
 #if defined(PLATFORM_BUILD_DEBUG)
 #define APP_GFX_DEV_SHADER_SOURCE_ENTRY(name, source) source,
@@ -121,6 +121,9 @@ static void app_frame(AppHost* host, HOT_StateStore* store, const AppInput* inpu
         : state->averageDeltaSeconds * 0.95f + input->deltaSeconds * 0.05f;
     // Fixed-tick sim clock: integer ticks are the canonical clock; the
     // accumulator remainder keeps render time continuous at any refresh rate.
+    // One action sample per frame; catch-up ticks share it.
+    app_game_fold_events_(state, input);
+    AppGameActions actions = app_game_sample_actions_(state);
     F32 frameDt = (state->simForcedDt > 0.0f) ? state->simForcedDt : input->deltaSeconds;
     if (frameDt > APP_SIM_MAX_FRAME_DT) {
         frameDt = APP_SIM_MAX_FRAME_DT;
@@ -130,6 +133,28 @@ static void app_frame(AppHost* host, HOT_StateStore* store, const AppInput* inpu
     while (state->simAccumulator >= APP_SIM_TICK_DT) {
         state->simTickCounter += 1ull;
         state->simAccumulator -= APP_SIM_TICK_DT;
+        if (state->demo.playerMode) {
+            // Playback replaces the live sample per tick (relative-tick
+            // indexed, so replay is frame-rate independent); recording
+            // stores whatever actually fed the tick.
+            AppGameActions tickActions = actions;
+            app_game_replay_tick_actions_(state, &tickActions);
+            // Sounds key off grounded transitions so the tick stays pure:
+            // the sim never knows audio exists.
+            state->game.playerPrevPosition = state->game.player.position;
+            B32 wasGrounded = state->game.player.grounded;
+            app_game_tick_(&state->game.player, &tickActions, state->simTickCounter);
+            if (wasGrounded && !state->game.player.grounded &&
+                state->game.player.velocity.y > 0.0f) {
+                audio_play(host->audioSystem, state->audio.sounds[AppSound_Jump],
+                           APP_SOUND_GAIN_JUMP, 0);
+            }
+            if (!wasGrounded && state->game.player.grounded) {
+                audio_play(host->audioSystem, state->audio.sounds[AppSound_Land],
+                           APP_SOUND_GAIN_LAND, 0);
+            }
+            app_game_replay_post_tick_(state, &tickActions);
+        }
     }
     state->simTimeSeconds = (F64)state->simTickCounter / (F64)APP_SIM_TICK_HZ +
                             (F64)state->simAccumulator;
@@ -152,6 +177,29 @@ static void app_frame(AppHost* host, HOT_StateStore* store, const AppInput* inpu
             event->keyDown.keyCode == OS_KeyCode_F2 &&
             !event->keyDown.isRepeat) {
             state->profilerVisible = !state->profilerVisible;
+        }
+        if (event->tag == OS_GraphicsEvent_Tag_KeyDown &&
+            !event->keyDown.isRepeat && !state->ui.wantKeyboard) {
+            if (event->keyDown.keyCode == OS_KeyCode_F5) {
+                app_game_save_write_(state);
+            }
+            if (event->keyDown.keyCode == OS_KeyCode_F9) {
+                app_game_save_read_(state);
+            }
+            if (event->keyDown.keyCode == OS_KeyCode_F6) {
+                if (state->replay.mode == AppReplayMode_Recording) {
+                    app_game_record_stop_(state);
+                } else {
+                    app_game_record_start_(state);
+                }
+            }
+            if (event->keyDown.keyCode == OS_KeyCode_F7) {
+                if (state->replay.mode == AppReplayMode_Playing) {
+                    app_game_replay_stop_(state);
+                } else {
+                    app_game_replay_start_(state);
+                }
+            }
         }
     }
 
@@ -457,6 +505,15 @@ static void app_state_init(APP_Context* ctx, APP_StateKind kind, void* memory) {
             // frame-indexed captures stay deterministic under load.
             core->simForcedDt = app_env_u32_(str8("UTILITIES_FIXED_DT"), 0u, 0u, 1u)
                 ? APP_SIM_TICK_DT : 0.0f;
+            // Spawn clear of the transparent centerpiece and the showcase
+            // corners (Lantern +x+z, Buggy -x-z).
+            core->game.player.position.x = 36.0f;
+            core->game.player.position.y = APP_GAME_GROUND_Y + APP_GAME_PLAYER_RADIUS;
+            core->game.player.position.z = -36.0f;
+            core->game.playerPrevPosition = core->game.player.position;
+            // The ambience publish auto-plays when the toggle is already on,
+            // so the knob just preloads the toggle.
+            core->audio.ambienceOn = (B32) app_env_u32_(str8("UTILITIES_DEMO_AMBIENCE"), 0u, 0u, 1u);
             app_demo_state_reset(&core->demo);
 
             StringU8 eventsDomain = str8((const char*) "events", 6);

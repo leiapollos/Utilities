@@ -389,8 +389,11 @@ inline Mat4x4F32 mat4_perspective(F32 fovYRadians, F32 aspect, F32 zNear, F32 zF
     F32 tanHalfFov = TAN_F32(fovYRadians * 0.5f);
     F32 f = 1.0f / tanHalfFov;
 
+    // Y-up clip space (Metal/GL NDC). Vulkan's y-down NDC is the backend's
+    // problem (negative viewport height), not the projection's: a -f here
+    // renders the whole image upside down on Metal.
     m.v[0][0] = f / aspect;
-    m.v[1][1] = -f;
+    m.v[1][1] = f;
     m.v[2][2] = zFar / (zNear - zFar);
     m.v[3][2] = (zNear * zFar) / (zNear - zFar);
     m.v[2][3] = -1.0f;

@@ -1,6 +1,7 @@
 //
-// Asset cooker: glTF binary (.glb) in, cooked UMSH/UTEX out.
-// Tool-side only; the runtime decodes the cooked formats and never sees glTF.
+// Asset cooker: glTF binary (.glb) in -> UMDL/UTEX; WAV in -> UAUD.
+// Tool-side only; the runtime decodes the cooked formats and never sees
+// interchange formats.
 //
 
 #include "nstl/base/base_include.hpp"
@@ -23,6 +24,8 @@
 
 #include <stdio.h>
 #include <math.h>
+
+#include "cooker_audio.hpp"
 
 // ////////////////////////
 // Minimal JSON (arena DOM, glTF subset: no surrogate escapes)
@@ -955,7 +958,7 @@ static StringU8 cooker_stem_(StringU8 path) {
 int main(int argc, char** argv) {
     OS_init();
     if (argc < 3) {
-        fprintf(stderr, "usage: cooker <input.glb> <output-dir>\n");
+        fprintf(stderr, "usage: cooker <input.glb|input.wav> <output-dir>\n");
         return 1;
     }
     Arena* arena = arena_alloc();
@@ -970,18 +973,26 @@ int main(int argc, char** argv) {
     }
     U64 inputSize = OS_file_size(inputFile);
     U8* inputData = ARENA_PUSH_ARRAY(arena, U8, inputSize);
-    OS_file_read(inputFile, inputSize, inputData);
+    RangeU64 inputRange = {0ull, inputSize};
+    OS_file_read(inputFile, inputRange, inputData);
     OS_file_close(inputFile);
 
-    GlbFile glb = {};
-    if (!glb_parse(arena, inputData, inputSize, &glb)) {
-        fprintf(stderr, "cooker: '%s' is not a glTF binary\n", argv[1]);
-        return 1;
-    }
-
     StringU8 stem = cooker_stem_(inputPath);
-    if (!cook_model(arena, &glb, outputDir, stem)) {
-        return 1;
+    B32 isWav = inputPath.size > 4u &&
+                MEMCMP(inputPath.data + inputPath.size - 4u, ".wav", 4) == 0;
+    if (isWav) {
+        if (!cook_audio(arena, inputData, inputSize, outputDir, stem)) {
+            return 1;
+        }
+    } else {
+        GlbFile glb = {};
+        if (!glb_parse(arena, inputData, inputSize, &glb)) {
+            fprintf(stderr, "cooker: '%s' is not a glTF binary\n", argv[1]);
+            return 1;
+        }
+        if (!cook_model(arena, &glb, outputDir, stem)) {
+            return 1;
+        }
     }
     printf("cooker: cooked '%.*s'\n", (int)inputPath.size, (const char*)inputPath.data);
     return 0;

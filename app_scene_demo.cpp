@@ -90,6 +90,15 @@ static void app_demo_scene_ensure_materials_(APP_Context* ctx) {
             app_world_material_set(world, demo->transparentMaterials[transparentIndex], &record);
         }
     }
+    ok = ok && app_world_material_alloc(world, &demo->playerMaterial);
+    if (ok) {
+        ShdWorldMaterialRecord record = {};
+        record.baseColor[0] = 1.0f;
+        record.baseColor[1] = 0.55f;
+        record.baseColor[2] = 0.15f;
+        record.baseColor[3] = 1.0f;
+        app_world_material_set(world, demo->playerMaterial, &record);
+    }
     demo->materialsReady = ok;
 }
 
@@ -182,17 +191,37 @@ static void app_demo_scene_submit(APP_Context* ctx, AppRendererFrame* rendererFr
     U32 side = CLAMP(demo->gridSide, APP_DEMO_GRID_MIN, APP_DEMO_GRID_MAX);
 
     F32 orbitRadius = (F32)side * APP_SCENE_GRID_SPACING * 0.62f;
-    F32 yaw = time * 0.22f;
-    Vec3F32 eye = app_world_vec3_(COS_F32(yaw) * orbitRadius,
-                                  orbitRadius * 0.45f,
-                                  SIN_F32(yaw) * orbitRadius);
-    app_world_set_camera(ctx, eye, app_world_vec3_(0.0f, 0.0f, 0.0f), 1.0472f, 0.1f,
-                         orbitRadius * 4.0f);
+    if (demo->playerMode) {
+        Vec3F32 eye;
+        Vec3F32 target;
+        app_game_camera_(state, state->lastDeltaSeconds, &eye, &target);
+        app_world_set_camera(ctx, eye, target, 1.0472f, 0.1f, orbitRadius * 4.0f);
+    } else {
+        // The spectator auto-orbit is load-bearing: headless captures
+        // depend on its deterministic path.
+        F32 yaw = time * 0.22f;
+        Vec3F32 eye = app_world_vec3_(COS_F32(yaw) * orbitRadius,
+                                      orbitRadius * 0.45f,
+                                      SIN_F32(yaw) * orbitRadius);
+        app_world_set_camera(ctx, eye, app_world_vec3_(0.0f, 0.0f, 0.0f), 1.0472f, 0.1f,
+                             orbitRadius * 4.0f);
+    }
 
     Mat4x4F32 groundTransform = mat4_scale(app_world_vec3_((F32)side * APP_SCENE_GRID_SPACING + 8.0f, 1.0f,
                                                             (F32)side * APP_SCENE_GRID_SPACING + 8.0f)) *
                                 mat4_translate(app_world_vec3_(0.0f, -0.05f, 0.0f));
     app_world_push(ctx, world->builtinMeshes[2], demo->paletteMaterials[5], AppWorldBin_Opaque, &groundTransform);
+
+    if (demo->playerMode) {
+        // Unit sphere mesh has radius 0.5; scale to the player's radius.
+        F32 playerScale = APP_GAME_PLAYER_RADIUS * 2.0f;
+        Vec3F32 renderPosition = app_game_render_position_(state->game.playerPrevPosition,
+                                                           state->game.player.position,
+                                                           state->simAccumulator);
+        Mat4x4F32 playerTransform = mat4_scale(app_world_vec3_(playerScale, playerScale, playerScale)) *
+                                    mat4_translate(renderPosition);
+        app_world_push(ctx, world->builtinMeshes[1], demo->playerMaterial, AppWorldBin_Opaque, &playerTransform);
+    }
 
     // A transparent cube nested inside a transparent sphere, both half-sunk
     // into the ground at the grid center: the opaque plane depth-rejects the

@@ -7,6 +7,7 @@
 #include "nstl/prof/prof_include.hpp"
 #include "nstl/gfx/gfx_include.hpp"
 #include "nstl/text/text_include.hpp"
+#include "nstl/audio/audio_include.hpp"
 #include "app_interface.hpp"
 
 #include "nstl/base/base_include.cpp"
@@ -14,6 +15,7 @@
 #include "nstl/prof/prof_include.cpp"
 #include "nstl/gfx/gfx_include.cpp"
 #include "nstl/text/text_include.cpp"
+#include "nstl/audio/audio_include.cpp"
 
 
 #define HOT_MODULE_HISTORY_MAX 32
@@ -39,7 +41,11 @@ static const char* HOST_HOT_MODULE_INPUTS[] = {
     "app_main.cpp",
     "app_include.hpp",
     "app_include.cpp",
+    "app_game.cpp",
+    "app_game_kernels.hpp",
     "app.cpp",
+    "app_world.cpp",
+    "app_world_kernels.hpp",
     "app_renderer.hpp",
     "app_renderer.cpp",
     "app_debug_draw.hpp",
@@ -47,6 +53,7 @@ static const char* HOST_HOT_MODULE_INPUTS[] = {
     "app_ui_panels.cpp",
     "app_scene_demo.cpp",
     "app_state.hpp",
+    "app/assets/asset_formats.hpp",
     "nstl/prof/prof.hpp",
     "nstl/prof/prof_include.hpp",
     "nstl/content/content.hpp",
@@ -88,6 +95,14 @@ static const char* HOST_RESTART_REQUIRED_INPUTS[] = {
     "host_runtime.cpp",
     "main.cpp",
     "main.mm",
+    "nstl/audio/audio.hpp",
+    "nstl/audio/audio.cpp",
+    "nstl/audio/audio_mixer.hpp",
+    "nstl/audio/audio_include.hpp",
+    "nstl/audio/audio_include.cpp",
+    "nstl/os/audio/os_audio.hpp",
+    "nstl/os/audio/macos/os_audio_macos.mm",
+    "nstl/os/audio/windows/os_audio_windows.cpp",
     "nstl/prof/prof.hpp",
     "nstl/prof/prof.cpp",
     "nstl/prof/prof_include.hpp",
@@ -365,6 +380,10 @@ static B32 host_init(HostState* state) {
         return 0;
     }
 
+    // Audio lives host-side so the render callback survives module reloads;
+    // a missing device degrades to silence, never to a failed boot.
+    state->host.audioSystem = audio_open(state->programArena);
+
     B32 loadOk = host_load_initial_module(state);
     ASSERT_ALWAYS(loadOk);
     if (!loadOk) {
@@ -402,12 +421,19 @@ static void host_update(HostState* state, F32 deltaSeconds) {
         PROF_SCOPE("app frame");
         state->module.code.frame(&state->host, &state->store, &state->input);
     }
+
+    audio_frame_reclaim(state->host.audioSystem);
 }
 
 static void host_shutdown(HostState* state) {
     ASSERT_ALWAYS(state != 0);
 
     host_unload_module(state);
+
+    if (state->host.audioSystem) {
+        audio_close(state->host.audioSystem);
+        state->host.audioSystem = 0;
+    }
 
     if (state->graphicsInitialized) {
         host_destroy_gfx_device(state);

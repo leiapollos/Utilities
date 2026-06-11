@@ -560,12 +560,14 @@ static AppRendererFrame* app_renderer_begin_frame(APP_Context* ctx) {
     B32 resourcesSettled = render->font.generation != 0u &&
                            render->pipeline.generation != 0u &&
                            ctx->core->world.opaquePipeline.generation != 0u &&
-                           ctx->core->world.assetsSettled;
+                           ctx->core->world.assetsSettled &&
+                           ctx->core->audio.settled;
     if (filesChanged || !resourcesSettled) {
         app_renderer_try_load_font(ctx);
         app_renderer_try_update_pipeline(ctx);
         app_world_try_update_pipelines_(ctx);
         app_world_try_load_assets_(ctx);
+        app_audio_try_load_sounds_(ctx);
     }
 
     app_world_begin_frame_(ctx);

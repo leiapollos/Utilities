@@ -15,6 +15,11 @@
 #define ASSET_TEXTURE_FORMAT_BC1 1u
 #define ASSET_TEXTURE_FORMAT_BC3 2u
 
+#define ASSET_AUDIO_MAGIC 0x44554155u
+#define ASSET_AUDIO_VERSION 1u
+#define ASSET_AUDIO_SAMPLE_RATE 48000u
+#define ASSET_AUDIO_CHANNELS 2u
+
 // Cooked model (UMDL): the whole default glTF scene flattened at cook time.
 // Sections are deduped primitives in object space; instances place sections
 // with model-space transforms (node tree composed, row-vector convention);
@@ -59,6 +64,22 @@ struct AssetModelMaterial {
     U32 pad0;
     U32 pad1;
     U32 pad2;
+};
+
+// Cooked audio (UAUD): PCM normalized at cook time to 48 kHz interleaved
+// stereo F32 so the runtime mixer is copy-accumulate — no resampling, no
+// format branches on the audio thread. Loop points are frame indices;
+// loopEnd == 0 means the whole clip. File layout after the header:
+//   frameCount * 2 F32 samples
+struct AssetAudioHeader {
+    U32 magic;
+    U32 version;
+    U32 frameCount;
+    U32 sampleRate;
+    U32 channelCount;
+    U32 loopBegin;
+    U32 loopEnd;
+    U32 pad0;
 };
 
 // Mip data offsets are from the start of the file.
