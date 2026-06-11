@@ -14,6 +14,8 @@
 #define GFX_VULKAN_INITIAL_RETIRED_TEXTURE_CAPACITY 256u
 #define GFX_VULKAN_INITIAL_RETIRED_SAMPLER_CAPACITY 256u
 #define GFX_VULKAN_INITIAL_RETIRED_PIPELINE_CAPACITY 256u
+#define GFX_VULKAN_INITIAL_RETIRED_SWAPCHAIN_CAPACITY 4u
+#define GFX_VULKAN_MAX_SWAPCHAIN_IMAGES 8u
 
 struct GfxVulkanBuffer {
     VkBuffer buffer;
@@ -79,6 +81,15 @@ struct GfxVulkanRetiredPipeline {
     U64 retireSerial;
 };
 
+// A replaced swapchain stays alive until every frame that may reference its
+// images has completed; recreation never waits on the device.
+struct GfxVulkanRetiredSwapchain {
+    VkSwapchainKHR swapchain;
+    VkImageView views[GFX_VULKAN_MAX_SWAPCHAIN_IMAGES];
+    U32 viewCount;
+    U64 retireSerial;
+};
+
 struct GfxVulkanPushConstants {
     U32 rootByteOffset;
     U32 rootResource;
@@ -139,9 +150,12 @@ struct GfxDevice {
     PFN_vkCmdEndDebugUtilsLabelEXT cmdEndDebugUtilsLabel;
 
     VkSwapchainKHR swapchain;
-    VkImage* swapchainImages;
-    VkImageView* swapchainImageViews;
+    VkImage swapchainImages[GFX_VULKAN_MAX_SWAPCHAIN_IMAGES];
+    VkImageView swapchainImageViews[GFX_VULKAN_MAX_SWAPCHAIN_IMAGES];
     U32 swapchainImageCount;
+    U32 swapchainWidth;
+    U32 swapchainHeight;
+    B32 swapchainStale;
 
     U32 framesInFlight;
     U32 frameCursor;
@@ -170,6 +184,9 @@ struct GfxDevice {
     GfxVulkanRetiredPipeline* retiredPipelines;
     U32 retiredPipelineCount;
     U32 retiredPipelineCapacity;
+    GfxVulkanRetiredSwapchain* retiredSwapchains;
+    U32 retiredSwapchainCount;
+    U32 retiredSwapchainCapacity;
 
     VkDescriptorSetLayout resourceSetLayout;
     VkDescriptorPool resourceDescriptorPool;
@@ -932,6 +949,68 @@ static B32 gfx_vulkan_retired_pipelines_reserve(GfxDevice* device, U32 neededCap
     return 1;
 }
 
+static B32 gfx_vulkan_retired_swapchains_reserve(GfxDevice* device, U32 neededCapacity) {
+    if (!device) {
+        return 0;
+    }
+    if (neededCapacity <= device->retiredSwapchainCapacity) {
+        return 1;
+    }
+
+    U32 newCapacity = device->retiredSwapchainCapacity ? device->retiredSwapchainCapacity * 2u : GFX_VULKAN_INITIAL_RETIRED_SWAPCHAIN_CAPACITY;
+    while (newCapacity < neededCapacity) {
+        newCapacity *= 2u;
+    }
+    GfxVulkanRetiredSwapchain* newItems = ARENA_PUSH_ARRAY(device->arena, GfxVulkanRetiredSwapchain, newCapacity);
+    if (!newItems) {
+        return 0;
+    }
+    MEMSET(newItems, 0, sizeof(GfxVulkanRetiredSwapchain) * newCapacity);
+    if (device->retiredSwapchains && device->retiredSwapchainCount != 0u) {
+        MEMCPY(newItems, device->retiredSwapchains, sizeof(GfxVulkanRetiredSwapchain) * device->retiredSwapchainCount);
+    }
+    device->retiredSwapchains = newItems;
+    device->retiredSwapchainCapacity = newCapacity;
+    return 1;
+}
+
+static void gfx_vulkan_destroy_retired_swapchain(GfxDevice* device, GfxVulkanRetiredSwapchain* item) {
+    for (U32 i = 0u; i < item->viewCount; ++i) {
+        if (item->views[i]) {
+            vkDestroyImageView(device->device, item->views[i], 0);
+        }
+    }
+    if (item->swapchain) {
+        vkDestroySwapchainKHR(device->device, item->swapchain, 0);
+    }
+    MEMSET(item, 0, sizeof(*item));
+}
+
+// Hands the current swapchain to the retire queue (views included) and clears
+// the device's slot. Used by recreation; never waits on the GPU.
+static void gfx_vulkan_retire_swapchain(GfxDevice* device) {
+    if (!device || !device->swapchain) {
+        return;
+    }
+    if (!gfx_vulkan_retired_swapchains_reserve(device, device->retiredSwapchainCount + 1u)) {
+        LOG_WARNING("gfx", "Vulkan retired swapchain queue allocation failed; swapchain will stay alive until process exit");
+    } else {
+        GfxVulkanRetiredSwapchain* retired = &device->retiredSwapchains[device->retiredSwapchainCount++];
+        retired->swapchain = device->swapchain;
+        retired->viewCount = device->swapchainImageCount;
+        for (U32 i = 0u; i < device->swapchainImageCount; ++i) {
+            retired->views[i] = device->swapchainImageViews[i];
+        }
+        retired->retireSerial = gfx_vulkan_retire_serial(device);
+    }
+    device->swapchain = 0;
+    device->swapchainImageCount = 0u;
+    device->swapchainWidth = 0u;
+    device->swapchainHeight = 0u;
+    MEMSET(device->swapchainImages, 0, sizeof(device->swapchainImages));
+    MEMSET(device->swapchainImageViews, 0, sizeof(device->swapchainImageViews));
+}
+
 static void gfx_vulkan_retire_buffer(GfxDevice* device, GfxVulkanBuffer* item) {
     if (!device || !item || !item->buffer) {
         return;
@@ -1095,6 +1174,16 @@ static void gfx_vulkan_drain_retired(GfxDevice* device) {
         }
         gfx_vulkan_destroy_retired_pipeline(device, item);
         device->retiredPipelines[i] = device->retiredPipelines[--device->retiredPipelineCount];
+    }
+
+    for (U32 i = 0u; i < device->retiredSwapchainCount;) {
+        GfxVulkanRetiredSwapchain* item = &device->retiredSwapchains[i];
+        if (item->retireSerial > device->completedFrameSerial) {
+            i += 1u;
+            continue;
+        }
+        gfx_vulkan_destroy_retired_swapchain(device, item);
+        device->retiredSwapchains[i] = device->retiredSwapchains[--device->retiredSwapchainCount];
     }
 }
 
@@ -1642,24 +1731,26 @@ static B32 gfx_vulkan_create_staging_buffer(GfxDevice* device, GfxFrame* frame, 
     return 1;
 }
 
+// Immediate destruction for device teardown only; live recreation goes
+// through gfx_vulkan_retire_swapchain instead.
 static void gfx_vulkan_destroy_swapchain(GfxDevice* device) {
     if (!device || !device->device) {
         return;
     }
-    if (device->swapchainImageViews) {
-        for (U32 i = 0u; i < device->swapchainImageCount; ++i) {
-            if (device->swapchainImageViews[i]) {
-                vkDestroyImageView(device->device, device->swapchainImageViews[i], 0);
-            }
+    for (U32 i = 0u; i < device->swapchainImageCount; ++i) {
+        if (device->swapchainImageViews[i]) {
+            vkDestroyImageView(device->device, device->swapchainImageViews[i], 0);
         }
     }
     if (device->swapchain) {
         vkDestroySwapchainKHR(device->device, device->swapchain, 0);
     }
     device->swapchain = 0;
-    device->swapchainImages = 0;
-    device->swapchainImageViews = 0;
     device->swapchainImageCount = 0u;
+    device->swapchainWidth = 0u;
+    device->swapchainHeight = 0u;
+    MEMSET(device->swapchainImages, 0, sizeof(device->swapchainImages));
+    MEMSET(device->swapchainImageViews, 0, sizeof(device->swapchainImageViews));
 }
 
 static B32 gfx_vulkan_create_swapchain(GfxDevice* device, U32 width, U32 height) {
@@ -1720,6 +1811,19 @@ static B32 gfx_vulkan_create_swapchain(GfxDevice* device, U32 width, U32 height)
         imageCount = capabilities.maxImageCount;
     }
 
+    if (extent.width == 0u || extent.height == 0u) {
+        return 0;
+    }
+
+    // The current swapchain (if any) seeds oldSwapchain so creation overlaps
+    // in-flight frames, then ages out through the retire queue. Vulkan retires
+    // oldSwapchain even when creation fails, so it leaves the device slot on
+    // both outcomes and the next frame's reconcile starts from scratch.
+    gfx_vulkan_retire_swapchain(device);
+    VkSwapchainKHR oldSwapchain = (device->retiredSwapchainCount != 0u)
+        ? device->retiredSwapchains[device->retiredSwapchainCount - 1u].swapchain
+        : VK_NULL_HANDLE;
+
     U32 queueFamilies[2] = {device->graphicsQueueFamily, device->presentQueueFamily};
     VkSwapchainCreateInfoKHR swapchainInfo = {};
     swapchainInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
@@ -1734,6 +1838,7 @@ static B32 gfx_vulkan_create_swapchain(GfxDevice* device, U32 width, U32 height)
     swapchainInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     swapchainInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR;
     swapchainInfo.clipped = VK_TRUE;
+    swapchainInfo.oldSwapchain = oldSwapchain;
     if (device->graphicsQueueFamily != device->presentQueueFamily) {
         swapchainInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
         swapchainInfo.queueFamilyIndexCount = 2u;
@@ -1743,6 +1848,7 @@ static B32 gfx_vulkan_create_swapchain(GfxDevice* device, U32 width, U32 height)
     }
 
     if (vkCreateSwapchainKHR(device->device, &swapchainInfo, 0, &device->swapchain) != VK_SUCCESS) {
+        device->swapchain = 0;
         return 0;
     }
     gfx_vulkan_set_object_name(device,
@@ -1751,12 +1857,15 @@ static B32 gfx_vulkan_create_swapchain(GfxDevice* device, U32 width, U32 height)
                                "gfx swapchain");
 
     vkGetSwapchainImagesKHR(device->device, device->swapchain, &device->swapchainImageCount, 0);
-    device->swapchainImages = ARENA_PUSH_ARRAY(device->arena, VkImage, device->swapchainImageCount);
-    device->swapchainImageViews = ARENA_PUSH_ARRAY(device->arena, VkImageView, device->swapchainImageCount);
-    if (!device->swapchainImages || !device->swapchainImageViews) {
+    if (device->swapchainImageCount > GFX_VULKAN_MAX_SWAPCHAIN_IMAGES) {
+        gfx_vulkan_api_assert(device, device->swapchainImageCount <= GFX_VULKAN_MAX_SWAPCHAIN_IMAGES);
+        LOG_ERROR("gfx", "Vulkan swapchain image count {} exceeds cap {}",
+                  device->swapchainImageCount, GFX_VULKAN_MAX_SWAPCHAIN_IMAGES);
+        vkDestroySwapchainKHR(device->device, device->swapchain, 0);
+        device->swapchain = 0;
+        device->swapchainImageCount = 0u;
         return 0;
     }
-    MEMSET(device->swapchainImageViews, 0, sizeof(VkImageView) * device->swapchainImageCount);
     vkGetSwapchainImagesKHR(device->device, device->swapchain, &device->swapchainImageCount, device->swapchainImages);
 
     for (U32 i = 0u; i < device->swapchainImageCount; ++i) {
@@ -1787,6 +1896,9 @@ static B32 gfx_vulkan_create_swapchain(GfxDevice* device, U32 width, U32 height)
     backbuffer->storageKind = GfxTextureStorageKind_Device;
     backbuffer->usageFlags = GfxTextureUsageFlags_ColorTarget;
     backbuffer->layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    device->swapchainWidth = extent.width;
+    device->swapchainHeight = extent.height;
+    device->swapchainStale = 0;
     return 1;
 }
 
@@ -2296,21 +2408,6 @@ void gfx_device_destroy(GfxDevice* device) {
     }
     vkDestroyInstance(device->instance, 0);
     device->alive = 0;
-}
-
-void gfx_device_resize(GfxDevice* device, U32 width, U32 height) {
-    if (!device || !device->device) {
-        return;
-    }
-    if (width == 0u) {
-        width = 1u;
-    }
-    if (height == 0u) {
-        height = 1u;
-    }
-    vkDeviceWaitIdle(device->device);
-    gfx_vulkan_destroy_swapchain(device);
-    gfx_vulkan_create_swapchain(device, width, height);
 }
 
 void gfx_wait_idle(GfxDevice* device) {
@@ -2872,8 +2969,12 @@ GfxResourceId gfx_register_sampler(GfxDevice* device, GfxSampler sampler) {
     return item->resourceId;
 }
 
-GfxFrame* gfx_begin_frame(GfxDevice* device) {
-    if (!device || !device->alive || !device->swapchain) {
+GfxFrame* gfx_begin_frame(GfxDevice* device, U32 width, U32 height) {
+    if (!device || !device->alive) {
+        return 0;
+    }
+    if (width == 0u || height == 0u) {
+        // Minimized: no surface to render to; skip the frame.
         return 0;
     }
 
@@ -2896,6 +2997,16 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
         gfx_vulkan_drain_retired(device);
     }
 
+    // Swapchain reconcile: boot (none yet), window resize, and stale signals
+    // from acquire/present all funnel into this one recreation site. The old
+    // swapchain retires by frame serial — recreation never stalls the GPU.
+    if (!device->swapchain || device->swapchainStale ||
+        device->swapchainWidth != width || device->swapchainHeight != height) {
+        if (!gfx_vulkan_create_swapchain(device, width, height)) {
+            return 0;
+        }
+    }
+
     VkResult acquireResult = VK_SUCCESS;
     {
         PROF_SCOPE("acquire drawable");
@@ -2909,7 +3020,11 @@ GfxFrame* gfx_begin_frame(GfxDevice* device) {
     if (acquireResult == VK_TIMEOUT || acquireResult == VK_NOT_READY) {
         return 0;
     }
-    if (acquireResult != VK_SUCCESS && acquireResult != VK_SUBOPTIMAL_KHR) {
+    if (acquireResult == VK_SUBOPTIMAL_KHR) {
+        // The image is acquired and usable; recreate on the next reconcile.
+        device->swapchainStale = 1;
+    } else if (acquireResult != VK_SUCCESS) {
+        device->swapchainStale = 1;
         return 0;
     }
 
@@ -3944,7 +4059,12 @@ void gfx_submit(GfxCommandBuffer* commands) {
     presentInfo.swapchainCount = 1u;
     presentInfo.pSwapchains = &device->swapchain;
     presentInfo.pImageIndices = &frame->imageIndex;
-    vkQueuePresentKHR(device->presentQueue, &presentInfo);
+    VkResult presentResult = vkQueuePresentKHR(device->presentQueue, &presentInfo);
+    if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR) {
+        device->swapchainStale = 1;
+    } else if (presentResult != VK_SUCCESS) {
+        LOG_ERROR("gfx", "Vulkan present failed ({})", (S32)presentResult);
+    }
     frame->submitted = 1;
 }
 

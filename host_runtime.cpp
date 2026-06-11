@@ -1203,7 +1203,8 @@ static B32 host_create_gfx_device(HostState* state) {
         return 0;
     }
 
-    gfx_device_resize(device, state->windowWidth, state->windowHeight);
+    // No explicit sizing: the first gfx_begin_frame reconciles the swapchain
+    // to the window size, the same path every later resize takes.
     state->host.gfxDevice = device;
     return 1;
 }
@@ -1260,19 +1261,17 @@ static void host_update_input(HostState* state, F32 deltaSeconds) {
     for (U32 index = 0; index < eventCount; ++index) {
         const OS_GraphicsEvent* event = firstEvent + index;
         switch (event->tag) {
+            // Size events only update state: the renderer reconciles its
+            // swapchain from the latest size at gfx_begin_frame, so a resize
+            // storm costs at most one recreation on the next frame.
             case OS_GraphicsEvent_Tag_WindowShown: {
                 if (event->window.handle == state->window.handle &&
                     event->windowShown.width != 0u &&
                     event->windowShown.height != 0u) {
-                    B32 sizeChanged = event->windowShown.width != state->windowWidth ||
-                                      event->windowShown.height != state->windowHeight;
                     state->windowWidth = event->windowShown.width;
                     state->windowHeight = event->windowShown.height;
                     state->host.windowWidth = state->windowWidth;
                     state->host.windowHeight = state->windowHeight;
-                    if (sizeChanged && state->host.gfxDevice) {
-                        gfx_device_resize(state->host.gfxDevice, state->windowWidth, state->windowHeight);
-                    }
                 }
             }
             break;
@@ -1281,15 +1280,10 @@ static void host_update_input(HostState* state, F32 deltaSeconds) {
                 if (event->window.handle == state->window.handle &&
                     event->windowResized.width != 0u &&
                     event->windowResized.height != 0u) {
-                    B32 sizeChanged = event->windowResized.width != state->windowWidth ||
-                                      event->windowResized.height != state->windowHeight;
                     state->windowWidth = event->windowResized.width;
                     state->windowHeight = event->windowResized.height;
                     state->host.windowWidth = state->windowWidth;
                     state->host.windowHeight = state->windowHeight;
-                    if (sizeChanged && state->host.gfxDevice) {
-                        gfx_device_resize(state->host.gfxDevice, state->windowWidth, state->windowHeight);
-                    }
                 }
             }
             break;

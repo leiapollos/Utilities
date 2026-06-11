@@ -539,7 +539,7 @@ static AppRendererFrame* app_renderer_begin_frame(APP_Context* ctx) {
     GfxFrame* frame = 0;
     {
         PROF_SCOPE("gfx begin frame");
-        frame = gfx_begin_frame(ctx->host->gfxDevice);
+        frame = gfx_begin_frame(ctx->host->gfxDevice, ctx->host->windowWidth, ctx->host->windowHeight);
     }
     if (!frame) {
         return 0;

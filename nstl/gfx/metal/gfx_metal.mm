@@ -117,6 +117,8 @@ struct GfxDevice {
     id<MTLDevice> metalDevice;
     id<MTLCommandQueue> commandQueue;
     dispatch_semaphore_t frameSemaphore;
+    U32 drawableWidth;
+    U32 drawableHeight;
 
     U32 framesInFlight;
     U32 frameCursor;
@@ -1324,8 +1326,8 @@ B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDe
 
     [layer setPixelFormat:MTLPixelFormatBGRA8Unorm];
     [layer setFramebufferOnly:YES];
-    OS_WindowInfo windowInfo = OS_window_get_info(desc->window);
-    gfx_device_resize(device, windowInfo.drawableWidth, windowInfo.drawableHeight);
+    // Initial drawable size lands on the first gfx_begin_frame reconcile,
+    // the same path every later resize takes.
 
     *outDevice = device;
     return 1;
@@ -1426,21 +1428,6 @@ void gfx_device_destroy(GfxDevice* device) {
     }
 
     device->alive = 0;
-}
-
-void gfx_device_resize(GfxDevice* device, U32 width, U32 height) {
-    if (!device || !device->metalLayer) {
-        return;
-    }
-    if (width == 0u) {
-        width = 1u;
-    }
-    if (height == 0u) {
-        height = 1u;
-    }
-
-    CGSize drawableSize = CGSizeMake((CGFloat)width, (CGFloat)height);
-    [device->metalLayer setDrawableSize:drawableSize];
 }
 
 void gfx_wait_idle(GfxDevice* device) {
@@ -1935,9 +1922,21 @@ GfxResourceId gfx_register_sampler(GfxDevice* device, GfxSampler sampler) {
     return item->resourceId;
 }
 
-GfxFrame* gfx_begin_frame(GfxDevice* device) {
+GfxFrame* gfx_begin_frame(GfxDevice* device, U32 width, U32 height) {
     if (!device || !device->alive) {
         return 0;
+    }
+    if (width == 0u || height == 0u) {
+        // Minimized: no surface to render to; skip the frame.
+        return 0;
+    }
+
+    // Drawable reconcile: boot and resize both land here; CAMetalLayer
+    // re-pools drawables internally, so this is just a property write.
+    if (device->metalLayer && (device->drawableWidth != width || device->drawableHeight != height)) {
+        [device->metalLayer setDrawableSize:CGSizeMake((CGFloat)width, (CGFloat)height)];
+        device->drawableWidth = width;
+        device->drawableHeight = height;
     }
 
     GfxFrame* frame = 0;
