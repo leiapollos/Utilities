@@ -337,8 +337,6 @@ static void app_renderer_try_create_gpu_resources(APP_Context* ctx) {
     render->atlasSeeded = 0;
 }
 
-// Uploads a frame's worth of atlas dirty rects as one batch (one barrier
-// pair / blit encoder no matter how many glyphs landed this frame).
 static void app_renderer_upload_atlas(APP_Context* ctx, GfxFrame* frame,
                                       const TextAtlasUpload* uploads, U32 uploadCount) {
     if (uploadCount == 0u) {

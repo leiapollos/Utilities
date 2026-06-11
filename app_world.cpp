@@ -757,8 +757,6 @@ static B32 app_texture_artifact_publish_(ArtifactPublishContext* publishCtx, Art
         return 0;
     }
 
-    // The blob carries the full mip chain; the whole chain uploads as one
-    // atomic batch (mipCount <= ASSET_TEXTURE_MAX_MIPS was validated above).
     GfxTextureUploadRegion regions[ASSET_TEXTURE_MAX_MIPS] = {};
     U32 blockBytes = (header->format == ASSET_TEXTURE_FORMAT_BC3) ? 16u : 8u;
     U64 uploadedBytes = 0u;

@@ -28,9 +28,8 @@
 #include "nstl/prof/prof_include.hpp"
 #include "nstl/prof/prof_include.cpp"
 
-// Backend-shared gfx validation/layout code (no GPU, no live window) — the
-// texture upload batch pre-pass is pure CPU and tested here. os_graphics.hpp
-// is declarations only; the platform window backend stays out of this TU.
+// Backend-shared gfx validation code; os_graphics.hpp is declarations only,
+// the platform window backend stays out of tool TUs.
 #include "nstl/os/graphics/os_graphics.hpp"
 #include "nstl/gfx/gfx.hpp"
 #include "nstl/gfx/gfx_common.cpp"

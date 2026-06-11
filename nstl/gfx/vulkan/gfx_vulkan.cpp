@@ -81,8 +81,6 @@ struct GfxVulkanRetiredPipeline {
     U64 retireSerial;
 };
 
-// A replaced swapchain stays alive until every frame that may reference its
-// images has completed; recreation never waits on the device.
 struct GfxVulkanRetiredSwapchain {
     VkSwapchainKHR swapchain;
     VkImageView views[GFX_VULKAN_MAX_SWAPCHAIN_IMAGES];
@@ -986,8 +984,6 @@ static void gfx_vulkan_destroy_retired_swapchain(GfxDevice* device, GfxVulkanRet
     MEMSET(item, 0, sizeof(*item));
 }
 
-// Hands the current swapchain to the retire queue (views included) and clears
-// the device's slot. Used by recreation; never waits on the GPU.
 static void gfx_vulkan_retire_swapchain(GfxDevice* device) {
     if (!device || !device->swapchain) {
         return;
@@ -1815,10 +1811,8 @@ static B32 gfx_vulkan_create_swapchain(GfxDevice* device, U32 width, U32 height)
         return 0;
     }
 
-    // The current swapchain (if any) seeds oldSwapchain so creation overlaps
-    // in-flight frames, then ages out through the retire queue. Vulkan retires
-    // oldSwapchain even when creation fails, so it leaves the device slot on
-    // both outcomes and the next frame's reconcile starts from scratch.
+    // Vulkan retires oldSwapchain even when creation fails, so the current
+    // swapchain moves to the retire queue before the attempt either way.
     gfx_vulkan_retire_swapchain(device);
     VkSwapchainKHR oldSwapchain = (device->retiredSwapchainCount != 0u)
         ? device->retiredSwapchains[device->retiredSwapchainCount - 1u].swapchain
@@ -2974,7 +2968,6 @@ GfxFrame* gfx_begin_frame(GfxDevice* device, U32 width, U32 height) {
         return 0;
     }
     if (width == 0u || height == 0u) {
-        // Minimized: no surface to render to; skip the frame.
         return 0;
     }
 
@@ -2997,9 +2990,6 @@ GfxFrame* gfx_begin_frame(GfxDevice* device, U32 width, U32 height) {
         gfx_vulkan_drain_retired(device);
     }
 
-    // Swapchain reconcile: boot (none yet), window resize, and stale signals
-    // from acquire/present all funnel into this one recreation site. The old
-    // swapchain retires by frame serial — recreation never stalls the GPU.
     if (!device->swapchain || device->swapchainStale ||
         device->swapchainWidth != width || device->swapchainHeight != height) {
         if (!gfx_vulkan_create_swapchain(device, width, height)) {
@@ -3282,8 +3272,6 @@ B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRe
         return 0;
     }
 
-    // The whole batch stages as one block; if it cannot fit, nothing has been
-    // recorded yet and the upload fails atomically.
     GfxTemp temp = gfx_vulkan_allocate_staging(frame, totalStagingBytes, GFX_TEXTURE_UPLOAD_BYTES_PER_ROW_ALIGNMENT);
     ASSERT_DEBUG(temp.cpu != 0 && "gfx_upload_texture ran out of frame staging memory");
     if (!temp.cpu) {
@@ -3314,8 +3302,7 @@ B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRe
     }
 
     // texture->layout is one scalar for the whole image, so layout transitions
-    // must cover every subresource; the batch records exactly one barrier pair
-    // no matter how many regions it carries.
+    // must cover every subresource.
     VkImageSubresourceRange subresourceRange = {};
     subresourceRange.aspectMask = aspect;
     subresourceRange.baseMipLevel = 0u;

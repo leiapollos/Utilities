@@ -436,10 +436,9 @@ UTILITIES_SHARED_API GfxResourceId gfx_register_sampler(GfxDevice* device, GfxSa
 // otherwise. The caller owns frames-in-flight rotation when writing.
 UTILITIES_SHARED_API void* gfx_buffer_contents(GfxDevice* device, GfxBuffer buffer);
 
-// width/height: the window's current drawable size, passed every frame. The
-// backend reconciles its swapchain/drawable lazily — boot, resize, and
-// out-of-date surfaces all recreate here, without stalling the GPU. A zero
-// extent (minimized) skips the frame by returning null.
+// width/height: the window's current drawable size, passed every frame; the
+// backend reconciles its swapchain/drawable lazily. A zero extent (minimized)
+// skips the frame by returning null.
 UTILITIES_SHARED_API GfxFrame* gfx_begin_frame(GfxDevice* device, U32 width, U32 height);
 UTILITIES_SHARED_API GfxCommandBuffer* gfx_get_command_buffer(GfxFrame* frame);
 UTILITIES_SHARED_API GfxTexture gfx_get_backbuffer(GfxFrame* frame);

@@ -1203,8 +1203,6 @@ static B32 host_create_gfx_device(HostState* state) {
         return 0;
     }
 
-    // No explicit sizing: the first gfx_begin_frame reconciles the swapchain
-    // to the window size, the same path every later resize takes.
     state->host.gfxDevice = device;
     return 1;
 }
@@ -1261,9 +1259,6 @@ static void host_update_input(HostState* state, F32 deltaSeconds) {
     for (U32 index = 0; index < eventCount; ++index) {
         const OS_GraphicsEvent* event = firstEvent + index;
         switch (event->tag) {
-            // Size events only update state: the renderer reconciles its
-            // swapchain from the latest size at gfx_begin_frame, so a resize
-            // storm costs at most one recreation on the next frame.
             case OS_GraphicsEvent_Tag_WindowShown: {
                 if (event->window.handle == state->window.handle &&
                     event->windowShown.width != 0u &&

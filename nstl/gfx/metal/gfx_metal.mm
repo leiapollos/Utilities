@@ -1326,8 +1326,6 @@ B32 gfx_device_create(const GfxDeviceDesc* desc, Arena* arena, GfxDevice** outDe
 
     [layer setPixelFormat:MTLPixelFormatBGRA8Unorm];
     [layer setFramebufferOnly:YES];
-    // Initial drawable size lands on the first gfx_begin_frame reconcile,
-    // the same path every later resize takes.
 
     *outDevice = device;
     return 1;
@@ -1927,12 +1925,9 @@ GfxFrame* gfx_begin_frame(GfxDevice* device, U32 width, U32 height) {
         return 0;
     }
     if (width == 0u || height == 0u) {
-        // Minimized: no surface to render to; skip the frame.
         return 0;
     }
 
-    // Drawable reconcile: boot and resize both land here; CAMetalLayer
-    // re-pools drawables internally, so this is just a property write.
     if (device->metalLayer && (device->drawableWidth != width || device->drawableHeight != height)) {
         [device->metalLayer setDrawableSize:CGSizeMake((CGFloat)width, (CGFloat)height)];
         device->drawableWidth = width;
@@ -2251,8 +2246,6 @@ B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRe
         return 0;
     }
 
-    // The whole batch stages as one block; if it cannot fit, nothing has been
-    // recorded yet and the upload fails atomically.
     GfxTemp temp = gfx_metal_allocate_staging(frame, totalStagingBytes, GFX_TEXTURE_UPLOAD_BYTES_PER_ROW_ALIGNMENT);
     ASSERT_DEBUG(temp.cpu != 0 && "gfx_upload_texture ran out of frame staging memory");
     if (!temp.cpu) {
@@ -2266,7 +2259,6 @@ B32 gfx_upload_texture(GfxFrame* frame, GfxTexture dst, const GfxTextureUploadRe
         return 0;
     }
 
-    // One blit encoder carries every region in the batch.
     id<MTLBlitCommandEncoder> blit = [[frame->commandBuffer blitCommandEncoder] retain];
     ASSERT_DEBUG(blit != 0);
     if (!blit) {

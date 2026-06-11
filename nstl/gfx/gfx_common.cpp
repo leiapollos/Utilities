@@ -211,11 +211,8 @@ static B32 gfx_validate_texture_upload_region(GfxFormat format,
     return (result.supported && result.inBounds && result.rowLayout && result.sizeValid) ? 1 : 0;
 }
 
-// Batch pre-pass shared by every backend: validates each region and lays the
-// whole batch out in one staging block, each region's offset aligned for
-// copy-engine row addressing. Backends consume the offsets/validations to
-// record uploads all-or-nothing — a batch that cannot fully validate records
-// nothing.
+// Lays the batch out in one staging block; offsets are aligned for
+// copy-engine row addressing.
 static B32 gfx_validate_texture_upload_batch(GfxFormat format,
                                              U32 textureWidth,
                                              U32 textureHeight,
