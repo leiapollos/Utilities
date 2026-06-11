@@ -537,6 +537,32 @@ static B32 app_model_artifact_publish_(ArtifactPublishContext* publishCtx, Artif
     const U8* vertexData = (const U8*)materials + materialBytes;
     const U8* indexData = vertexData + vertexBytes;
 
+    // Cooked sections carry mesh-relative indices plus a baseVertex, but the
+    // world shaders pull vertices by SV_VertexID, whose baseVertex semantics
+    // differ per compiler/target (slang's SPIR-V subtracts BaseVertex, Metal
+    // keeps it included). Rebase to pool-absolute indices at publish — same
+    // convention as the builtin pool — so no draw depends on baseVertex.
+    Arena* rebaseArena = arena_alloc(.arenaSize = indexBytes + KB(64), .committedSize = KB(64));
+    U32* poolIndices = rebaseArena ? ARENA_PUSH_ARRAY(rebaseArena, U32, header->indexCount) : 0;
+    if (!poolIndices) {
+        if (rebaseArena) {
+            arena_release(rebaseArena);
+        }
+        arena_release(arena);
+        return 0;
+    }
+    {
+        const U32* localIndices = (const U32*)indexData;
+        for (U32 s = 0u; s < header->sectionCount; ++s) {
+            U32 firstIndex = sections[s].firstIndex;
+            U32 endIndex = firstIndex + sections[s].indexCount;
+            U32 baseVertex = sections[s].baseVertex;
+            for (U32 i = firstIndex; i < endIndex; ++i) {
+                poolIndices[i] = localIndices[i] + baseVertex;
+            }
+        }
+    }
+
     GfxBufferDesc vertexDesc = {};
     vertexDesc.name = "model vertices";
     vertexDesc.size = vertexBytes;
@@ -550,8 +576,9 @@ static B32 app_model_artifact_publish_(ArtifactPublishContext* publishCtx, Artif
     indexDesc.size = indexBytes;
     indexDesc.usageFlags = GfxBufferUsageFlags_Index;
     indexDesc.memoryKind = GfxMemoryKind_Upload;
-    indexDesc.initialData = indexData;
+    indexDesc.initialData = poolIndices;
     GfxBuffer indexBuffer = gfx_create_buffer(bridge->device, &indexDesc);
+    arena_release(rebaseArena);
     GfxResourceId vertexBufferId = gfx_register_buffer(bridge->device, vertexBuffer);
     if (vertexBuffer.generation == 0u || indexBuffer.generation == 0u || vertexBufferId.index == 0u) {
         gfx_destroy_buffer(bridge->device, vertexBuffer);
@@ -585,8 +612,9 @@ static B32 app_model_artifact_publish_(ArtifactPublishContext* publishCtx, Artif
         const AssetModelSection* source = sections + section;
         Vec3F32 center = app_world_vec3_(source->boundsCenter[0], source->boundsCenter[1], source->boundsCenter[2]);
         Vec3F32 extents = app_world_vec3_(source->boundsExtents[0], source->boundsExtents[1], source->boundsExtents[2]);
+        // baseVertex 0: indices were rebased to pool-absolute above.
         sectionMeshes[section] = app_world_register_mesh_(world, source->firstIndex, source->indexCount,
-                                                          source->baseVertex, vertexBuffer, vertexBufferId,
+                                                          0u, vertexBuffer, vertexBufferId,
                                                           indexBuffer, 0, center, extents);
         if (sectionMeshes[section].generation == 0u) {
             failed = 1;

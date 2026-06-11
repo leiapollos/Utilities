@@ -416,6 +416,9 @@ Utilities
 # MacOS
 .DS_Store
 
+# Cooked assets are generated from app/assets/src by `sob cook`
+app/assets/cooked/
+
 # sob bootstrap executable
 /sob
 /sob.exe

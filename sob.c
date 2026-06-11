@@ -1482,7 +1482,9 @@ static S32 build_and_run_tests(BuildMode mode) {
     sob_target_add_cflags(tests, "-pthread");
     sob_target_add_ldflags(tests, "-pthread");
 #endif
-    apply_metagen_warning_flags(tests);
+    // Tests compile engine code (nstl unity includes), so they need the engine
+    // warning profile: /Zc:preprocessor for __VA_OPT__, /wd4324 for aligned types.
+    apply_common_warning_flags(tests);
     apply_third_party_warning_flags(tests);
     apply_mode_target_flags(tests, mode);
 
