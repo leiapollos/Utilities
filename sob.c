@@ -56,9 +56,6 @@ static void write_module_project_record(void) {
 #define METAGEN_INPUT_PATH ".."
 #endif
 
-#define SOB_STRINGIZE_(x) #x
-#define SOB_STRINGIZE(x) SOB_STRINGIZE_(x)
-
 #if SOB_WINDOWS
 #define SOB_REBUILT_EXE_PATH "build\\tools\\sob_rebuilt.exe"
 #define SOB_REBUILT_OBJ_PATH "build\\tools\\sob_rebuilt.obj"
@@ -1925,7 +1922,7 @@ static S32 build_dev_targets(BuildMode mode, const char* selfPath) {
 #endif
 }
 
-static S32 run_app_command(void) {
+static S32 run_host_command(void) {
     Sob_Arena* arena = sob_arena_create();
     if (!arena) {
         fprintf(stderr, "Error: failed to create sob arena for run command\n");
@@ -2051,7 +2048,7 @@ int main(int argc, char** argv) {
             return buildResult;
         }
 
-        return run_app_command();
+        return run_host_command();
     }
 
     if (target == BuildTarget_All || target == BuildTarget_Dev) {

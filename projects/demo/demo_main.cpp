@@ -11,6 +11,7 @@
 #include "engine/engine_sim.cpp"
 #include "engine/engine.cpp"
 #include "engine/engine_world.cpp"
+#include "engine/engine_assets.cpp"
 #include "engine/engine_renderer.cpp"
 #include "engine/engine_debug_draw.cpp"
 #include "engine/engine_panels.cpp"

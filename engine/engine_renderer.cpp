@@ -75,11 +75,7 @@ static void eng_renderer_watch_files(EngContext* ctx) {
     state->render2d.fontFile = file_watch(state->resources.fileStream, fontPath, 0u);
 
     eng_world_watch_files_(ctx);
-}
-
-static B32 eng_renderer_register_artifact_types(EngContext* ctx) {
-    ASSERT_ALWAYS(ctx != 0);
-    return eng_world_register_artifact_types_(ctx);
+    eng_assets_watch_files_(ctx);
 }
 
 static B32 eng_renderer_ensure_text_context(EngContext* ctx) {
@@ -552,9 +548,9 @@ static EngRendererFrame* eng_renderer_begin_frame(EngContext* ctx) {
     // for the duration of the tick.
     if (ctx->engine->resources.artifactCache) {
         PROF_SCOPE("artifact tick");
-        ctx->engine->world.artifactBridge.frame = frame;
+        ctx->engine->assetBridge.frame = frame;
         artifact_cache_tick(ctx->engine->resources.artifactCache, ctx->engine->frameCounter, 16u, 16u);
-        ctx->engine->world.artifactBridge.frame = 0;
+        ctx->engine->assetBridge.frame = 0;
     }
 
     U32 caps = eng_project_()->capabilities;
@@ -586,10 +582,10 @@ static EngRendererFrame* eng_renderer_begin_frame(EngContext* ctx) {
         eng_renderer_try_update_pipeline(ctx);
         if (caps & ENG_CAP_WORLD3D) {
             eng_world_try_update_pipelines_(ctx);
-            eng_world_try_load_assets_(ctx);
+            eng_assets_try_load_models_(ctx);
         }
         if (caps & ENG_CAP_AUDIO) {
-            eng_audio_try_load_sounds_(ctx);
+            eng_assets_try_load_sounds_(ctx);
         }
     }
 

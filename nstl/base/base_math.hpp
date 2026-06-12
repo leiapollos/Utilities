@@ -69,6 +69,35 @@ constexpr B32 is_power_of_two(U64 x) {
     return (x > 0) && ((x & (x - 1)) == 0);
 }
 
+inline U32 u32_next_power_of_two(U32 v) {
+    U32 result = 1u;
+    while (result < v) {
+        result <<= 1u;
+    }
+    return result;
+}
+
+
+// ////////////////////////
+// Hashing
+
+// FNV-1a over bytes with a size finalizer; callers reserve 0 as the
+// empty sentinel, so a zero hash maps to 1.
+inline U64 hash_fnv1a(const void* data, U64 size, U64 seed) {
+    const U8* bytes = (const U8*)data;
+    U64 hash = seed;
+    for (U64 i = 0u; i < size; ++i) {
+        hash ^= (U64)bytes[i];
+        hash *= 1099511628211ull;
+    }
+    hash ^= size;
+    hash *= 1099511628211ull;
+    if (hash == 0u) {
+        hash = 1u;
+    }
+    return hash;
+}
+
 
 // ////////////////////////
 // Vector
@@ -227,6 +256,14 @@ inline Vec4F32 operator*(const Mat4x4F32& m, const Vec4F32& v) noexcept {
 // ////////////////////////
 // Vector Operations
 
+
+inline Vec3F32 vec3_make(F32 x, F32 y, F32 z) {
+    Vec3F32 res;
+    res.x = x;
+    res.y = y;
+    res.z = z;
+    return res;
+}
 
 inline F32 vec3_dot(Vec3F32 a, Vec3F32 b) {
     return a.x * b.x + a.y * b.y + a.z * b.z;

@@ -2,9 +2,6 @@
 // Created by André Leite on 10/06/2026.
 //
 
-#define eng_stat_line(ui, rgba8, fmt, ...) \
-    ui_label_value((ui), (rgba8), fmt, __VA_ARGS__)
-
 static void eng_stats_panel(EngContext* ctx, UI_Context* ui) {
     EngState* state = ctx->engine;
     const GfxStats* gfx = &state->render2d.lastGfxStats;
@@ -20,29 +17,29 @@ static void eng_stats_panel(EngContext* ctx, UI_Context* ui) {
     desc.height = ui_fit();
     ui_panel_begin(ui, str8("debug###stats"), &desc);
 
-    eng_stat_line(ui, UI_COLOR_TEXT_BRIGHT, "frame {}  reloads {}  [F1] stats  [F2] profiler",
+    ui_label_value(ui, UI_COLOR_TEXT_BRIGHT, "frame {}  reloads {}  [F1] stats  [F2] profiler",
                      gfx->frameIndex, state->reloadCount);
-    eng_stat_line(ui, UI_COLOR_TEXT_DIM, "gfx  draws {}  dispatches {}  pso {}  table {}",
+    ui_label_value(ui, UI_COLOR_TEXT_DIM, "gfx  draws {}  dispatches {}  pso {}  table {}",
                      gfx->drawCount, gfx->dispatchCount, gfx->pipelineSwitchCount, gfx->resourceTableCount);
-    eng_stat_line(ui, UI_COLOR_TEXT_DIM, "temp {}KB ovf {}   staging {}KB ovf {}",
+    ui_label_value(ui, UI_COLOR_TEXT_DIM, "temp {}KB ovf {}   staging {}KB ovf {}",
                      gfx->tempBytesUsed / 1024u, gfx->tempOverflowCount,
                      gfx->stagingBytesUsed / 1024u, gfx->stagingOverflowCount);
-    eng_stat_line(ui, UI_COLOR_TEXT_DIM, "draw2d  quads {}  clipped {}  dropped {}  batches {}",
+    ui_label_value(ui, UI_COLOR_TEXT_DIM, "draw2d  quads {}  clipped {}  dropped {}  batches {}",
                      draw2d->quadsSubmitted, draw2d->quadsClipped, draw2d->quadsDropped, draw2d->batchesBuilt);
-    eng_stat_line(ui, UI_COLOR_TEXT_DIM, "ui  widgets {}  retained {}  hits {}  evict {}  dup {}",
+    ui_label_value(ui, UI_COLOR_TEXT_DIM, "ui  widgets {}  retained {}  hits {}  evict {}  dup {}",
                      uiStats->widgetCount, uiStats->retainedCount, uiStats->hitRectCount,
                      uiStats->retainedEvictCount, uiStats->duplicateKeyCount);
-    eng_stat_line(ui, UI_COLOR_TEXT_DIM, "ui text  value hits {}  misses {}  uncached {}",
+    ui_label_value(ui, UI_COLOR_TEXT_DIM, "ui text  value hits {}  misses {}  uncached {}",
                      uiStats->valueRunHits, uiStats->valueRunMisses, uiStats->valueRunUninsertable);
     if (eng_project_()->capabilities & ENG_CAP_WORLD3D) {
-        eng_stat_line(ui, UI_COLOR_TEXT_DIM, "world  renderables {}  dropped {}  lanes {}  meshes {}  tdraws {}",
+        ui_label_value(ui, UI_COLOR_TEXT_DIM, "world  renderables {}  dropped {}  lanes {}  meshes {}  tdraws {}",
                          state->world.lastRenderableCount, state->world.lastDroppedCount,
                          state->world.laneCount, state->world.meshCount,
                          state->world.lastTransparentDraws);
     }
     if (eng_project_()->capabilities & ENG_CAP_AUDIO) {
         AudioStats audioStats = audio_stats(ctx->host->audioSystem);
-        eng_stat_line(ui, UI_COLOR_TEXT_DIM, "audio  voices {}/{}  buffers {}  drop v{} c{}  cb {}us max {}us",
+        ui_label_value(ui, UI_COLOR_TEXT_DIM, "audio  voices {}/{}  buffers {}  drop v{} c{}  cb {}us max {}us",
                          audioStats.voicesActive, AUDIO_VOICE_COUNT, audioStats.buffersLive,
                          audioStats.voicesDropped, audioStats.commandsDropped,
                          audioStats.lastCallbackNanos / 1000ull, audioStats.maxCallbackNanos / 1000ull);
@@ -56,23 +53,23 @@ static void eng_stats_panel(EngContext* ctx, UI_Context* ui) {
 
     if (state->resources.artifactCache) {
         ArtifactStats artifact = artifact_cache_stats(state->resources.artifactCache);
-        eng_stat_line(ui, UI_COLOR_TEXT_DIM, "artifact  live {}  working {}  hits {}  misses {}  {}KB",
+        ui_label_value(ui, UI_COLOR_TEXT_DIM, "artifact  live {}  working {}  hits {}  misses {}  {}KB",
                          artifact.liveCount, artifact.workingCount, artifact.hits, artifact.misses,
                          artifact.bytesLive / 1024u);
     }
     if (state->resources.contentStore) {
         ContentStats content = content_stats(state->resources.contentStore);
-        eng_stat_line(ui, UI_COLOR_TEXT_DIM, "content  blobs {}  keys {}  {}KB  hits {}  misses {}",
+        ui_label_value(ui, UI_COLOR_TEXT_DIM, "content  blobs {}  keys {}  {}KB  hits {}  misses {}",
                          content.blobCount, content.keyCount, content.payloadBytes / 1024u,
                          content.hitCount, content.missCount);
     }
     if (state->resources.fileStream) {
         FileStreamStats files = file_stream_stats(state->resources.fileStream);
-        eng_stat_line(ui, UI_COLOR_TEXT_DIM, "files  watched {}  checked {}  published {}  failed {}",
+        ui_label_value(ui, UI_COLOR_TEXT_DIM, "files  watched {}  checked {}  published {}  failed {}",
                          files.fileCount, files.checkedCount, files.publishCount, files.failedCount);
     }
 
-    eng_stat_line(ui, 0x6B7480FFu, "window {}x{}  workers {}",
+    ui_label_value(ui, 0x6B7480FFu, "window {}x{}  workers {}",
                      state->windowWidth, state->windowHeight, state->workerCount);
 
     ui_panel_end(ui);
@@ -104,10 +101,10 @@ static void eng_profiler_row(UI_Context* ui, const ProfSiteStats* stats, U32 sit
     }
 
     ui_spacer(ui, ui_grow(1.0f));
-    eng_stat_line(ui, UI_COLOR_TEXT, "{:.3}", siteStats->avgInclMs);
-    eng_stat_line(ui, UI_COLOR_TEXT_DIM, "{:.3}", siteStats->avgExclMs);
-    eng_stat_line(ui, UI_COLOR_TEXT_DIM, "{:.3}", siteStats->maxInclMs);
-    eng_stat_line(ui, 0x6B7480FFu, "x{}", (U32)(siteStats->avgHits + 0.5f));
+    ui_label_value(ui, UI_COLOR_TEXT, "{:.3}", siteStats->avgInclMs);
+    ui_label_value(ui, UI_COLOR_TEXT_DIM, "{:.3}", siteStats->avgExclMs);
+    ui_label_value(ui, UI_COLOR_TEXT_DIM, "{:.3}", siteStats->maxInclMs);
+    ui_label_value(ui, 0x6B7480FFu, "x{}", (U32)(siteStats->avgHits + 0.5f));
     ui_row_end(ui);
 }
 
@@ -138,10 +135,10 @@ static void eng_profiler_path_row(UI_Context* ui, const ProfSiteStats* stats,
     }
 
     ui_spacer(ui, ui_grow(1.0f));
-    eng_stat_line(ui, UI_COLOR_TEXT, "{:.3}", path->avgInclMs);
-    eng_stat_line(ui, UI_COLOR_TEXT_DIM, "{:.3}", path->avgExclMs);
-    eng_stat_line(ui, UI_COLOR_TEXT_DIM, "{:.3}", path->maxInclMs);
-    eng_stat_line(ui, 0x6B7480FFu, "x{}", (U32)(path->avgHits + 0.5f));
+    ui_label_value(ui, UI_COLOR_TEXT, "{:.3}", path->avgInclMs);
+    ui_label_value(ui, UI_COLOR_TEXT_DIM, "{:.3}", path->avgExclMs);
+    ui_label_value(ui, UI_COLOR_TEXT_DIM, "{:.3}", path->maxInclMs);
+    ui_label_value(ui, 0x6B7480FFu, "x{}", (U32)(path->avgHits + 0.5f));
     ui_row_end(ui);
 }
 
@@ -169,7 +166,7 @@ static void eng_profiler_panel(EngContext* ctx, UI_Context* ui) {
 
     F32 averageFrameMs = state->averageDeltaSeconds * 1000.0f;
     F32 fps = (state->averageDeltaSeconds > 0.0f) ? (1.0f / state->averageDeltaSeconds) : 0.0f;
-    eng_stat_line(ui, UI_COLOR_TEXT, "frame {:.2}ms  {:.0}fps  tick {}  clamps {}  |  res {:.0}ns  scope {:.1}ns  drops {}  sites {}",
+    ui_label_value(ui, UI_COLOR_TEXT, "frame {:.2}ms  {:.0}fps  tick {}  clamps {}  |  res {:.0}ns  scope {:.1}ns  drops {}  sites {}",
                      averageFrameMs, fps, (U32)state->simTickCounter, state->simClampCount,
                      info.resolutionNs, info.overheadNsPerScope,
                      info.droppedEvents, info.siteCount);
@@ -271,7 +268,7 @@ static void eng_profiler_panel(EngContext* ctx, UI_Context* ui) {
 
     if (state->profSelectedSite != 0u && state->profSelectedSite < siteCount) {
         const ProfSiteStats* selected = stats + state->profSelectedSite;
-        eng_stat_line(ui, UI_COLOR_TEXT_BRIGHT, "{}  avg {:.3}ms  max {:.3}ms",
+        ui_label_value(ui, UI_COLOR_TEXT_BRIGHT, "{}  avg {:.3}ms  max {:.3}ms",
                          str8(selected->label), selected->avgInclMs, selected->maxInclMs);
         ui_plot(ui, selected->historyMs, PROF_HISTORY_FRAMES, historyOffset, ui_grow(1.0f), ui_px(48.0f));
     }

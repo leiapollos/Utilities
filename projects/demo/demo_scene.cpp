@@ -40,13 +40,13 @@ static void demo_debug_draw_contacts_(EngContext* ctx, const DemoTickStats* stat
 static Mat4x4F32 demo_scene_cell_transform_(const DemoSceneCell* cell, F32 time, B32 animate) {
     B32 animated = animate && cell->animateEligible;
     // Row-vector convention: compose left to right, scale -> rotate -> translate.
-    Mat4x4F32 transform = mat4_scale(eng_world_vec3_(1.0f, cell->height, 1.0f));
+    Mat4x4F32 transform = mat4_scale(vec3_make(1.0f, cell->height, 1.0f));
     if (animated) {
-        QuatF32 spin = quat_from_axis_angle(eng_world_vec3_(0.0f, 1.0f, 0.0f),
+        QuatF32 spin = quat_from_axis_angle(vec3_make(0.0f, 1.0f, 0.0f),
                                             time * (0.6f + (F32)(cell->cellSeed % 5u) * 0.25f));
         transform = transform * quat_to_mat4(spin);
     }
-    transform = transform * mat4_translate(eng_world_vec3_(cell->worldX, cell->height * 0.5f, cell->worldZ));
+    transform = transform * mat4_translate(vec3_make(cell->worldX, cell->height * 0.5f, cell->worldZ));
     if (animated) {
         F32 bob = 0.35f * (0.5f + 0.5f * SIN_F32(time * 1.7f + (F32)cell->cellSeed * 0.61f));
         transform.v[3][1] += bob;
@@ -54,7 +54,7 @@ static Mat4x4F32 demo_scene_cell_transform_(const DemoSceneCell* cell, F32 time,
     return transform;
 }
 
-struct AppSceneExtractParams {
+struct DemoSceneExtractParams {
     EngWorldState* world;
     U32 side;
     F32 time;
@@ -66,7 +66,7 @@ struct AppSceneExtractParams {
 
 // Allocates the scene's material slots from the world table once the world
 // exists; the scene owns the palette, the world owns only the missing slot.
-static void app_demo_scene_ensure_materials_(EngContext* ctx) {
+static void demo_scene_ensure_materials_(EngContext* ctx) {
     DemoSettings* demo = &demo_state_(ctx)->settings;
     EngWorldState* world = &ctx->engine->world;
     if (demo->materialsReady || !world->gpuResourcesCreated) {
@@ -147,9 +147,9 @@ static void demo_scene_push_model_(EngWorldState* world, EngWorldLaneWriter* wri
 static Mat4x4F32 demo_scene_model_placement_(const EngWorldModelResources* model, F32 targetRadius,
                                             Vec3F32 position, F32 yawRadians) {
     F32 scale = (model->boundsRadius > 1e-6f) ? (targetRadius / model->boundsRadius) : 1.0f;
-    Mat4x4F32 placement = mat4_scale(eng_world_vec3_(scale, scale, scale)) *
-                          quat_to_mat4(quat_from_axis_angle(eng_world_vec3_(0.0f, 1.0f, 0.0f), yawRadians));
-    Vec3F32 center = eng_world_vec3_(model->boundsCenter[0], model->boundsCenter[1], model->boundsCenter[2]);
+    Mat4x4F32 placement = mat4_scale(vec3_make(scale, scale, scale)) *
+                          quat_to_mat4(quat_from_axis_angle(vec3_make(0.0f, 1.0f, 0.0f), yawRadians));
+    Vec3F32 center = vec3_make(model->boundsCenter[0], model->boundsCenter[1], model->boundsCenter[2]);
     Vec3F32 placedCenter;
     placedCenter.x = center.x * placement.v[0][0] + center.y * placement.v[1][0] + center.z * placement.v[2][0];
     placedCenter.y = center.x * placement.v[0][1] + center.y * placement.v[1][1] + center.z * placement.v[2][1];
@@ -162,7 +162,7 @@ static Mat4x4F32 demo_scene_model_placement_(const EngWorldModelResources* model
 
 // Per-item extraction body; laneId/laneCount explicit so the single-threaded
 // path runs inline with no SPMD group.
-static void demo_scene_extract_range_(const AppSceneExtractParams* params, U64 laneId, U64 laneCount) {
+static void demo_scene_extract_range_(const DemoSceneExtractParams* params, U64 laneId, U64 laneCount) {
     EngWorldState* world = params->world;
     EngWorldLaneWriter* writer = world->laneWriters + laneId;
     U32 side = params->side;
@@ -179,7 +179,7 @@ static void demo_scene_extract_range_(const AppSceneExtractParams* params, U64 l
             U32 modelIndex = (cell.lane == 9u) ? (U32)DemoModel_Duck : (U32)DemoModel_Avocado;
             if (world->models[modelIndex]) {
                 const EngWorldModelResources* model = world->models[modelIndex];
-                Vec3F32 position = eng_world_vec3_(cell.worldX, DEMO_SCENE_MODEL_PROXY_Y, cell.worldZ);
+                Vec3F32 position = vec3_make(cell.worldX, DEMO_SCENE_MODEL_PROXY_Y, cell.worldZ);
                 Mat4x4F32 placement = demo_scene_model_placement_(model, DEMO_SCENE_MODEL_PROXY_RADIUS,
                                                                  position,
                                                                  (F32)cell.cellSeed * ((cell.lane == 9u) ? 0.7f : 1.3f));
@@ -206,7 +206,7 @@ static void demo_scene_extract_range_(const AppSceneExtractParams* params, U64 l
 
 static void demo_scene_extract_kernel_(void* kernelParameters) {
     PROF_SCOPE("scene extract");
-    const AppSceneExtractParams* params = (const AppSceneExtractParams*)kernelParameters;
+    const DemoSceneExtractParams* params = (const DemoSceneExtractParams*)kernelParameters;
     demo_scene_extract_range_(params, spmd_lane_id(), spmd_lane_count());
 }
 
@@ -219,7 +219,7 @@ static void demo_scene_submit(EngContext* ctx, EngRendererFrame* rendererFrame) 
         return;
     }
 
-    app_demo_scene_ensure_materials_(ctx);
+    demo_scene_ensure_materials_(ctx);
 
     F32 time = (F32)state->simTimeSeconds;
     U32 side = CLAMP(demo->gridSide, DEMO_GRID_MIN, DEMO_GRID_MAX);
@@ -234,17 +234,17 @@ static void demo_scene_submit(EngContext* ctx, EngRendererFrame* rendererFrame) 
         // The spectator auto-orbit is load-bearing: headless captures
         // depend on its deterministic path.
         F32 yaw = time * 0.22f;
-        Vec3F32 eye = eng_world_vec3_(COS_F32(yaw) * orbitRadius,
+        Vec3F32 eye = vec3_make(COS_F32(yaw) * orbitRadius,
                                       orbitRadius * 0.45f,
                                       SIN_F32(yaw) * orbitRadius);
-        eng_world_set_camera(ctx, eye, eng_world_vec3_(0.0f, 0.0f, 0.0f), 1.0472f, 0.1f,
+        eng_world_set_camera(ctx, eye, vec3_make(0.0f, 0.0f, 0.0f), 1.0472f, 0.1f,
                              orbitRadius * 4.0f);
     }
 
     // The plaza sits outside the grid edge; size the ground to cover it.
     F32 groundSpan = (F32)side * DEMO_SCENE_GRID_SPACING + 2.0f * (DEMO_SCENE_SPAWN_MARGIN + 20.0f);
-    Mat4x4F32 groundTransform = mat4_scale(eng_world_vec3_(groundSpan, 1.0f, groundSpan)) *
-                                mat4_translate(eng_world_vec3_(0.0f, -0.05f, 0.0f));
+    Mat4x4F32 groundTransform = mat4_scale(vec3_make(groundSpan, 1.0f, groundSpan)) *
+                                mat4_translate(vec3_make(0.0f, -0.05f, 0.0f));
     eng_world_push(ctx, world->builtinMeshes[2], demo->paletteMaterials[5], EngWorldBin_Opaque, &groundTransform);
 
     // Spawn plaza, rendered straight from the collider table (the inverse
@@ -256,7 +256,7 @@ static void demo_scene_submit(EngContext* ctx, EngRendererFrame* rendererFrame) 
                                     -(gridExtentForPlaza + DEMO_SCENE_SPAWN_MARGIN), &playground);
         for (U32 at = 0u; at < playground.count; ++at) {
             const DemoCollider* collider = playground.colliders + at;
-            Mat4x4F32 plazaTransform = mat4_scale(eng_world_vec3_(collider->halfExtents.x * 2.0f,
+            Mat4x4F32 plazaTransform = mat4_scale(vec3_make(collider->halfExtents.x * 2.0f,
                                                                   collider->halfExtents.y * 2.0f,
                                                                   collider->halfExtents.z * 2.0f)) *
                                        quat_to_mat4(collider->orientation) *
@@ -272,7 +272,7 @@ static void demo_scene_submit(EngContext* ctx, EngRendererFrame* rendererFrame) 
         Vec3F32 renderPosition = demo_game_render_position_(demoState->game.playerPrevPosition,
                                                            demoState->game.player.position,
                                                            state->simAccumulator);
-        Mat4x4F32 playerTransform = mat4_scale(eng_world_vec3_(playerScale, playerScale, playerScale)) *
+        Mat4x4F32 playerTransform = mat4_scale(vec3_make(playerScale, playerScale, playerScale)) *
                                     mat4_translate(renderPosition);
         eng_world_push(ctx, world->builtinMeshes[1], demo->playerMaterial, EngWorldBin_Opaque, &playerTransform);
     }
@@ -283,11 +283,11 @@ static void demo_scene_submit(EngContext* ctx, EngRendererFrame* rendererFrame) 
     // sort draws inner before outer), and the engulfed grid objects exercise
     // ordering against the shell every orbit.
     F32 groundY = -0.05f;
-    Mat4x4F32 bigCube = mat4_scale(eng_world_vec3_(14.0f, 14.0f, 14.0f)) *
-                        mat4_translate(eng_world_vec3_(0.0f, groundY, 0.0f));
+    Mat4x4F32 bigCube = mat4_scale(vec3_make(14.0f, 14.0f, 14.0f)) *
+                        mat4_translate(vec3_make(0.0f, groundY, 0.0f));
     eng_world_push(ctx, world->builtinMeshes[0], demo->transparentMaterials[0], EngWorldBin_Transparent, &bigCube);
-    Mat4x4F32 bigSphere = mat4_scale(eng_world_vec3_(26.0f, 26.0f, 26.0f)) *
-                          mat4_translate(eng_world_vec3_(0.0f, groundY, 0.0f));
+    Mat4x4F32 bigSphere = mat4_scale(vec3_make(26.0f, 26.0f, 26.0f)) *
+                          mat4_translate(vec3_make(0.0f, groundY, 0.0f));
     eng_world_push(ctx, world->builtinMeshes[1], demo->transparentMaterials[1], EngWorldBin_Transparent, &bigSphere);
 
     // Showcase models at opposite grid edges: Lantern (node transforms) and
@@ -295,18 +295,18 @@ static void demo_scene_submit(EngContext* ctx, EngRendererFrame* rendererFrame) 
     F32 gridExtent = (F32)side * DEMO_SCENE_GRID_SPACING * 0.5f;
     if (world->models[DemoModel_Lantern]) {
         Mat4x4F32 placement = demo_scene_model_placement_(world->models[DemoModel_Lantern], 12.0f,
-                                                         eng_world_vec3_(gridExtent * 0.5f, 10.0f, gridExtent * 0.5f),
+                                                         vec3_make(gridExtent * 0.5f, 10.0f, gridExtent * 0.5f),
                                                          time * 0.25f);
         demo_scene_push_model_(world, world->laneWriters, world->models[DemoModel_Lantern], EngWorldBin_Opaque, &placement);
     }
     if (world->models[DemoModel_Buggy]) {
         Mat4x4F32 placement = demo_scene_model_placement_(world->models[DemoModel_Buggy], 16.0f,
-                                                         eng_world_vec3_(-gridExtent * 0.5f, 13.0f, -gridExtent * 0.5f),
+                                                         vec3_make(-gridExtent * 0.5f, 13.0f, -gridExtent * 0.5f),
                                                          time * -0.2f);
         demo_scene_push_model_(world, world->laneWriters, world->models[DemoModel_Buggy], EngWorldBin_Opaque, &placement);
     }
 
-    AppSceneExtractParams extractParams = {};
+    DemoSceneExtractParams extractParams = {};
     extractParams.world = world;
     extractParams.side = side;
     extractParams.time = time;

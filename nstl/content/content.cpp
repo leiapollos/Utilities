@@ -62,39 +62,14 @@ struct ContentStore {
     U32 missCount;
 };
 
-static U64 content_hash_bytes_(const void* data, U64 size, U64 seed) {
-    const U8* bytes = (const U8*)data;
-    U64 hash = seed;
-    for (U64 i = 0u; i < size; ++i) {
-        hash ^= (U64)bytes[i];
-        hash *= 1099511628211ull;
-    }
-    hash ^= size;
-    hash *= 1099511628211ull;
-    if (hash == 0u) {
-        hash = 1u;
-    }
-    return hash;
-}
-
 static U32 content_table_capacity_from_count_(U32 requested) {
-    U32 result = requested ? requested : 64u;
-    if (result < 64u) {
-        result = 64u;
-    }
-    if (!is_power_of_two(result)) {
-        U32 next = 1u;
-        while (next < result) {
-            next <<= 1u;
-        }
-        result = next;
-    }
-    return result;
+    U32 result = MAX(requested, 64u);
+    return is_power_of_two(result) ? result : u32_next_power_of_two(result);
 }
 
 static U64 content_hash_u64_pair_(U64 a, U64 b, U64 seed) {
     U64 values[2] = {a, b};
-    return content_hash_bytes_(values, sizeof(values), seed);
+    return hash_fnv1a(values, sizeof(values), seed);
 }
 
 static U64 content_hash_hash_(ContentHash hash) {
@@ -103,7 +78,7 @@ static U64 content_hash_hash_(ContentHash hash) {
 
 static U64 content_hash_key_(ContentKey key) {
     U64 values[3] = {key.root.id, key.id.u64[0], key.id.u64[1]};
-    return content_hash_bytes_(values, sizeof(values), 1099511628211ull ^ 0x517CC1B727220A95ull);
+    return hash_fnv1a(values, sizeof(values), 1099511628211ull ^ 0x517CC1B727220A95ull);
 }
 
 B32 content_hash_equal(ContentHash a, ContentHash b) {
@@ -116,8 +91,8 @@ B32 content_hash_is_zero(ContentHash hash) {
 
 ContentHash content_hash_from_bytes(const void* data, U64 size) {
     ContentHash result = CONTENT_HASH_ZERO;
-    result.hash[0] = content_hash_bytes_(data, size, 1469598103934665603ull);
-    result.hash[1] = content_hash_bytes_(data, size, 1099511628211ull ^ 0x9E3779B97F4A7C15ull);
+    result.hash[0] = hash_fnv1a(data, size, 1469598103934665603ull);
+    result.hash[1] = hash_fnv1a(data, size, 1099511628211ull ^ 0x9E3779B97F4A7C15ull);
     return result;
 }
 

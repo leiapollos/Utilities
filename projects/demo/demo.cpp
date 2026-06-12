@@ -90,7 +90,7 @@ static void demo_debug_stats_(EngContext* ctx, UI_Context* ui) {
     DemoState* demo = demo_state_(ctx);
     if (demo->settings.playerMode) {
         const DemoTickStats* tick = &demo->game.lastTickStats;
-        eng_stat_line(ui, UI_COLOR_TEXT_DIM, "collision  colliders {}  contacts {}  depth {}  tick {}us",
+        ui_label_value(ui, UI_COLOR_TEXT_DIM, "collision  colliders {}  contacts {}  depth {}  tick {}us",
                       demo->colliders.count, tick->contactCount,
                       (F64)tick->deepestDepth, eng->lastSimTickNanos / 1000ull);
     }

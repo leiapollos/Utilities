@@ -92,39 +92,15 @@ struct ArtifactCache {
 static void artifact_build_job_(void* params);
 static void artifact_set_status_locked_(ArtifactCache* cache, ArtifactNode* node, ArtifactStatus status);
 
-static U64 artifact_hash_bytes_(const void* data, U64 size, U64 seed) {
-    const U8* bytes = (const U8*)data;
-    U64 hash = seed;
-    for (U64 i = 0u; i < size; ++i) {
-        hash ^= (U64)bytes[i];
-        hash *= 1099511628211ull;
-    }
-    hash ^= size;
-    hash *= 1099511628211ull;
-    if (hash == 0u) {
-        hash = 1u;
-    }
-    return hash;
-}
 
 static U32 artifact_table_capacity_from_count_(U32 requested) {
-    U32 result = requested ? requested : ARTIFACT_DEFAULT_TABLE_CAPACITY;
-    if (result < ARTIFACT_DEFAULT_TABLE_CAPACITY) {
-        result = ARTIFACT_DEFAULT_TABLE_CAPACITY;
-    }
-    if (!is_power_of_two(result)) {
-        U32 next = 1u;
-        while (next < result) {
-            next <<= 1u;
-        }
-        result = next;
-    }
-    return result;
+    U32 result = MAX(requested, ARTIFACT_DEFAULT_TABLE_CAPACITY);
+    return is_power_of_two(result) ? result : u32_next_power_of_two(result);
 }
 
 static U64 artifact_table_hash_(ArtifactTypeId typeId, ArtifactKey key) {
     U64 values[3] = {(U64)typeId, key.hash[0], key.hash[1]};
-    return artifact_hash_bytes_(values, sizeof(values), 1469598103934665603ull ^ 0xF1357AEA2E62A9C5ull);
+    return hash_fnv1a(values, sizeof(values), 1469598103934665603ull ^ 0xF1357AEA2E62A9C5ull);
 }
 
 B32 artifact_key_equal(ArtifactKey a, ArtifactKey b) {
@@ -137,8 +113,8 @@ B32 artifact_key_is_zero(ArtifactKey key) {
 
 ArtifactKey artifact_key_from_bytes(const void* data, U64 size) {
     ArtifactKey result = ARTIFACT_KEY_ZERO;
-    result.hash[0] = artifact_hash_bytes_(data, size, 1469598103934665603ull ^ 0xA24BAED4963EE407ull);
-    result.hash[1] = artifact_hash_bytes_(data, size, 1099511628211ull ^ 0x9FB21C651E98DF25ull);
+    result.hash[0] = hash_fnv1a(data, size, 1469598103934665603ull ^ 0xA24BAED4963EE407ull);
+    result.hash[1] = hash_fnv1a(data, size, 1099511628211ull ^ 0x9FB21C651E98DF25ull);
     return result;
 }
 

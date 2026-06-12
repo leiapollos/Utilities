@@ -31,20 +31,6 @@ B32 file_handle_is_zero(FileHandle handle) {
     return (handle.index == 0u && handle.generation == 0u) ? 1 : 0;
 }
 
-static U64 file_stream_hash_bytes_(const void* data, U64 size, U64 seed) {
-    const U8* bytes = (const U8*)data;
-    U64 hash = seed;
-    for (U64 i = 0u; i < size; ++i) {
-        hash ^= (U64)bytes[i];
-        hash *= 1099511628211ull;
-    }
-    hash ^= size;
-    hash *= 1099511628211ull;
-    if (hash == 0u) {
-        hash = 1u;
-    }
-    return hash;
-}
 
 static B32 file_stream_range_equal_(RangeU64 a, RangeU64 b) {
     return (a.min == b.min && a.max == b.max) ? 1 : 0;
@@ -53,8 +39,8 @@ static B32 file_stream_range_equal_(RangeU64 a, RangeU64 b) {
 static ContentId file_stream_content_id_from_path_range_(StringU8 path, RangeU64 range) {
     ContentId result = CONTENT_ID_ZERO;
     U64 rangeValues[2] = {range.min, range.max};
-    result.u64[0] = file_stream_hash_bytes_(path.data, path.size, 1469598103934665603ull ^ 0xD6E8FEB86659FD93ull);
-    result.u64[1] = file_stream_hash_bytes_(rangeValues, sizeof(rangeValues), result.u64[0] ^ 0xA0761D6478BD642Full);
+    result.u64[0] = hash_fnv1a(path.data, path.size, 1469598103934665603ull ^ 0xD6E8FEB86659FD93ull);
+    result.u64[1] = hash_fnv1a(rangeValues, sizeof(rangeValues), result.u64[0] ^ 0xA0761D6478BD642Full);
     if (result.u64[0] == 0u && result.u64[1] == 0u) {
         result.u64[0] = 1u;
     }

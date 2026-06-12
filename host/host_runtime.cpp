@@ -202,23 +202,13 @@ static U32 host_parse_u32_env_value(StringU8 value) {
     return (U32)parsedValue;
 }
 
-static U32 host_clamp_u32(U32 value, U32 minValue, U32 maxValue) {
-    if (value < minValue) {
-        value = minValue;
-    }
-    if (value > maxValue) {
-        value = maxValue;
-    }
-    return value;
-}
-
 static U32 host_parse_u32_env_value_clamped(StringU8 value, U32 defaultValue, U32 minValue, U32 maxValue) {
     if (!value.data || value.size == 0u) {
         return defaultValue;
     }
 
     U32 parsedValue = host_parse_u32_env_value(value);
-    return host_clamp_u32(parsedValue, minValue, maxValue);
+    return CLAMP(parsedValue, minValue, maxValue);
 }
 
 static B32 host_env_flag_enabled(StringU8 value) {
@@ -283,7 +273,7 @@ static U64 host_get_newest_module_input_timestamp(void);
 static U64 host_get_newest_restart_required_input_timestamp(const char** outNewestPath);
 static B32 host_restart_required_inputs_changed(HostState* state);
 static StringU8 host_export_status_string(B32 passed);
-static B32 host_validate_app_code(const EngCode* code, StringU8 modulePath);
+static B32 host_validate_eng_code(const EngCode* code, StringU8 modulePath);
 static B32 host_load_candidate(HostState* state, LoadedModule* outModule, StringU8* outPath);
 static B32 host_commit_candidate(HostState* state, LoadedModule* candidate, StringU8 candidatePath, B32 isReload);
 #if UTILITIES_STATIC_APP
@@ -700,7 +690,7 @@ static StringU8 host_export_status_string(B32 passed) {
     return passed ? str8("pass") : str8("fail");
 }
 
-static B32 host_validate_app_code(const EngCode* code, StringU8 modulePath) {
+static B32 host_validate_eng_code(const EngCode* code, StringU8 modulePath) {
     ASSERT_ALWAYS(code != 0);
 
     const B32 sizeOk = (code->size == sizeof(EngCode));
@@ -823,7 +813,7 @@ static B32 host_load_candidate(HostState* state, LoadedModule* outModule, String
         return 0;
     }
 
-    if (!host_validate_app_code(&code, loadPath)) {
+    if (!host_validate_eng_code(&code, loadPath)) {
         OS_library_close(library);
         return 0;
     }
@@ -923,7 +913,7 @@ static B32 host_load_static_app(HostState* state) {
         LOG_ERROR("host", "Static eng_load returned failure");
         return 0;
     }
-    if (!host_validate_app_code(&code, str8("static-app"))) {
+    if (!host_validate_eng_code(&code, str8("static-app"))) {
         return 0;
     }
     if (!code.boot(&state->host, &state->store)) {
@@ -1399,7 +1389,7 @@ int host_main_loop(int argc, char** argv) {
 
         if (state.framePacingEnabled && !state.host.shouldQuit) {
             U32 targetFps = state.windowFocused ? state.targetFpsFocused : state.targetFpsUnfocused;
-            targetFps = host_clamp_u32(targetFps, HOST_MIN_TARGET_FPS, HOST_MAX_TARGET_FPS);
+            targetFps = CLAMP(targetFps, HOST_MIN_TARGET_FPS, HOST_MAX_TARGET_FPS);
             U64 targetFrameMicros = MILLION(1ULL) / targetFps;
 
             U64 frameEndTime = OS_get_time_microseconds();

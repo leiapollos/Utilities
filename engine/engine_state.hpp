@@ -11,7 +11,7 @@
 
 #define ENG_STATE_ID(a, b, c, d) ((((U64)(a)) << 56u) | (((U64)(b)) << 48u) | (((U64)(c)) << 40u) | (((U64)(d)) << 32u) | 0x53544154u)
 
-#define ENG_STATE_VERSION 2u
+#define ENG_STATE_VERSION 3u
 
 struct EngState;
 
@@ -105,7 +105,7 @@ struct EngWorldMesh {
     F32 boundsRadius;
 };
 
-struct EngWorldArtifactBridge {
+struct EngAssetBridge {
     GfxDevice* device;
     AudioSystem* audioSystem;
     EngState* state;
@@ -209,7 +209,6 @@ struct EngWorldState {
     FileHandle assetModelTextureFiles[ENG_WORLD_MAX_MODELS][ENG_WORLD_MODEL_MAX_TEXTURES];
     EngWorldModelResources* models[ENG_WORLD_MAX_MODELS];
     B32 assetsSettled;
-    EngWorldArtifactBridge artifactBridge;
 
     ShdWorldFrameRecord frameRecord;
     Vec3F32 cameraForward;
@@ -264,5 +263,6 @@ struct EngState {
     EngRender2D render2d;
     EngWorldState world;
     EngAudio audio;
+    EngAssetBridge assetBridge;
     UI_State ui;
 };

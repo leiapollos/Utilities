@@ -7,13 +7,9 @@ static const uint WORLD_MATERIAL_FLAG_ALPHA_TEST = 1u;
 static const uint WORLD_MATERIAL_FLAG_TEXTURED = 2u;
 
 // transform arrays are column-major: flat index = column * 4 + row.
-float4 world_mul_point(float m[16], float3 p) {
-    return float4(m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12],
-                  m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13],
-                  m[2] * p.x + m[6] * p.y + m[10] * p.z + m[14],
-                  m[3] * p.x + m[7] * p.y + m[11] * p.z + m[15]);
-}
-
+// Plain FMAs over the flat arrays on purpose: records load from raw
+// buffers as float[16], and building float4x4 for mul() would buy
+// identical codegen plus a cross-backend row/column packing trap.
 float4 world_mul_vec4(float m[16], float4 v) {
     return float4(m[0] * v.x + m[4] * v.y + m[8] * v.z + m[12] * v.w,
                   m[1] * v.x + m[5] * v.y + m[9] * v.z + m[13] * v.w,
@@ -53,7 +49,7 @@ WorldVertexOut world_vertex(uint vertexId : SV_VertexID, uint instanceId : SV_In
     WorldRenderableRecord renderable = shd_load_WorldRenderableRecord(rootData.renderableBuffer, rootData.renderableByteOffset, renderableIndex);
     WorldVertexRecord vertex = shd_load_WorldVertexRecord(rootData.vertexBuffer, rootData.vertexByteOffset, vertexId);
 
-    float4 worldPos = world_mul_point(renderable.transform, float3(vertex.position[0], vertex.position[1], vertex.position[2]));
+    float4 worldPos = world_mul_vec4(renderable.transform, float4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0));
     float3 worldNormal = world_mul_dir(renderable.transform, float3(vertex.normal[0], vertex.normal[1], vertex.normal[2]));
 
     WorldVertexOut output;

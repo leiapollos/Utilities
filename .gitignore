@@ -409,7 +409,6 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
-Utilities
 
 # JetBrains CLion
 .idea

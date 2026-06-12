@@ -7,7 +7,6 @@ struct EngRendererFrame {
 
 static EngRendererFrame g_engRendererFrame;
 
-static B32 eng_renderer_register_artifact_types(EngContext* ctx);
 static void eng_renderer_watch_files(EngContext* ctx);
 static void eng_renderer_resource_cache_reset(EngContext* ctx);
 static void eng_renderer_shutdown(EngContext* ctx);

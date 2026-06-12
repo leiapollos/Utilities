@@ -21,8 +21,8 @@ static B32 eng_ensure_job_system(EngContext* ctx);
 static B32 eng_resource_cache_init(EngContext* ctx);
 static void eng_resource_cache_shutdown(EngContext* ctx);
 static B32 eng_bind_current_module(EngContext* ctx);
-static B32 eng_register_artifact_types(EngContext* ctx);
-static void eng_watch_files(EngContext* ctx);
+static B32 eng_assets_register_types_(EngContext* ctx);
+static void eng_renderer_watch_files(EngContext* ctx);
 static ArtifactKey eng_artifact_key_from_label(const char* label);
 static ArtifactKey eng_artifact_key_from_content(const char* label, ContentHash hash);
 static ContentHash eng_content_hash_from_value(ArtifactValue value);
@@ -154,8 +154,7 @@ static B32 eng_after_reload(EngHost* host, HOT_StateStore* store) {
     }
 
     // Projects watch reloadCount to refresh anything derived from code
-    // (the demo rebuilds its collision world so classifier edits land
-    // live).
+    // (collision worlds, classifier-driven caches), so edits land live.
     ctx.engine->reloadCount += 1u;
     return 1;
 }
@@ -366,13 +365,13 @@ static B32 eng_resource_cache_init(EngContext* ctx) {
         return 0;
     }
 
-    if (!eng_register_artifact_types(ctx)) {
+    if (!eng_assets_register_types_(ctx)) {
         LOG_ERROR("resource", "Failed to register artifact types");
         eng_resource_cache_shutdown(ctx);
         return 0;
     }
 
-    eng_watch_files(ctx);
+    eng_renderer_watch_files(ctx);
     return 1;
 }
 
@@ -406,22 +405,15 @@ static B32 eng_bind_current_module(EngContext* ctx) {
     ASSERT_ALWAYS(ctx->engine != 0);
 
     EngState* state = ctx->engine;
-    if (state->resources.artifactCache && !eng_register_artifact_types(ctx)) {
+    if (state->resources.artifactCache && !eng_assets_register_types_(ctx)) {
         return 0;
     }
     if (state->resources.fileStream) {
-        eng_watch_files(ctx);
+        eng_renderer_watch_files(ctx);
     }
     return 1;
 }
 
-static B32 eng_register_artifact_types(EngContext* ctx) {
-    return eng_renderer_register_artifact_types(ctx);
-}
-
-static void eng_watch_files(EngContext* ctx) {
-    eng_renderer_watch_files(ctx);
-}
 
 #if defined(PLATFORM_BUILD_DEBUG)
 static U64 eng_newest_shader_source_timestamp(void) {
