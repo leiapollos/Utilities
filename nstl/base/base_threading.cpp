@@ -27,7 +27,7 @@ static void barrier_wait(Barrier barrier) {
 thread_local ThreadContext* g_threadContext = nullptr;
 
 ThreadContext* thread_context_alloc() {
-    Arena* arena = arena_alloc();
+    Arena* arena = arena_alloc(.debugName = "scratch");
     g_threadContext = ARENA_PUSH_STRUCT(arena, ThreadContext);
     {
         ScratchArenas* scratch = ARENA_PUSH_STRUCT(arena, ScratchArenas);
@@ -35,7 +35,7 @@ ThreadContext* thread_context_alloc() {
 
         scratch->slots[0] = arena;
         for (U32 i = 1; i < SCRATCH_TLS_ARENA_COUNT; ++i) {
-            scratch->slots[i] = arena_alloc();
+            scratch->slots[i] = arena_alloc(.debugName = "scratch");
         }
         scratch->nextIndex = 0;
         scratch->initialized = true;

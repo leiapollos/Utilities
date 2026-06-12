@@ -85,14 +85,25 @@ static void demo_pre_frame_(EngContext* ctx) {
     }
 }
 
-static void demo_debug_stats_(EngContext* ctx, UI_Context* ui) {
+static void demo_debug_tab_(EngContext* ctx, UI_Context* ui) {
     EngState* eng = ctx->engine;
     DemoState* demo = demo_state_(ctx);
-    if (demo->settings.playerMode) {
+    const DemoSettings* settings = &demo->settings;
+
+    eng_dbg_kv(ui, "grid", UI_COLOR_TEXT, "{}x{}  ({} colliders)",
+               settings->gridSide, settings->gridSide, demo->colliders.count);
+    eng_dbg_kv(ui, "lanes", UI_COLOR_TEXT, "{} max  threaded {}",
+               settings->maxLanes, str8(settings->threadedExtract ? "on" : "off"));
+    eng_dbg_kv(ui, "mode", UI_COLOR_TEXT, "{}  animate {}",
+               str8(settings->playerMode ? "player" : "orbit"),
+               str8(settings->animate ? "on" : "off"));
+
+    if (settings->playerMode) {
+        eng_dbg_section_(ui, "collision");
         const DemoTickStats* tick = &demo->game.lastTickStats;
-        ui_label_value(ui, UI_COLOR_TEXT_DIM, "collision  colliders {}  contacts {}  depth {}  tick {}us",
-                      demo->colliders.count, tick->contactCount,
-                      (F64)tick->deepestDepth, eng->lastSimTickNanos / 1000ull);
+        eng_dbg_kv(ui, "contacts", UI_COLOR_TEXT, "{}", tick->contactCount);
+        eng_dbg_kv(ui, "deepest depth", UI_COLOR_TEXT, "{:.3}", (F64)tick->deepestDepth);
+        eng_dbg_kv(ui, "tick", UI_COLOR_TEXT, "{}us", eng->lastSimTickNanos / 1000ull);
     }
 }
 
@@ -121,7 +132,7 @@ static const EngProject* eng_project_(void) {
         .frame = demo_scene_submit,
         .panels = demo_panels_,
         .panels_post = demo_panels_post_,
-        .debug_stats = demo_debug_stats_,
+        .debug_tab = demo_debug_tab_,
     };
     return &project;
 }

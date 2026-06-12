@@ -903,3 +903,24 @@ TextAtlasUpload text_atlas_full_upload(TextContext* text) {
     result.pitch = text->atlasPitch;
     return result;
 }
+
+TextStats text_stats(TextContext* text) {
+    TextStats result = {};
+    if (!text) {
+        return result;
+    }
+    result.fontCount = text->fontCount;
+    result.maxFonts = text->maxFonts;
+    result.glyphCount = text->glyphCount;
+    result.maxGlyphs = text->maxGlyphs;
+    result.atlasWidth = text->atlasWidth;
+    result.atlasHeight = text->atlasHeight;
+    result.shelfX = text->shelfX;
+    result.shelfY = text->shelfY;
+    result.shelfHeight = text->shelfHeight;
+    result.runHits = text->runHits;
+    result.runMisses = text->runMisses;
+    result.runBypasses = text->runBypasses;
+    result.runEvictions = text->runEvictions;
+    return result;
+}

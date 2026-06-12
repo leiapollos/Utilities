@@ -357,7 +357,7 @@ void prof_init() {
     }
     MEMSET(&g_prof, 0, sizeof(g_prof));
 
-    g_prof.arena = arena_alloc(.arenaSize = MB(96), .committedSize = MB(1), .flags = ArenaFlags_DoChain);
+    g_prof.arena = arena_alloc(.arenaSize = MB(96), .committedSize = MB(1), .flags = ArenaFlags_DoChain, .debugName = "prof");
     if (!g_prof.arena) {
         return;
     }

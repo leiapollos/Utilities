@@ -56,6 +56,8 @@ enum UI_WidgetKind {
     UI_WidgetKind_ScrollRegion,
     UI_WidgetKind_Edit,
     UI_WidgetKind_Plot,
+    UI_WidgetKind_Meter,
+    UI_WidgetKind_AtlasPreview,
 };
 
 struct UI_Widget {
@@ -316,6 +318,10 @@ void ui_spacer(UI_Context* ui, UI_Size size);
 void ui_label(UI_Context* ui, StringU8 text);
 void ui_label_colored(UI_Context* ui, StringU8 text, U32 rgba8);
 void ui_label_value_(UI_Context* ui, U32 rgba8, StringU8 fmt, const Str8FmtArg* args, U64 argCount);
+void ui_label_value_cell_(UI_Context* ui, F32 cellWidth, F32 align, U32 rgba8, StringU8 fmt,
+                          const Str8FmtArg* args, U64 argCount);
+void ui_meter(UI_Context* ui, F32 fraction, U32 fillRgba8, UI_Size width, UI_Size height);
+void ui_atlas_preview(UI_Context* ui, UI_Size width, UI_Size height);
 
 #define ui_label_value(ui, rgba8, fmt, ...)                                                 \
     ([&](){                                                                                 \
@@ -323,6 +329,15 @@ void ui_label_value_(UI_Context* ui, U32 rgba8, StringU8 fmt, const Str8FmtArg* 
         const U64 uiValueCount_ = (U64)((sizeof(uiValueArgs_) / sizeof(Str8FmtArg)) - 1);   \
         const Str8FmtArg* uiValuePtr_ = (uiValueCount_ > 0) ? (uiValueArgs_ + 1) : nullptr; \
         ui_label_value_((ui), (rgba8), str8(fmt), uiValuePtr_, uiValueCount_);              \
+    }())
+
+#define ui_value_cell(ui, cellWidth, align, rgba8, fmt, ...)                                \
+    ([&](){                                                                                 \
+        const Str8FmtArg uiValueArgs_[] = { Str8FmtArg(), __VA_ARGS__ };                    \
+        const U64 uiValueCount_ = (U64)((sizeof(uiValueArgs_) / sizeof(Str8FmtArg)) - 1);   \
+        const Str8FmtArg* uiValuePtr_ = (uiValueCount_ > 0) ? (uiValueArgs_ + 1) : nullptr; \
+        ui_label_value_cell_((ui), (cellWidth), (align), (rgba8), str8(fmt), uiValuePtr_,   \
+                             uiValueCount_);                                                \
     }())
 UI_Signal ui_button(UI_Context* ui, StringU8 label);
 B32 ui_checkbox(UI_Context* ui, StringU8 label, B32* value);

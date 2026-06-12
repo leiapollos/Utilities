@@ -881,6 +881,31 @@ static void ui_paint_widget_enter(UI_Context* ui, UI_Widget* widget, const F32* 
             }
         }
         break;
+        case UI_WidgetKind_Meter: {
+            F32 fraction = ui_saturate(widget->kindParams[0]);
+            F32 inset = 1.0f;
+            F32 innerW = MAX(0.0f, (maxX - minX) - 2.0f * inset);
+            F32 fillMaxX = minX + inset + fraction * innerW;
+            if (fillMaxX > minX + inset) {
+                draw2d_rect(draw, UI_LAYER, minX + inset, minY + inset, fillMaxX, maxY - inset,
+                            widget->kindBits);
+            }
+        }
+        break;
+        case UI_WidgetKind_AtlasPreview: {
+            Draw2DQuad quad;
+            quad.minX = minX + 2.0f;
+            quad.minY = minY + 2.0f;
+            quad.maxX = maxX - 2.0f;
+            quad.maxY = maxY - 2.0f;
+            quad.minU = 0.0f;
+            quad.minV = 0.0f;
+            quad.maxU = 1.0f;
+            quad.maxV = 1.0f;
+            quad.rgba8 = 0xFFFFFFFFu;
+            draw2d_glyph_quads(draw, UI_LAYER, &quad, 1u, 0.0f, 0.0f);
+        }
+        break;
         case UI_WidgetKind_Edit: {
             F32 padX = widget->padding[UI_Axis_X];
             F32 innerMinX = minX + padX;
@@ -1405,10 +1430,12 @@ static U64 ui_value_args_key_(StringU8 fmt, const Str8FmtArg* args, U64 argCount
     return hash ? hash : 1ull;
 }
 
-void ui_label_value_(UI_Context* ui, U32 rgba8, StringU8 fmt, const Str8FmtArg* args, U64 argCount) {
+static void ui_label_value_impl_(UI_Context* ui, F32 cellWidth, F32 align, U32 rgba8,
+                                 StringU8 fmt, const Str8FmtArg* args, U64 argCount) {
     if (!ui) {
         return;
     }
+    UI_Size widthSize = (cellWidth > 0.0f) ? ui_px(cellWidth) : ui_text_size();
     UI_State* state = ui->state;
     U64 valueKey = ui_value_args_key_(fmt, args, argCount);
     U32 frame = (U32)state->frameIndex;
@@ -1422,7 +1449,8 @@ void ui_label_value_(UI_Context* ui, U32 rgba8, StringU8 fmt, const Str8FmtArg* 
                 text_run_resolve(ui->textContext, entry->runSlot, entry->runKey, &view)) {
                 entry->lastUsedFrame = frame;
                 state->stats.valueRunHits += 1u;
-                U32 index = ui_widget_add(ui, 0ull, 0u, UI_WidgetKind_Plain, ui_text_size(), ui_text_size());
+                U32 index = ui_widget_add(ui, 0ull, 0u, UI_WidgetKind_Plain, widthSize, ui_text_size());
+                ui_widget(ui, index)->textAlign = align;
                 ui_widget_set_run(ui, index, view, 1, rgba8);
                 return;
             }
@@ -1462,8 +1490,42 @@ void ui_label_value_(UI_Context* ui, U32 rgba8, StringU8 fmt, const Str8FmtArg* 
         victim->width = view.width;
         victim->height = view.height;
     }
-    U32 index = ui_widget_add(ui, 0ull, 0u, UI_WidgetKind_Plain, ui_text_size(), ui_text_size());
+    U32 index = ui_widget_add(ui, 0ull, 0u, UI_WidgetKind_Plain, widthSize, ui_text_size());
+    ui_widget(ui, index)->textAlign = align;
     ui_widget_set_run(ui, index, view, text.size != 0u, rgba8);
+}
+
+void ui_label_value_(UI_Context* ui, U32 rgba8, StringU8 fmt, const Str8FmtArg* args, U64 argCount) {
+    ui_label_value_impl_(ui, 0.0f, 0.0f, rgba8, fmt, args, argCount);
+}
+
+void ui_label_value_cell_(UI_Context* ui, F32 cellWidth, F32 align, U32 rgba8, StringU8 fmt,
+                          const Str8FmtArg* args, U64 argCount) {
+    ui_label_value_impl_(ui, cellWidth, align, rgba8, fmt, args, argCount);
+}
+
+void ui_meter(UI_Context* ui, F32 fraction, U32 fillRgba8, UI_Size width, UI_Size height) {
+    if (!ui) {
+        return;
+    }
+    U32 index = ui_widget_add(ui, 0ull, UI_WidgetFlag_DrawBackground | UI_WidgetFlag_DrawBorder,
+                              UI_WidgetKind_Meter, width, height);
+    UI_Widget* widget = ui_widget(ui, index);
+    widget->backgroundColor = UI_COLOR_EDIT_BG;
+    widget->borderColor = UI_COLOR_PANEL_BORDER;
+    widget->kindParams[0] = fraction;
+    widget->kindBits = fillRgba8;
+}
+
+void ui_atlas_preview(UI_Context* ui, UI_Size width, UI_Size height) {
+    if (!ui) {
+        return;
+    }
+    U32 index = ui_widget_add(ui, 0ull, UI_WidgetFlag_DrawBackground | UI_WidgetFlag_DrawBorder,
+                              UI_WidgetKind_AtlasPreview, width, height);
+    UI_Widget* widget = ui_widget(ui, index);
+    widget->backgroundColor = UI_COLOR_EDIT_BG;
+    widget->borderColor = UI_COLOR_PANEL_BORDER;
 }
 
 UI_Signal ui_button(UI_Context* ui, StringU8 label) {

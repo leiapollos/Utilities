@@ -44,6 +44,15 @@ struct FileStreamStats {
     U32 failedCount;
 };
 
+// Debug iteration: walk slots [0, file_stream_capacity) and skip empty ones.
+struct FileEntryInfo {
+    StringU8 path;
+    U64 size;
+    U64 generation;
+    FileStatus status;
+    U32 flags;
+};
+
 B32 file_handle_is_zero(FileHandle handle);
 B32 file_stream_create(const FileStreamDesc* desc, FileStream* outStream);
 FileStream* file_stream_alloc(const FileStreamDesc* desc);
@@ -54,3 +63,5 @@ ContentHash file_hash_from_path_range(FileStream* stream, StringU8 path, RangeU6
 void file_stream_tick(FileStream* stream, U64 nowNs, U32 maxChecks);
 FileView file_view(FileStream* stream, FileHandle handle);
 FileStreamStats file_stream_stats(FileStream* stream);
+U32 file_stream_capacity(FileStream* stream);
+B32 file_stream_entry_at(FileStream* stream, U32 slot, FileEntryInfo* outInfo);

@@ -376,3 +376,23 @@ FileStreamStats file_stream_stats(FileStream* stream) {
     }
     return result;
 }
+
+U32 file_stream_capacity(FileStream* stream) {
+    return stream ? stream->files.capacity : 0u;
+}
+
+B32 file_stream_entry_at(FileStream* stream, U32 slot, FileEntryInfo* outInfo) {
+    if (!stream || !outInfo || !slot_map_is_occupied(&stream->files, slot)) {
+        return 0;
+    }
+    FileNode* node = (FileNode*)slot_map_item_at(&stream->files, slot);
+    if (!node) {
+        return 0;
+    }
+    outInfo->path = node->path;
+    outInfo->size = node->lastWriteSize;
+    outInfo->generation = node->generation;
+    outInfo->status = node->status;
+    outInfo->flags = node->flags;
+    return 1;
+}

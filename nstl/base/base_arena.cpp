@@ -7,6 +7,74 @@
 
 #include "base_threading.hpp"
 
+// ////////////////////////
+// Debug registry
+
+struct ArenaDebugSlot {
+    Arena* arena;
+    const char* name;
+};
+
+static ArenaDebugSlot g_arenaDebugSlots[ARENA_DEBUG_MAX];
+static U32 g_arenaDebugCount;
+static U32 g_arenaDebugLock;
+
+static void arena_debug_lock_() {
+    while (ATOMIC_EXCHANGE(&g_arenaDebugLock, 1u, MEMORY_ORDER_ACQUIRE) != 0u) {
+    }
+}
+
+static void arena_debug_unlock_() {
+    ATOMIC_STORE(&g_arenaDebugLock, 0u, MEMORY_ORDER_RELEASE);
+}
+
+static void arena_debug_register_(Arena* arena, const char* name) {
+    arena_debug_lock_();
+    if (g_arenaDebugCount < ARENA_DEBUG_MAX) {
+        g_arenaDebugSlots[g_arenaDebugCount].arena = arena;
+        g_arenaDebugSlots[g_arenaDebugCount].name = name;
+        g_arenaDebugCount += 1u;
+    }
+    arena_debug_unlock_();
+}
+
+static void arena_debug_unregister_(Arena* arena) {
+    arena_debug_lock_();
+    for (U32 i = 0; i < g_arenaDebugCount; ++i) {
+        if (g_arenaDebugSlots[i].arena == arena) {
+            g_arenaDebugCount -= 1u;
+            g_arenaDebugSlots[i] = g_arenaDebugSlots[g_arenaDebugCount];
+            break;
+        }
+    }
+    arena_debug_unlock_();
+}
+
+U32 arena_debug_snapshot(ArenaDebugInfo* out, U32 capacity) {
+    if (!out || capacity == 0u) {
+        return 0;
+    }
+    arena_debug_lock_();
+    U32 count = MIN(g_arenaDebugCount, capacity);
+    for (U32 i = 0; i < count; ++i) {
+        Arena* head = g_arenaDebugSlots[i].arena;
+        ArenaDebugInfo* info = out + i;
+        info->name = g_arenaDebugSlots[i].name;
+        info->reserved = 0;
+        info->committed = 0;
+        info->blockCount = 0;
+        for (Arena* block = head->current; block != 0; block = block->prev) {
+            info->reserved += block->reserved;
+            info->committed += block->committed;
+            info->blockCount += 1u;
+        }
+        info->pos = arena_get_pos(head);
+        info->highWater = head->highWater;
+    }
+    arena_debug_unlock_();
+    return count;
+}
+
 Arena* arena_alloc_(const ArenaParameters& parameters) {
     ASSERT_DEBUG(parameters.arenaSize >= parameters.committedSize && "Arena size should be bigger than commit size");
 
@@ -32,6 +100,7 @@ Arena* arena_alloc_(const ArenaParameters& parameters) {
     arena->reserved = reserveSize;
     arena->committed = initialCommitSize;
     arena->pos = ARENA_HEADER_SIZE;
+    arena->highWater = 0;
     arena->flags = parameters.flags;
     arena->current = arena;
     arena->startPos = 0;
@@ -40,6 +109,10 @@ Arena* arena_alloc_(const ArenaParameters& parameters) {
     ASAN_POISON_MEMORY_REGION(raw, initialCommitSize);
     ASAN_UNPOISON_MEMORY_REGION(raw, ARENA_HEADER_SIZE);
 
+    if (parameters.debugName) {
+        arena_debug_register_(arena, parameters.debugName);
+    }
+
     return arena;
 }
 
@@ -47,6 +120,8 @@ void arena_release(Arena* arena) {
     if (!arena) {
         return;
     }
+
+    arena_debug_unregister_(arena);
 
     for (Arena* n = arena->current,* prev = 0; n != 0; n = prev) {
         prev = n->prev;
@@ -83,6 +158,10 @@ void* arena_push(Arena* arena, U64 size, U64 alignment) {
             void* result = (U8*) current + alignedPos;
             current->pos = newPos;
             arena->current = current;
+            U64 absolutePos = (current->startPos + newPos) - ARENA_HEADER_SIZE;
+            if (absolutePos > arena->highWater) {
+                arena->highWater = absolutePos;
+            }
             ASAN_UNPOISON_MEMORY_REGION(result, size);
 
             if (UNLIKELY(result == nullptr)) {

@@ -111,8 +111,8 @@ static void demo_controls_panel(EngContext* ctx, UI_Context* ui) {
         demo_settings_reset(demo);
     }
     ui_spacer(ui, ui_grow(1.0f));
-    if (ui_button(ui, str8("hide stats [F1]")).clicked) {
-        ctx->engine->debugOverlayVisible = !ctx->engine->debugOverlayVisible;
+    if (ui_button(ui, str8("debug [F1]")).clicked) {
+        ctx->engine->debug.windowVisible = !ctx->engine->debug.windowVisible;
     }
     ui_row_end(ui);
 

@@ -409,8 +409,10 @@ struct GfxStats {
     U32 resourceTableCount;
     U32 tempOverflowCount;
     U64 tempBytesUsed;
+    U64 tempBytesCap;
     U32 stagingOverflowCount;
     U64 stagingBytesUsed;
+    U64 stagingBytesCap;
     U64 frameIndex;
 };
 

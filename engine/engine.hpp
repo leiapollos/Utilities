@@ -69,7 +69,7 @@ struct EngProject {
     void (*frame)(EngContext* ctx, EngRendererFrame* frame); // scene submission
     void (*panels)(EngContext* ctx, UI_Context* ui);         // before engine panels
     void (*panels_post)(EngContext* ctx, UI_Context* ui);    // after all panels
-    void (*debug_stats)(EngContext* ctx, UI_Context* ui);    // extra stats lines
+    void (*debug_tab)(EngContext* ctx, UI_Context* ui);      // project tab in the debug window
 };
 
 // Defined by the project TU after the engine sources; the engine calls

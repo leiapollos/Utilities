@@ -93,3 +93,21 @@ UTILITIES_SHARED_API void text_frame_advance(TextContext* text);
 
 UTILITIES_SHARED_API void text_white_uv(TextContext* text, F32* outU, F32* outV);
 UTILITIES_SHARED_API TextAtlasUpload text_atlas_full_upload(TextContext* text);
+
+struct TextStats {
+    U32 fontCount;
+    U32 maxFonts;
+    U32 glyphCount;
+    U32 maxGlyphs;
+    U32 atlasWidth;
+    U32 atlasHeight;
+    U32 shelfX;
+    U32 shelfY;
+    U32 shelfHeight;
+    U64 runHits;
+    U64 runMisses;
+    U64 runBypasses;
+    U64 runEvictions;
+};
+
+UTILITIES_SHARED_API TextStats text_stats(TextContext* text);

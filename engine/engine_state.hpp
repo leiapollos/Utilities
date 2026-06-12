@@ -11,7 +11,7 @@
 
 #define ENG_STATE_ID(a, b, c, d) ((((U64)(a)) << 56u) | (((U64)(b)) << 48u) | (((U64)(c)) << 40u) | (((U64)(d)) << 32u) | 0x53544154u)
 
-#define ENG_STATE_VERSION 3u
+#define ENG_STATE_VERSION 4u
 
 struct EngState;
 
@@ -236,6 +236,45 @@ struct EngAudio {
     B32 settled;
 };
 
+// Per-frame debug history rings, pushed once per frame from the stats the
+// systems already publish; the debug window plots them as sparklines.
+#define ENG_DBG_HISTORY 256u
+
+enum EngDbgSeriesId {
+    EngDbgSeries_FrameMs = 0,
+    EngDbgSeries_SimTickUs,
+    EngDbgSeries_Draws,
+    EngDbgSeries_Quads2D,
+    EngDbgSeries_Widgets,
+    EngDbgSeries_Renderables,
+    EngDbgSeries_GfxTempKB,
+    EngDbgSeries_AudioCbUs,
+    EngDbgSeries_COUNT,
+};
+
+enum EngDbgTab {
+    EngDbgTab_Overview = 0,
+    EngDbgTab_Profiler,
+    EngDbgTab_Graphics,
+    EngDbgTab_Memory,
+    EngDbgTab_Assets,
+    EngDbgTab_Sim,
+    EngDbgTab_Audio,
+    EngDbgTab_UI,
+    EngDbgTab_Project,
+    EngDbgTab_COUNT,
+};
+
+struct EngDebug {
+    B32 windowVisible;
+    U32 activeTab;
+    B32 profFlat;
+    U32 profSelectedSite;
+    F32 masterGain;
+    U32 seriesCursor;
+    F32 series[EngDbgSeries_COUNT][ENG_DBG_HISTORY];
+};
+
 struct EngState {
     U32 windowWidth;
     U32 windowHeight;
@@ -250,10 +289,7 @@ struct EngState {
     U32 simClampCount;
     U64 lastSimTickNanos;
     EngReplay replay;
-    B32 debugOverlayVisible;
-    B32 profilerVisible;
-    B32 profFlatView;
-    U32 profSelectedSite;
+    EngDebug debug;
 
     JobSystem* jobSystem;
     U32 workerCount;

@@ -58,8 +58,9 @@ static void eng_state_init_(EngContext* ctx, EngState* engine) {
     MEMSET(engine, 0, sizeof(*engine));
     engine->windowWidth = ctx->host->windowWidth;
     engine->windowHeight = ctx->host->windowHeight;
-    engine->debugOverlayVisible = 1;
-    engine->profilerVisible = 1;
+    engine->debug.windowVisible = 1;
+    engine->debug.activeTab = EngDbgTab_Overview;
+    engine->debug.masterGain = 1.0f;
     // UTILITIES_FIXED_DT=1 locks every frame to one tick so
     // frame-indexed captures stay deterministic under load.
     engine->simForcedDt = eng_env_u32_(str8("UTILITIES_FIXED_DT"), 0u, 0u, 1u)
@@ -232,12 +233,17 @@ static void eng_frame(EngHost* host, HOT_StateStore* store, const EngInput* inpu
         if (event->tag == OS_GraphicsEvent_Tag_KeyDown &&
             event->keyDown.keyCode == OS_KeyCode_F1 &&
             !event->keyDown.isRepeat) {
-            state->debugOverlayVisible = !state->debugOverlayVisible;
+            state->debug.windowVisible = !state->debug.windowVisible;
         }
         if (event->tag == OS_GraphicsEvent_Tag_KeyDown &&
             event->keyDown.keyCode == OS_KeyCode_F2 &&
             !event->keyDown.isRepeat) {
-            state->profilerVisible = !state->profilerVisible;
+            if (state->debug.windowVisible && state->debug.activeTab == EngDbgTab_Profiler) {
+                state->debug.windowVisible = 0;
+            } else {
+                state->debug.windowVisible = 1;
+                state->debug.activeTab = EngDbgTab_Profiler;
+            }
         }
         if (simEnabled &&
             event->tag == OS_GraphicsEvent_Tag_KeyDown &&
@@ -322,7 +328,8 @@ static B32 eng_resource_cache_init(EngContext* ctx) {
 
     state->resources.arena = arena_alloc(.arenaSize = MB(16),
                                        .committedSize = KB(64),
-                                       .flags = ArenaFlags_DoChain);
+                                       .flags = ArenaFlags_DoChain,
+                                       .debugName = "engine/resources");
     if (state->resources.arena == 0) {
         LOG_ERROR("resource", "Failed to create resource arena");
         return 0;

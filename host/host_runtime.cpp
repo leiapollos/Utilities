@@ -542,7 +542,8 @@ static B32 host_allocate_memory(HostState* state) {
     state->programArena = arena_alloc(
         .arenaSize = MB(256),
         .committedSize = MB(8),
-        .flags = ArenaFlags_DoChain
+        .flags = ArenaFlags_DoChain,
+        .debugName = "host/program"
     );
     if (!state->programArena) {
         LOG_ERROR("host", "Failed to allocate program arena ({} bytes)", MB(256));
@@ -553,7 +554,8 @@ static B32 host_allocate_memory(HostState* state) {
     state->frameArena = arena_alloc(
         .arenaSize = MB(16),
         .committedSize = MB(1),
-        .flags = ArenaFlags_DoChain
+        .flags = ArenaFlags_DoChain,
+        .debugName = "host/frame"
     );
     if (!state->frameArena) {
         LOG_ERROR("host", "Failed to allocate frame arena");
@@ -564,7 +566,8 @@ static B32 host_allocate_memory(HostState* state) {
     state->pathArena = arena_alloc(
         .arenaSize = KB(64),
         .committedSize = KB(64),
-        .flags = ArenaFlags_DoChain
+        .flags = ArenaFlags_DoChain,
+        .debugName = "host/path"
     );
     if (!state->pathArena) {
         LOG_ERROR("host", "Failed to allocate path arena");

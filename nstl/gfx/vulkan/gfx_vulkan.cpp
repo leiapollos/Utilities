@@ -3077,6 +3077,8 @@ GfxFrame* gfx_begin_frame(GfxDevice* device, U32 width, U32 height) {
     device->stats.tempBytesUsed = 0u;
     device->stats.stagingOverflowCount = 0u;
     device->stats.stagingBytesUsed = 0u;
+    device->stats.tempBytesCap = frame->tempSize;
+    device->stats.stagingBytesCap = frame->stagingSize;
     device->stats.resourceTableCount = device->resourceTable.liveCount;
     device->stats.frameIndex = device->frameSerial;
     return frame;
