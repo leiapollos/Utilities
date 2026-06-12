@@ -10,8 +10,8 @@ static void test_ordering_(void) {
     Vec3F32 forward = test_vec3_(0.0f, 0.0f, 1.0f);
 
     F32 sharedCenter[3] = {0.0f, 0.0f, 10.0f};
-    F32 contentKey = app_world_transparent_depth_(sharedCenter, 1.0f, eye, forward);
-    F32 shellKey = app_world_transparent_depth_(sharedCenter, 5.0f, eye, forward);
+    F32 contentKey = eng_world_transparent_depth_(sharedCenter, 1.0f, eye, forward);
+    F32 shellKey = eng_world_transparent_depth_(sharedCenter, 5.0f, eye, forward);
     TEST_CHECK_NEAR(contentKey, 9.0f, 1e-6f);
     TEST_CHECK_NEAR(shellKey, 5.0f, 1e-6f);
     // Shell sorts nearer → later in the back-to-front (descending) walk.
@@ -25,7 +25,7 @@ static void test_ordering_(void) {
         depths[1] = shellKey;
         U32 order[2];
         U32 scratch[2];
-        app_world_order_ascending_(depths, order, scratch, 2u);
+        eng_world_order_ascending_(depths, order, scratch, 2u);
         TEST_CHECK(order[0] == 1u && order[1] == 0u);
         // Reversed copy-out: content (deeper) first, shell after.
         TEST_CHECK(order[2u - 1u - 0u] == 0u);
@@ -36,7 +36,7 @@ static void test_ordering_(void) {
         F32 depths[9] = {3.5f, -1.25f, 0.0f, 3.5f, 7.25f, -8.5f, 0.0f, 0.001f, -0.001f};
         U32 order[9];
         U32 scratch[9];
-        app_world_order_ascending_(depths, order, scratch, 9u);
+        eng_world_order_ascending_(depths, order, scratch, 9u);
         B32 ascending = 1;
         for (U32 at = 0u; at + 1u < 9u; ++at) {
             if (depths[order[at]] > depths[order[at + 1u]]) {
@@ -67,7 +67,7 @@ static void test_ordering_(void) {
             F32 magnitude = (F32)(lcg >> 8u) / 1048576.0f;
             depths[at] = ((lcg & 1u) != 0u) ? -magnitude : magnitude;
         }
-        app_world_order_ascending_(depths, order, scratch, TEST_SORT_N);
+        eng_world_order_ascending_(depths, order, scratch, TEST_SORT_N);
         B32 ascending = 1;
         U64 indexSum = 0ull;
         for (U32 at = 0u; at < TEST_SORT_N; ++at) {

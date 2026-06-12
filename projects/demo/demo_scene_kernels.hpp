@@ -14,26 +14,26 @@
 
 #pragma once
 
-#include "app_game_kernels.hpp"
+#include "projects/demo/demo_game_kernels.hpp"
 
-#define APP_SCENE_GRID_SPACING 2.2f
-#define APP_SCENE_CELL_HALF_WIDTH 0.5f
-#define APP_SCENE_MODEL_PROXY_RADIUS 1.3f
-#define APP_SCENE_MODEL_PROXY_Y 0.9f
-#define APP_SCENE_SPAWN_MARGIN 8.0f
-#define APP_SCENE_PLAYGROUND_CAP 24u
+#define DEMO_SCENE_GRID_SPACING 2.2f
+#define DEMO_SCENE_CELL_HALF_WIDTH 0.5f
+#define DEMO_SCENE_MODEL_PROXY_RADIUS 1.3f
+#define DEMO_SCENE_MODEL_PROXY_Y 0.9f
+#define DEMO_SCENE_SPAWN_MARGIN 8.0f
+#define DEMO_SCENE_PLAYGROUND_CAP 24u
 
-static F32 app_scene_grid_extent_(U32 side) {
-    return (F32)side * APP_SCENE_GRID_SPACING * 0.5f;
+static F32 demo_scene_grid_extent_(U32 side) {
+    return (F32)side * DEMO_SCENE_GRID_SPACING * 0.5f;
 }
 
-enum AppSceneCellKind {
-    AppSceneCell_SolidBox = 0u,
-    AppSceneCell_Ghost = 1u,
-    AppSceneCell_ModelProxy = 2u,
+enum DemoSceneCellKind {
+    DemoSceneCell_SolidBox = 0u,
+    DemoSceneCell_Ghost = 1u,
+    DemoSceneCell_ModelProxy = 2u,
 };
 
-struct AppSceneCell {
+struct DemoSceneCell {
     U32 kind;
     U32 cellSeed;
     U32 lane;            // cellSeed % 11: render bin/material/model choice
@@ -44,22 +44,22 @@ struct AppSceneCell {
     F32 worldZ;
 };
 
-static AppSceneCell app_scene_classify_cell_(U32 x, U32 z, U32 side) {
-    AppSceneCell cell = {};
+static DemoSceneCell demo_scene_classify_cell_(U32 x, U32 z, U32 side) {
+    DemoSceneCell cell = {};
     F32 half = (F32)(side - 1u) * 0.5f;
     cell.cellSeed = x * 31u + z * 17u;
     cell.lane = cell.cellSeed % 11u;
     cell.sphereMesh = ((cell.cellSeed & 3u) == 0u) ? 1 : 0;
     cell.animateEligible = ((cell.cellSeed % 7u) == 0u) ? 1 : 0;
     cell.height = 0.5f + (F32)((cell.cellSeed >> 2u) % 5u) * 0.22f;
-    cell.worldX = ((F32)x - half) * APP_SCENE_GRID_SPACING;
-    cell.worldZ = ((F32)z - half) * APP_SCENE_GRID_SPACING;
+    cell.worldX = ((F32)x - half) * DEMO_SCENE_GRID_SPACING;
+    cell.worldZ = ((F32)z - half) * DEMO_SCENE_GRID_SPACING;
     if (cell.lane == 9u || cell.lane == 1u) {
-        cell.kind = AppSceneCell_ModelProxy;
+        cell.kind = DemoSceneCell_ModelProxy;
     } else if (cell.animateEligible || cell.lane == 5u || cell.lane == 7u) {
-        cell.kind = AppSceneCell_Ghost;
+        cell.kind = DemoSceneCell_Ghost;
     } else {
-        cell.kind = AppSceneCell_SolidBox;
+        cell.kind = DemoSceneCell_SolidBox;
     }
     return cell;
 }
@@ -74,16 +74,16 @@ static AppSceneCell app_scene_classify_cell_(U32 x, U32 z, U32 side) {
 // non-axis-aligned slide feel. The render derives from this table — one
 // source of truth in each direction, never two.
 
-struct AppScenePlayground {
+struct DemoScenePlayground {
     U32 count;
-    AppCollider colliders[APP_SCENE_PLAYGROUND_CAP];
+    DemoCollider colliders[DEMO_SCENE_PLAYGROUND_CAP];
 };
 
-static AppCollider* app_scene_playground_slot_(AppScenePlayground* playground) {
-    ASSERT_DEBUG(playground->count < APP_SCENE_PLAYGROUND_CAP);
-    AppCollider* collider = playground->colliders + playground->count;
+static DemoCollider* demo_scene_playground_slot_(DemoScenePlayground* playground) {
+    ASSERT_DEBUG(playground->count < DEMO_SCENE_PLAYGROUND_CAP);
+    DemoCollider* collider = playground->colliders + playground->count;
     playground->count += 1u;
-    collider->kind = AppCollider_Box;
+    collider->kind = DemoCollider_Box;
     collider->radius = 0.0f;
     collider->orientation.x = 0.0f;
     collider->orientation.y = 0.0f;
@@ -93,10 +93,10 @@ static AppCollider* app_scene_playground_slot_(AppScenePlayground* playground) {
 }
 
 // Box flush with the ground plane: centerY/halfY derive from the top.
-static void app_scene_playground_box_(AppScenePlayground* playground, F32 centerX, F32 centerZ,
+static void demo_scene_playground_box_(DemoScenePlayground* playground, F32 centerX, F32 centerZ,
                                       F32 topY, F32 halfX, F32 halfZ) {
-    AppCollider* collider = app_scene_playground_slot_(playground);
-    F32 halfY = (topY - APP_GAME_GROUND_Y) * 0.5f;
+    DemoCollider* collider = demo_scene_playground_slot_(playground);
+    F32 halfY = (topY - DEMO_GAME_GROUND_Y) * 0.5f;
     collider->center.x = centerX;
     collider->center.y = topY - halfY;
     collider->center.z = centerZ;
@@ -105,24 +105,24 @@ static void app_scene_playground_box_(AppScenePlayground* playground, F32 center
     collider->halfExtents.z = halfZ;
 }
 
-static void app_scene_build_playground_(F32 originX, F32 originZ, AppScenePlayground* playground) {
+static void demo_scene_build_playground_(F32 originX, F32 originZ, DemoScenePlayground* playground) {
     playground->count = 0u;
 
     // Court walls, +z side open toward the grid. [0..2]
-    app_scene_playground_box_(playground, originX + 18.0f, originZ, 2.5f, 0.5f, 18.5f);
-    app_scene_playground_box_(playground, originX - 18.0f, originZ, 2.5f, 0.5f, 18.5f);
-    app_scene_playground_box_(playground, originX, originZ - 18.0f, 2.5f, 18.5f, 0.5f);
+    demo_scene_playground_box_(playground, originX + 18.0f, originZ, 2.5f, 0.5f, 18.5f);
+    demo_scene_playground_box_(playground, originX - 18.0f, originZ, 2.5f, 0.5f, 18.5f);
+    demo_scene_playground_box_(playground, originX, originZ - 18.0f, 2.5f, 18.5f, 0.5f);
 
     // Platform, top at 3.0. [3]
-    app_scene_playground_box_(playground, originX - 10.0f, originZ - 10.0f, 3.0f, 4.0f, 4.0f);
+    demo_scene_playground_box_(playground, originX - 10.0f, originZ - 10.0f, 3.0f, 4.0f, 4.0f);
 
     // Ramp onto the platform's +x face: 30 degrees, surface running from
     // the platform top edge (x = origin-6, y = 3) down toward +x. The
     // surface normal is (sin30, cos30, 0) = (0.5, 0.866, 0) — inside the
     // grounded cone, pinned in the suite. [4]
     {
-        AppCollider* ramp = app_scene_playground_slot_(playground);
-        ramp->kind = AppCollider_OrientedBox;
+        DemoCollider* ramp = demo_scene_playground_slot_(playground);
+        ramp->kind = DemoCollider_OrientedBox;
         F32 sin30 = 0.5f;
         F32 cos30 = 0.8660254f;
         F32 slopeHalf = 3.0f;
@@ -152,20 +152,20 @@ static void app_scene_build_playground_(F32 originX, F32 originZ, AppScenePlaygr
     for (U32 step = 0u; step < 5u; ++step) {
         F32 topY = 0.6f * (F32)(step + 1u);
         F32 centerZ = (originZ - 5.2f) + (F32)(4u - step) * 1.6f;
-        app_scene_playground_box_(playground, originX - 10.0f, centerZ, topY, 2.0f, 0.8f);
+        demo_scene_playground_box_(playground, originX - 10.0f, centerZ, topY, 2.0f, 0.8f);
     }
 
     // Pillars in the east half, tops at 3.5 (reachable from the platform,
     // not from the ground). [10..13]
-    app_scene_playground_box_(playground, originX + 6.0f, originZ + 4.0f, 3.5f, 0.6f, 0.6f);
-    app_scene_playground_box_(playground, originX + 10.0f, originZ + 1.0f, 3.5f, 0.6f, 0.6f);
-    app_scene_playground_box_(playground, originX + 7.0f, originZ - 3.0f, 3.5f, 0.6f, 0.6f);
-    app_scene_playground_box_(playground, originX + 12.0f, originZ - 6.0f, 3.5f, 0.6f, 0.6f);
+    demo_scene_playground_box_(playground, originX + 6.0f, originZ + 4.0f, 3.5f, 0.6f, 0.6f);
+    demo_scene_playground_box_(playground, originX + 10.0f, originZ + 1.0f, 3.5f, 0.6f, 0.6f);
+    demo_scene_playground_box_(playground, originX + 7.0f, originZ - 3.0f, 3.5f, 0.6f, 0.6f);
+    demo_scene_playground_box_(playground, originX + 12.0f, originZ - 6.0f, 3.5f, 0.6f, 0.6f);
 
     // A 45-degree wall segment for non-axis-aligned slide feel. [14]
     {
-        AppCollider* wall = app_scene_playground_slot_(playground);
-        wall->kind = AppCollider_OrientedBox;
+        DemoCollider* wall = demo_scene_playground_slot_(playground);
+        wall->kind = DemoCollider_OrientedBox;
         Vec3F32 yAxis;
         yAxis.x = 0.0f;
         yAxis.y = 1.0f;
@@ -186,53 +186,53 @@ static void app_scene_build_playground_(F32 originX, F32 originZ, AppScenePlaygr
 // radius landed at the proxy height). Iteration order — grid cells in
 // scan order, then the playground table — is part of the determinism
 // contract.
-static void app_scene_build_colliders_(U32 side, AppColliderSet* set) {
+static void demo_scene_build_colliders_(U32 side, DemoColliderSet* set) {
     set->count = 0u;
     set->dropped = 0u;
     for (U32 z = 0u; z < side; ++z) {
         for (U32 x = 0u; x < side; ++x) {
-            AppSceneCell cell = app_scene_classify_cell_(x, z, side);
-            if (cell.kind == AppSceneCell_Ghost) {
+            DemoSceneCell cell = demo_scene_classify_cell_(x, z, side);
+            if (cell.kind == DemoSceneCell_Ghost) {
                 continue;
             }
-            if (set->count >= APP_COLLIDER_CAP) {
+            if (set->count >= DEMO_COLLIDER_CAP) {
                 set->dropped += 1u;
                 continue;
             }
-            AppCollider* collider = set->colliders + set->count;
+            DemoCollider* collider = set->colliders + set->count;
             collider->orientation.x = 0.0f;
             collider->orientation.y = 0.0f;
             collider->orientation.z = 0.0f;
             collider->orientation.w = 1.0f;
-            if (cell.kind == AppSceneCell_ModelProxy) {
-                collider->kind = AppCollider_Sphere;
-                collider->radius = APP_SCENE_MODEL_PROXY_RADIUS;
+            if (cell.kind == DemoSceneCell_ModelProxy) {
+                collider->kind = DemoCollider_Sphere;
+                collider->radius = DEMO_SCENE_MODEL_PROXY_RADIUS;
                 collider->center.x = cell.worldX;
-                collider->center.y = APP_SCENE_MODEL_PROXY_Y;
+                collider->center.y = DEMO_SCENE_MODEL_PROXY_Y;
                 collider->center.z = cell.worldZ;
                 collider->halfExtents.x = 0.0f;
                 collider->halfExtents.y = 0.0f;
                 collider->halfExtents.z = 0.0f;
             } else {
-                collider->kind = AppCollider_Box;
+                collider->kind = DemoCollider_Box;
                 collider->radius = 0.0f;
                 collider->center.x = cell.worldX;
                 collider->center.y = cell.height * 0.5f;
                 collider->center.z = cell.worldZ;
-                collider->halfExtents.x = APP_SCENE_CELL_HALF_WIDTH;
+                collider->halfExtents.x = DEMO_SCENE_CELL_HALF_WIDTH;
                 collider->halfExtents.y = cell.height * 0.5f;
-                collider->halfExtents.z = APP_SCENE_CELL_HALF_WIDTH;
+                collider->halfExtents.z = DEMO_SCENE_CELL_HALF_WIDTH;
             }
             set->count += 1u;
         }
     }
 
-    AppScenePlayground playground;
-    F32 extent = app_scene_grid_extent_(side);
-    app_scene_build_playground_(extent + APP_SCENE_SPAWN_MARGIN, -(extent + APP_SCENE_SPAWN_MARGIN),
+    DemoScenePlayground playground;
+    F32 extent = demo_scene_grid_extent_(side);
+    demo_scene_build_playground_(extent + DEMO_SCENE_SPAWN_MARGIN, -(extent + DEMO_SCENE_SPAWN_MARGIN),
                                 &playground);
     for (U32 at = 0u; at < playground.count; ++at) {
-        if (set->count >= APP_COLLIDER_CAP) {
+        if (set->count >= DEMO_COLLIDER_CAP) {
             set->dropped += 1u;
             continue;
         }

@@ -10,12 +10,12 @@
 #include "nstl/gfx/gfx_include.hpp"
 #include "nstl/audio/audio.hpp"
 
-#define APP_ABI_VERSION 25u
-#define APP_STATE_SCHEMA_VERSION 2u
+#define ENG_ABI_VERSION 25u
+#define ENG_STATE_SCHEMA_VERSION 2u
 #if defined(PLATFORM_OS_WINDOWS)
-#define APP_MODULE_SOURCE_RELATIVE "hot/utilities_app.dll"
+#define ENG_MODULE_SOURCE_RELATIVE "hot/utilities_app.dll"
 #else
-#define APP_MODULE_SOURCE_RELATIVE "hot/utilities_app.dylib"
+#define ENG_MODULE_SOURCE_RELATIVE "hot/utilities_app.dylib"
 #endif
 #define HOT_STATE_STORE_MAGIC 0x4853544F52453031ull
 #define HOT_STATE_STORE_VERSION 1u
@@ -65,14 +65,14 @@
     X(OS_get_system_info) \
     X(OS_abort)
 
-struct AppOSApi {
+struct EngOSApi {
 #define PLATFORM_DECLARE_OS_FN(name) decltype(&name) name;
     PLATFORM_OS_FUNCTIONS(PLATFORM_DECLARE_OS_FN)
 #undef PLATFORM_DECLARE_OS_FN
 };
 
-#define APP_OS_FN(host, name) ((host)->os.name)
-#define APP_OS_CALL(host, name, ...) ((host)->os.name(__VA_ARGS__))
+#define ENG_OS_FN(host, name) ((host)->os.name)
+#define ENG_OS_CALL(host, name, ...) ((host)->os.name(__VA_ARGS__))
 
 enum HOT_StateSlotFlags {
     HOT_StateSlotFlag_None = 0,
@@ -197,7 +197,7 @@ static B32 hot_state_store_take_needs_init(HOT_StateStore* store, U64 id) {
     return 1;
 }
 
-struct AppHost {
+struct EngHost {
     B32 shouldQuit;
     U32 logicalCoreCount;
     Arena* frameArena;
@@ -208,46 +208,46 @@ struct AppHost {
     U32 windowWidth;
     U32 windowHeight;
 
-    AppOSApi os;
+    EngOSApi os;
 };
 
-struct AppInput {
+struct EngInput {
     F32 deltaSeconds;
     const OS_GraphicsEvent* events;
     U32 eventCount;
 };
 
-struct AppLoadParams {
+struct EngLoadParams {
     U32 size;
     U32 abiVersion;
     U64 moduleGeneration;
-    AppHost* host;
+    EngHost* host;
     HOT_StateStore* store;
 };
 
-typedef B32 AppBootProc(AppHost* host, HOT_StateStore* store);
-typedef void AppBeforeReloadProc(AppHost* host, HOT_StateStore* store);
-typedef B32 AppAfterReloadProc(AppHost* host, HOT_StateStore* store);
-typedef void AppFrameProc(AppHost* host, HOT_StateStore* store, const AppInput* input);
-typedef void AppShutdownProc(AppHost* host, HOT_StateStore* store);
+typedef B32 EngBootProc(EngHost* host, HOT_StateStore* store);
+typedef void EngBeforeReloadProc(EngHost* host, HOT_StateStore* store);
+typedef B32 EngAfterReloadProc(EngHost* host, HOT_StateStore* store);
+typedef void EngFrameProc(EngHost* host, HOT_StateStore* store, const EngInput* input);
+typedef void EngShutdownProc(EngHost* host, HOT_StateStore* store);
 
-struct AppCode {
+struct EngCode {
     U32 size;
     U32 abiVersion;
     U32 schemaVersion;
-    AppBootProc* boot;
-    AppBeforeReloadProc* before_reload;
-    AppAfterReloadProc* after_reload;
-    AppFrameProc* frame;
-    AppShutdownProc* shutdown;
+    EngBootProc* boot;
+    EngBeforeReloadProc* before_reload;
+    EngAfterReloadProc* after_reload;
+    EngFrameProc* frame;
+    EngShutdownProc* shutdown;
 };
 
 #if defined(PLATFORM_OS_WINDOWS)
-#define APP_EXPORT extern "C" __declspec(dllexport)
+#define ENG_EXPORT extern "C" __declspec(dllexport)
 #elif defined(COMPILER_CLANG) || defined(COMPILER_GCC)
-#define APP_EXPORT extern "C" __attribute__((visibility("default")))
+#define ENG_EXPORT extern "C" __attribute__((visibility("default")))
 #else
-#define APP_EXPORT extern "C"
+#define ENG_EXPORT extern "C"
 #endif
 
-APP_EXPORT B32 app_load(AppLoadParams* params, AppCode* outCode);
+ENG_EXPORT B32 eng_load(EngLoadParams* params, EngCode* outCode);

@@ -44,10 +44,11 @@
 #include "nstl/ui/ui_include.hpp"
 #include "nstl/ui/ui_include.cpp"
 
-#include "app/shaders/shader_records.generated.hpp"
-#include "app_world_kernels.hpp"
-#include "app_game_kernels.hpp"
-#include "app_scene_kernels.hpp"
+#include "engine/shaders/shader_records.generated.hpp"
+#include "engine/engine_sim.hpp"
+#include "engine/engine_world_kernels.hpp"
+#include "projects/demo/demo_game_kernels.hpp"
+#include "projects/demo/demo_scene_kernels.hpp"
 #include "nstl/audio/audio_mixer.hpp"
 
 #include <stdio.h>

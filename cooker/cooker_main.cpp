@@ -11,7 +11,7 @@
 #include "nstl/os/os_include.cpp"
 #include "nstl/base/base_include.cpp"
 
-#include "app/assets/asset_formats.hpp"
+#include "engine/engine_assets.hpp"
 #include "cooker_math.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION

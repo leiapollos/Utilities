@@ -5,17 +5,17 @@
 // input replay depends on.
 //
 
-// Statics: an AppColliderSet is half a megabyte — too big for a stack
+// Statics: an DemoColliderSet is half a megabyte — too big for a stack
 // frame. Empty set = the pre-U17 plane-only world, bit-identical.
-static AppColliderSet test_game_noColliders_;
-static AppGameTickStats test_game_tickStats_;
+static DemoColliderSet test_game_noColliders_;
+static DemoTickStats test_game_tickStats_;
 
-static void test_game_tick_(AppPlayerState* player, const AppGameActions* actions, U64 tick) {
-    app_game_tick_(player, actions, &test_game_noColliders_, tick, &test_game_tickStats_);
+static void test_game_tick_(DemoPlayerState* player, const DemoActions* actions, U64 tick) {
+    demo_game_tick_(player, actions, &test_game_noColliders_, tick, &test_game_tickStats_);
 }
 
-static AppGameActions test_game_script_(U64 tick) {
-    AppGameActions actions = {};
+static DemoActions test_game_script_(U64 tick) {
+    DemoActions actions = {};
     if (tick < 60u) {
         actions.moveX = 1.0f;
     } else if (tick < 120u) {
@@ -26,34 +26,34 @@ static AppGameActions test_game_script_(U64 tick) {
     return actions;
 }
 
-static void test_game_run_script_(AppPlayerState* player, U64 tickCount) {
+static void test_game_run_script_(DemoPlayerState* player, U64 tickCount) {
     MEMSET(player, 0, sizeof(*player));
     for (U64 tick = 0u; tick < tickCount; ++tick) {
-        AppGameActions actions = test_game_script_(tick);
+        DemoActions actions = test_game_script_(tick);
         test_game_tick_(player, &actions, tick);
     }
 }
 
 static void test_game_(void) {
     // Determinism: identical script, bit-identical end state.
-    AppPlayerState first;
-    AppPlayerState second;
+    DemoPlayerState first;
+    DemoPlayerState second;
     test_game_run_script_(&first, 240u);
     test_game_run_script_(&second, 240u);
     TEST_CHECK(MEMCMP(&first, &second, sizeof(first)) == 0);
 
     // At rest the player settles grounded on the plane.
-    AppPlayerState player = {};
-    AppGameActions idle = {};
+    DemoPlayerState player = {};
+    DemoActions idle = {};
     for (U32 tick = 0u; tick < 120u; ++tick) {
         test_game_tick_(&player, &idle, tick);
     }
     TEST_CHECK(player.grounded);
-    TEST_CHECK_NEAR(player.position.y, APP_GAME_GROUND_Y + APP_GAME_PLAYER_RADIUS, 1e-5f);
+    TEST_CHECK_NEAR(player.position.y, DEMO_GAME_GROUND_Y + DEMO_GAME_PLAYER_RADIUS, 1e-5f);
     TEST_CHECK_NEAR(player.velocity.x, 0.0f, 1e-5f);
 
     // Sustained input reaches but never exceeds the ground speed cap.
-    AppGameActions run = {};
+    DemoActions run = {};
     run.moveX = 1.0f;
     F32 maxSpeed = 0.0f;
     for (U32 tick = 0u; tick < 240u; ++tick) {
@@ -62,12 +62,12 @@ static void test_game_(void) {
                              player.velocity.z * player.velocity.z);
         maxSpeed = MAX(maxSpeed, speed);
     }
-    TEST_CHECK(maxSpeed <= APP_GAME_MOVE_SPEED + 1e-3f);
-    TEST_CHECK(maxSpeed > APP_GAME_MOVE_SPEED * 0.95f);
+    TEST_CHECK(maxSpeed <= DEMO_GAME_MOVE_SPEED + 1e-3f);
+    TEST_CHECK(maxSpeed > DEMO_GAME_MOVE_SPEED * 0.95f);
     TEST_CHECK(player.position.x > 0.0f);
 
     // Jump leaves the ground, peaks, and lands back on it.
-    AppGameActions jump = {};
+    DemoActions jump = {};
     jump.jump = 1;
     test_game_tick_(&player, &jump, 0u);
     TEST_CHECK(!player.grounded);
@@ -79,7 +79,7 @@ static void test_game_(void) {
         landed = player.grounded;
     }
     TEST_CHECK(landed);
-    TEST_CHECK(peak > APP_GAME_GROUND_Y + APP_GAME_PLAYER_RADIUS + 1.0f);
+    TEST_CHECK(peak > DEMO_GAME_GROUND_Y + DEMO_GAME_PLAYER_RADIUS + 1.0f);
 
     // Friction alone stops a grounded run.
     for (U32 tick = 0u; tick < 240u; ++tick) {
@@ -94,33 +94,33 @@ static void test_game_(void) {
     Vec3F32 prevTick = test_vec3_(1.0f, 2.0f, 3.0f);
     Vec3F32 curTick = test_vec3_(2.0f, 2.5f, 1.0f);
     Vec3F32 nextTick = test_vec3_(5.0f, -1.0f, 0.0f);
-    Vec3F32 atStart = app_game_render_position_(prevTick, curTick, 0.0f);
+    Vec3F32 atStart = demo_game_render_position_(prevTick, curTick, 0.0f);
     TEST_CHECK_NEAR(atStart.x, prevTick.x, 1e-6f);
     TEST_CHECK_NEAR(atStart.z, prevTick.z, 1e-6f);
-    Vec3F32 atMid = app_game_render_position_(prevTick, curTick, APP_SIM_TICK_DT * 0.5f);
+    Vec3F32 atMid = demo_game_render_position_(prevTick, curTick, ENG_SIM_TICK_DT * 0.5f);
     TEST_CHECK_NEAR(atMid.x, 1.5f, 1e-5f);
     TEST_CHECK_NEAR(atMid.y, 2.25f, 1e-5f);
-    Vec3F32 beforeBoundary = app_game_render_position_(prevTick, curTick,
-                                                       APP_SIM_TICK_DT * 0.999f);
-    Vec3F32 afterBoundary = app_game_render_position_(curTick, nextTick, 0.0f);
+    Vec3F32 beforeBoundary = demo_game_render_position_(prevTick, curTick,
+                                                       ENG_SIM_TICK_DT * 0.999f);
+    Vec3F32 afterBoundary = demo_game_render_position_(curTick, nextTick, 0.0f);
     TEST_CHECK_NEAR(beforeBoundary.x, afterBoundary.x, 2e-3f);
     TEST_CHECK_NEAR(beforeBoundary.y, afterBoundary.y, 2e-3f);
     TEST_CHECK_NEAR(beforeBoundary.z, afterBoundary.z, 3e-3f);
 
     // Replay checksum: equal states hash equal, any canonical field flips
     // the hash (the divergence detector U16's replay leans on).
-    AppPlayerState hashA;
-    AppPlayerState hashB;
+    DemoPlayerState hashA;
+    DemoPlayerState hashB;
     test_game_run_script_(&hashA, 100u);
     test_game_run_script_(&hashB, 100u);
-    TEST_CHECK(app_game_state_checksum_(&hashA) == app_game_state_checksum_(&hashB));
-    AppPlayerState perturbed = hashA;
+    TEST_CHECK(demo_game_state_checksum_(&hashA) == demo_game_state_checksum_(&hashB));
+    DemoPlayerState perturbed = hashA;
     perturbed.position.x += 1e-6f;
-    TEST_CHECK(app_game_state_checksum_(&perturbed) != app_game_state_checksum_(&hashA));
+    TEST_CHECK(demo_game_state_checksum_(&perturbed) != demo_game_state_checksum_(&hashA));
     perturbed = hashA;
     perturbed.velocity.z -= 1e-6f;
-    TEST_CHECK(app_game_state_checksum_(&perturbed) != app_game_state_checksum_(&hashA));
+    TEST_CHECK(demo_game_state_checksum_(&perturbed) != demo_game_state_checksum_(&hashA));
     perturbed = hashA;
     perturbed.grounded = !perturbed.grounded;
-    TEST_CHECK(app_game_state_checksum_(&perturbed) != app_game_state_checksum_(&hashA));
+    TEST_CHECK(demo_game_state_checksum_(&perturbed) != demo_game_state_checksum_(&hashA));
 }

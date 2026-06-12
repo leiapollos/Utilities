@@ -8,7 +8,7 @@
 #include "nstl/gfx/gfx_include.hpp"
 #include "nstl/text/text_include.hpp"
 #include "nstl/audio/audio_include.hpp"
-#include "app_interface.hpp"
+#include "engine/engine_interface.hpp"
 
 #include "nstl/base/base_include.cpp"
 #include "nstl/os/os_include.cpp"
@@ -37,24 +37,34 @@
 #define UTILITIES_STATIC_APP 0
 #endif
 
+// Engine + active-project module inputs. Static for now: the engine file
+// set changes rarely (and adding one is a host-visible event anyway); a
+// new project must add its files here until a sob-generated manifest
+// lands (planned alongside the second project).
 static const char* HOST_HOT_MODULE_INPUTS[] = {
-    "app_main.cpp",
-    "app_include.hpp",
-    "app_include.cpp",
-    "app_game.cpp",
-    "app_game_kernels.hpp",
-    "app_scene_kernels.hpp",
-    "app.cpp",
-    "app_world.cpp",
-    "app_world_kernels.hpp",
-    "app_renderer.hpp",
-    "app_renderer.cpp",
-    "app_debug_draw.hpp",
-    "app_debug_draw.cpp",
-    "app_ui_panels.cpp",
-    "app_scene_demo.cpp",
-    "app_state.hpp",
-    "app/assets/asset_formats.hpp",
+    "engine/engine.hpp",
+    "engine/engine_include.hpp",
+    "engine/engine_include.cpp",
+    "engine/engine.cpp",
+    "engine/engine_sim.hpp",
+    "engine/engine_sim.cpp",
+    "engine/engine_state.hpp",
+    "engine/engine_world.cpp",
+    "engine/engine_world_kernels.hpp",
+    "engine/engine_renderer.hpp",
+    "engine/engine_renderer.cpp",
+    "engine/engine_debug_draw.hpp",
+    "engine/engine_debug_draw.cpp",
+    "engine/engine_panels.cpp",
+    "engine/engine_assets.hpp",
+    "projects/demo/demo_main.cpp",
+    "projects/demo/demo.cpp",
+    "projects/demo/demo_state.hpp",
+    "projects/demo/demo_game.cpp",
+    "projects/demo/demo_game_kernels.hpp",
+    "projects/demo/demo_scene_kernels.hpp",
+    "projects/demo/demo_scene.cpp",
+    "projects/demo/demo_panels.cpp",
     "nstl/prof/prof.hpp",
     "nstl/prof/prof_include.hpp",
     "nstl/content/content.hpp",
@@ -79,23 +89,23 @@ static const char* HOST_HOT_MODULE_INPUTS[] = {
     "nstl/ui/ui.cpp",
     "nstl/ui/ui_include.hpp",
     "nstl/ui/ui_include.cpp",
-    "app/shaders/shader_manifest.h",
-    "app/shaders/shader_records.generated.hpp",
-    "app/fonts/NotoSans-Regular.ttf",
+    "engine/shaders/shader_manifest.h",
+    "engine/shaders/shader_records.generated.hpp",
+    "engine/fonts/NotoSans-Regular.ttf",
 };
 
 static const char* HOST_SHADER_INPUTS[] = {
-    "app/shaders/shader_manifest.h",
-    "app/shaders/draw2d.slang",
-    "app/shaders/gfx_shader_abi.slang",
-    "app/shaders/shader_records.generated.hpp",
+    "engine/shaders/shader_manifest.h",
+    "engine/shaders/draw2d.slang",
+    "engine/shaders/gfx_shader_abi.slang",
+    "engine/shaders/shader_records.generated.hpp",
 };
 
 static const char* HOST_RESTART_REQUIRED_INPUTS[] = {
-    "app_interface.hpp",
-    "host_runtime.cpp",
-    "main.cpp",
-    "main.mm",
+    "engine/engine_interface.hpp",
+    "host/host_runtime.cpp",
+    "host/main.cpp",
+    "host/main.mm",
     "nstl/audio/audio.hpp",
     "nstl/audio/audio.cpp",
     "nstl/audio/audio_mixer.hpp",
@@ -124,11 +134,11 @@ static const char* HOST_RESTART_REQUIRED_INPUTS[] = {
     "third_party/freetype/include/freetype/config/ftoption.h",
 };
 
-typedef B32 (*AppLoadProc)(AppLoadParams* params, AppCode* outCode);
+typedef B32 (*EngLoadProc)(EngLoadParams* params, EngCode* outCode);
 
 struct LoadedModule {
     OS_SharedLibrary library;
-    AppCode code;
+    EngCode code;
 };
 
 struct ProgramMemory {
@@ -138,8 +148,8 @@ struct ProgramMemory {
     U64 transientSize;
 };
 
-static AppOSApi host_build_os_api(void) {
-    AppOSApi api = {};
+static EngOSApi host_build_os_api(void) {
+    EngOSApi api = {};
 #define HOST_ASSIGN_OS_FN(name) api.name = name;
     PLATFORM_OS_FUNCTIONS(HOST_ASSIGN_OS_FN)
 #undef HOST_ASSIGN_OS_FN
@@ -211,8 +221,8 @@ struct HostState {
     Arena* programArena;
     Arena* frameArena;
     Arena* pathArena;
-    AppHost host;
-    AppInput input;
+    EngHost host;
+    EngInput input;
     OS_WindowHandle window;
     U32 windowWidth;
     U32 windowHeight;
@@ -253,7 +263,7 @@ static U64 host_get_newest_module_input_timestamp(void);
 static U64 host_get_newest_restart_required_input_timestamp(const char** outNewestPath);
 static B32 host_restart_required_inputs_changed(HostState* state);
 static StringU8 host_export_status_string(B32 passed);
-static B32 host_validate_app_code(const AppCode* code, StringU8 modulePath);
+static B32 host_validate_app_code(const EngCode* code, StringU8 modulePath);
 static B32 host_load_candidate(HostState* state, LoadedModule* outModule, StringU8* outPath);
 static B32 host_commit_candidate(HostState* state, LoadedModule* candidate, StringU8 candidatePath, B32 isReload);
 #if UTILITIES_STATIC_APP
@@ -670,17 +680,17 @@ static StringU8 host_export_status_string(B32 passed) {
     return passed ? str8("pass") : str8("fail");
 }
 
-static B32 host_validate_app_code(const AppCode* code, StringU8 modulePath) {
+static B32 host_validate_app_code(const EngCode* code, StringU8 modulePath) {
     ASSERT_ALWAYS(code != 0);
 
-    const B32 sizeOk = (code->size == sizeof(AppCode));
-    const B32 abiOk = (code->abiVersion == APP_ABI_VERSION);
-    const B32 schemaOk = (code->schemaVersion == APP_STATE_SCHEMA_VERSION);
+    const B32 sizeOk = (code->size == sizeof(EngCode));
+    const B32 abiOk = (code->abiVersion == ENG_ABI_VERSION);
+    const B32 schemaOk = (code->schemaVersion == ENG_STATE_SCHEMA_VERSION);
     const B32 entryOk = (code->boot != 0 && code->before_reload != 0 && code->after_reload != 0 &&
                          code->frame != 0 && code->shutdown != 0);
 
     StringU8 pathForLog = (modulePath.data && modulePath.size > 0) ? modulePath : str8("<unknown>");
-    LOG_INFO("host", "AppCode checks for '{}': size={}, abi={}, schema={}, entrypoints={}",
+    LOG_INFO("host", "EngCode checks for '{}': size={}, abi={}, schema={}, entrypoints={}",
              pathForLog,
              host_export_status_string(sizeOk),
              host_export_status_string(abiOk),
@@ -689,7 +699,7 @@ static B32 host_validate_app_code(const AppCode* code, StringU8 modulePath) {
 
     B32 allOk = sizeOk && abiOk && schemaOk && entryOk;
     if (!allOk) {
-        LOG_ERROR("host", "AppCode requirements not satisfied");
+        LOG_ERROR("host", "EngCode requirements not satisfied");
     }
     return allOk;
 }
@@ -710,7 +720,7 @@ static B32 host_load_candidate(HostState* state, LoadedModule* outModule, String
     DEFER_REF(temp_end(&scratch));
     Arena* arena = scratch.arena;
 
-    StringU8 sourcePath = host_build_module_path(str8(APP_MODULE_SOURCE_RELATIVE), arena);
+    StringU8 sourcePath = host_build_module_path(str8(ENG_MODULE_SOURCE_RELATIVE), arena);
     if (!sourcePath.data || sourcePath.size == 0) {
         LOG_ERROR("host", "Failed to resolve source module path");
         return 0;
@@ -768,27 +778,27 @@ static B32 host_load_candidate(HostState* state, LoadedModule* outModule, String
         return 0;
     }
 
-    AppLoadProc appLoad = (AppLoadProc) OS_library_load_symbol(library, str8("app_load"));
+    EngLoadProc appLoad = (EngLoadProc) OS_library_load_symbol(library, str8("eng_load"));
     if (!appLoad) {
         StringU8 error = OS_library_last_error(arena);
         if (error.size == 0) {
             error = str8("<unknown>");
         }
-        LOG_ERROR("host", "OS_library_load_symbol('app_load') failed: {}", error);
+        LOG_ERROR("host", "OS_library_load_symbol('eng_load') failed: {}", error);
         OS_library_close(library);
         return 0;
     }
 
-    AppLoadParams params = {};
+    EngLoadParams params = {};
     params.size = sizeof(params);
-    params.abiVersion = APP_ABI_VERSION;
+    params.abiVersion = ENG_ABI_VERSION;
     params.moduleGeneration = state->moduleGeneration;
     params.host = &state->host;
     params.store = &state->store;
 
-    AppCode code = {};
+    EngCode code = {};
     if (!appLoad(&params, &code)) {
-        LOG_ERROR("host", "app_load returned failure");
+        LOG_ERROR("host", "eng_load returned failure");
         OS_library_close(library);
         return 0;
     }
@@ -854,7 +864,7 @@ static B32 host_commit_candidate(HostState* state, LoadedModule* candidate, Stri
 
     Temp scratch = get_scratch(0, 0);
     if (scratch.arena) {
-        StringU8 moduleSourcePath = host_build_module_path(str8(APP_MODULE_SOURCE_RELATIVE), scratch.arena);
+        StringU8 moduleSourcePath = host_build_module_path(str8(ENG_MODULE_SOURCE_RELATIVE), scratch.arena);
         OS_FileInfo moduleInfo = OS_get_file_info((const char*) moduleSourcePath.data);
         state->moduleTimestamp = moduleInfo.exists ? moduleInfo.lastWriteTimestampNs : state->moduleTimestamp;
             temp_end(&scratch);
@@ -881,16 +891,16 @@ static B32 host_load_initial_module(HostState* state) {
 static B32 host_load_static_app(HostState* state) {
     ASSERT_ALWAYS(state != 0);
 
-    AppLoadParams params = {};
+    EngLoadParams params = {};
     params.size = sizeof(params);
-    params.abiVersion = APP_ABI_VERSION;
+    params.abiVersion = ENG_ABI_VERSION;
     params.moduleGeneration = 1u;
     params.host = &state->host;
     params.store = &state->store;
 
-    AppCode code = {};
-    if (!app_load(&params, &code)) {
-        LOG_ERROR("host", "Static app_load returned failure");
+    EngCode code = {};
+    if (!eng_load(&params, &code)) {
+        LOG_ERROR("host", "Static eng_load returned failure");
         return 0;
     }
     if (!host_validate_app_code(&code, str8("static-app"))) {
@@ -1013,11 +1023,42 @@ static void host_try_build_module(HostState* state) {
 
     LOG_INFO("host", "Detected app module source changes -> rebuilding module");
     PROF_SCOPE("module rebuild");
+    // The active project name is recorded by sob at module build time;
+    // rebuild the same one. Fallback: demo.
+    char projectName[64] = "demo";
+    {
+        OS_Handle projectFile = OS_file_open("build/module_project.txt", OS_FileOpenMode_Read);
+        if (projectFile.handle) {
+            RangeU64 range = {0ull, sizeof(projectName) - 1u};
+            U64 readBytes = OS_file_read(projectFile, range, projectName);
+            OS_file_close(projectFile);
+            if (readBytes < sizeof(projectName)) {
+                projectName[readBytes] = 0;
+            }
+            for (U64 at = 0u; at < sizeof(projectName); ++at) {
+                if (projectName[at] == '\n' || projectName[at] == '\r') {
+                    projectName[at] = 0;
+                    break;
+                }
+            }
+            if (projectName[0] == 0) {
+                MEMCPY(projectName, "demo", 5);
+            }
+        }
+    }
+    Temp scratch = get_scratch(0, 0);
+    StringU8 buildCommand = str8("./sob module debug");
+    if (scratch.arena) {
 #if defined(PLATFORM_OS_WINDOWS)
-    S32 buildResult = APP_OS_CALL(&state->host, OS_execute, str8(".\\sob.exe module debug"));
+        buildCommand = str8_fmt(scratch.arena, ".\\sob.exe module debug {}", str8((const char*)projectName));
 #else
-    S32 buildResult = APP_OS_CALL(&state->host, OS_execute, str8("./sob module debug"));
+        buildCommand = str8_fmt(scratch.arena, "./sob module debug {}", str8((const char*)projectName));
 #endif
+    }
+    S32 buildResult = ENG_OS_CALL(&state->host, OS_execute, buildCommand);
+    if (scratch.arena) {
+        temp_end(&scratch);
+    }
     if (buildResult != 0) {
         LOG_ERROR("host", "Module rebuild failed (exit code {})", buildResult);
         state->sourceTimestamp = sourceTimestamp;
@@ -1058,7 +1099,7 @@ static void host_try_reload_module(HostState* state) {
     }
     DEFER_REF(temp_end(&scratch));
 
-    StringU8 moduleSourcePath = host_build_module_path(str8(APP_MODULE_SOURCE_RELATIVE), scratch.arena);
+    StringU8 moduleSourcePath = host_build_module_path(str8(ENG_MODULE_SOURCE_RELATIVE), scratch.arena);
     if (!moduleSourcePath.data || moduleSourcePath.size == 0) {
         return;
     }
@@ -1222,15 +1263,15 @@ static void host_update_input(HostState* state, F32 deltaSeconds) {
     ASSERT_ALWAYS(state->frameArena != 0);
     ASSERT_ALWAYS(state->graphicsInitialized);
 
-    AppInput* input = &state->input;
+    EngInput* input = &state->input;
     input->deltaSeconds = deltaSeconds;
     input->events = 0;
     input->eventCount = 0;
 
-    ASSERT_ALWAYS(APP_OS_FN(&state->host, OS_graphics_pump_events) != 0);
-    APP_OS_CALL(&state->host, OS_graphics_pump_events);
+    ASSERT_ALWAYS(ENG_OS_FN(&state->host, OS_graphics_pump_events) != 0);
+    ENG_OS_CALL(&state->host, OS_graphics_pump_events);
 
-    ASSERT_ALWAYS(APP_OS_FN(&state->host, OS_graphics_poll_events) != 0);
+    ASSERT_ALWAYS(ENG_OS_FN(&state->host, OS_graphics_poll_events) != 0);
 
     Arena* arena = state->frameArena;
     OS_GraphicsEvent* firstEvent = 0;
@@ -1238,7 +1279,7 @@ static void host_update_input(HostState* state, F32 deltaSeconds) {
 
     OS_GraphicsEvent tempEvents[64];
     while (1) {
-        U32 fetched = APP_OS_CALL(&state->host, OS_graphics_poll_events,
+        U32 fetched = ENG_OS_CALL(&state->host, OS_graphics_poll_events,
                                        tempEvents, (U32)ARRAY_COUNT(tempEvents));
         if (fetched == 0u) {
             break;

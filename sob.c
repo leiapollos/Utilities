@@ -8,7 +8,7 @@
 #include <unistd.h>
 #endif
 
-#include "app/shaders/shader_manifest.h"
+#include "engine/shaders/shader_manifest.h"
 
 #define BUILD_DIR "build"
 #define BUILD_TOOLS_DIR "build/tools"
@@ -16,6 +16,25 @@
 #define META_DIR "meta"
 
 #define HOST_EXE_BASENAME "utilities_host"
+
+// Active project: products live under projects/<name>/ with a
+// <name>_main.cpp TU root. sob records the active name at module build
+// time so the host rebuilds the same one.
+static const char* g_project = "demo";
+static char g_projectMainPath[512];
+
+static int project_exists(const char* name) {
+    snprintf(g_projectMainPath, sizeof(g_projectMainPath), "projects/%s/%s_main.cpp", name, name);
+    return sob_fs_exists(g_projectMainPath);
+}
+
+static void write_module_project_record(void) {
+    FILE* file = fopen("build/module_project.txt", "wb");
+    if (file) {
+        fprintf(file, "%s\n", g_project);
+        fclose(file);
+    }
+}
 #define HOST_IMPORT_LIB_PATH BUILD_DIR "/" HOST_EXE_BASENAME ".lib"
 #if SOB_WINDOWS
 #define HOST_OUTPUT_PATH BUILD_DIR "/" HOST_EXE_BASENAME ".exe"
@@ -67,7 +86,7 @@ static U64 newest_sob_input_mtime(void) {
     if (sobHeaderTime > result) {
         result = sobHeaderTime;
     }
-    U64 shaderManifestTime = sob_fs_mtime(APP_SHADER_MANIFEST_SOURCE);
+    U64 shaderManifestTime = sob_fs_mtime(ENG_SHADER_MANIFEST_SOURCE);
     if (shaderManifestTime > result) {
         result = shaderManifestTime;
     }
@@ -99,6 +118,7 @@ static void print_usage(void) {
     printf("\n");
     printf("Targets:\n");
     printf("  run      Build host + hot module and start the app (default)\n");
+    printf("Usage: ./sob [target] [mode] [project]   (project defaults to demo)\n");
     printf("  dev      Build host + hot module\n");
     printf("  all      Alias for dev\n");
     printf("  host     Build host executable only\n");
@@ -106,7 +126,7 @@ static void print_usage(void) {
     printf("  ship     Build one executable with app statically linked\n");
     printf("  metagen  Build metagen and regenerate metadata\n");
     printf("  shaders  Build reloadable shader artifacts\n");
-    printf("  cook     Build the asset cooker and cook app/assets/src\n");
+    printf("  cook     Build the asset cooker and cook projects/demo/assets/src\n");
     printf("  test     Build and run the CPU seam tests\n");
     printf("  clean    Remove build artifacts\n");
     printf("\n");
@@ -1036,7 +1056,7 @@ static const char* find_slangc_path(void) {
 }
 
 static U64 newest_shader_input_mtime(void) {
-    U64 result = sob_fs_mtime(APP_SHADER_MANIFEST_SOURCE);
+    U64 result = sob_fs_mtime(ENG_SHADER_MANIFEST_SOURCE);
 
 #define SHADER_INPUT_MTIME(name, source) \
     do { \
@@ -1045,7 +1065,7 @@ static U64 newest_shader_input_mtime(void) {
             result = sourceTime; \
         } \
     } while (0);
-    APP_SHADER_SOURCE_LIST(SHADER_INPUT_MTIME)
+    ENG_SHADER_SOURCE_LIST(SHADER_INPUT_MTIME)
 #undef SHADER_INPUT_MTIME
 
     return result;
@@ -1060,7 +1080,7 @@ static int verify_shader_inputs_exist(void) {
             result = 0; \
         } \
     } while (0);
-    APP_SHADER_SOURCE_LIST(SHADER_INPUT_EXISTS)
+    ENG_SHADER_SOURCE_LIST(SHADER_INPUT_EXISTS)
 #undef SHADER_INPUT_EXISTS
     return result;
 }
@@ -1074,9 +1094,9 @@ static int build_slang_shaders(Sob_Arena* arena) {
         return 1;
     }
 
-    if (sob_fs_mkdir_p(APP_SHADER_OUTPUT_DIR) != 0 &&
-        !sob_fs_is_dir(APP_SHADER_OUTPUT_DIR)) {
-        fprintf(stderr, "Error: failed to create '%s'\n", APP_SHADER_OUTPUT_DIR);
+    if (sob_fs_mkdir_p(ENG_SHADER_OUTPUT_DIR) != 0 &&
+        !sob_fs_is_dir(ENG_SHADER_OUTPUT_DIR)) {
+        fprintf(stderr, "Error: failed to create '%s'\n", ENG_SHADER_OUTPUT_DIR);
         return 1;
     }
 
@@ -1091,9 +1111,9 @@ static int build_slang_shaders(Sob_Arena* arena) {
     {source, output, entry, SOB_STRINGIZE(stage), SOB_STRINGIZE(stageKind)},
     static const struct ShaderBuildItem shaders[] = {
 #if SOB_WINDOWS
-        APP_SHADER_VULKAN_OUTPUT_LIST(SHADER_BUILD_ITEM)
+        ENG_SHADER_VULKAN_OUTPUT_LIST(SHADER_BUILD_ITEM)
 #elif SOB_MACOS
-        APP_SHADER_METAL_OUTPUT_LIST(SHADER_BUILD_ITEM)
+        ENG_SHADER_METAL_OUTPUT_LIST(SHADER_BUILD_ITEM)
 #else
 #error No shader build backend configured for this platform.
 #endif
@@ -1200,9 +1220,9 @@ static int configure_runtime_executable(Sob_Arena* arena, Sob_Target* target, Bu
 #endif
 
 #if SOB_WINDOWS
-    sob_target_add_source(target, "main.cpp");
+    sob_target_add_source(target, "host/main.cpp");
 #else
-    sob_target_add_source(target, "main.mm");
+    sob_target_add_source(target, "host/main.mm");
 #endif
     sob_target_link_target(target, vendor);
     configure_common_includes(target);
@@ -1348,14 +1368,14 @@ static S32 build_and_run_metagen(BuildMode mode) {
 #endif
 
 static const char* COOK_ASSET_SOURCES[] = {
-    "app/assets/src/Duck.glb",
-    "app/assets/src/Avocado.glb",
-    "app/assets/src/Lantern.glb",
-    "app/assets/src/Buggy.glb",
-    "app/assets/src/jump.wav",
-    "app/assets/src/land.wav",
-    "app/assets/src/click.wav",
-    "app/assets/src/ambience.wav",
+    "projects/demo/assets/src/Duck.glb",
+    "projects/demo/assets/src/Avocado.glb",
+    "projects/demo/assets/src/Lantern.glb",
+    "projects/demo/assets/src/Buggy.glb",
+    "projects/demo/assets/src/jump.wav",
+    "projects/demo/assets/src/land.wav",
+    "projects/demo/assets/src/click.wav",
+    "projects/demo/assets/src/ambience.wav",
 };
 
 static S32 build_and_run_cooker(BuildMode mode) {
@@ -1363,8 +1383,8 @@ static S32 build_and_run_cooker(BuildMode mode) {
         fprintf(stderr, "Error: failed to create '%s'\n", BUILD_TOOLS_DIR);
         return 1;
     }
-    if (sob_fs_mkdir_p("app/assets/cooked") != 0 && !sob_fs_is_dir("app/assets/cooked")) {
-        fprintf(stderr, "Error: failed to create 'app/assets/cooked'\n");
+    if (sob_fs_mkdir_p("projects/demo/assets/cooked") != 0 && !sob_fs_is_dir("projects/demo/assets/cooked")) {
+        fprintf(stderr, "Error: failed to create 'projects/demo/assets/cooked'\n");
         return 1;
     }
 
@@ -1422,7 +1442,7 @@ static S32 build_and_run_cooker(BuildMode mode) {
         }
         sob_cmd_append(cmd, COOKER_RUN_PATH);
         sob_cmd_append(cmd, COOK_ASSET_SOURCES[i]);
-        sob_cmd_append(cmd, "app/assets/cooked");
+        sob_cmd_append(cmd, "projects/demo/assets/cooked");
         printf("==> Cooking %s...\n", COOK_ASSET_SOURCES[i]);
         S32 result = sob_cmd_run(cmd);
         sob_arena_destroy(cmdArena);
@@ -1569,7 +1589,8 @@ static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
             return 1;
         }
 
-        sob_target_add_source(moduleTarget, "app_main.cpp");
+        snprintf(g_projectMainPath, sizeof(g_projectMainPath), "projects/%s/%s_main.cpp", g_project, g_project);
+        sob_target_add_source(moduleTarget, g_projectMainPath);
         configure_common_includes(moduleTarget);
         sob_target_set_standard(moduleTarget, Sob_Standard_Cpp20);
         apply_cpp_runtime_flags(moduleTarget);
@@ -1629,14 +1650,20 @@ static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
             sob_arena_destroy(arena);
             return 1;
         }
-        sob_target_add_source(shipTarget, "app_main.cpp");
+        snprintf(g_projectMainPath, sizeof(g_projectMainPath), "projects/%s/%s_main.cpp", g_project, g_project);
+        sob_target_add_source(shipTarget, g_projectMainPath);
         sob_target_define(shipTarget, "UTILITIES_STATIC_APP", .value = "1");
     }
 
-    printf("==> Building %s (%s)...\n", build_target_name(requestedTarget), build_mode_name(mode));
+    printf("==> Building %s [%s] (%s)...\n", build_target_name(requestedTarget), g_project, build_mode_name(mode));
 
     S32 result = sob_build_run(ctx);
     sob_arena_destroy(arena);
+
+    if (result == 0 && (requestedTarget == BuildTarget_Module || requestedTarget == BuildTarget_All ||
+                        requestedTarget == BuildTarget_Dev || requestedTarget == BuildTarget_Ship)) {
+        write_module_project_record();
+    }
 
     return result;
 }
@@ -1664,6 +1691,7 @@ static S32 build_dev_targets_parallel(BuildMode mode, const char* selfPath) {
     sob_cmd_append(moduleCmd, selfPath);
     sob_cmd_append(moduleCmd, "module");
     sob_cmd_append(moduleCmd, modeName);
+    sob_cmd_append(moduleCmd, g_project);
 
     sob_cmd_append(hostCmd, selfPath);
     sob_cmd_append(hostCmd, "host");
@@ -1780,15 +1808,22 @@ int main(int argc, char** argv) {
 
         if (parse_target(argv[1], &parsedTarget)) {
             target = parsedTarget;
-            if (argc >= 3) {
-                if (!parse_mode(argv[2], &parsedMode)) {
-                    fprintf(stderr, "Error: unknown mode '%s'\n", argv[2]);
+            int argAt = 2;
+            if (argc > argAt && parse_mode(argv[argAt], &parsedMode)) {
+                mode = parsedMode;
+                argAt += 1;
+            }
+            if (argc > argAt) {
+                if (!project_exists(argv[argAt])) {
+                    fprintf(stderr, "Error: unknown mode or project '%s' (no projects/%s/%s_main.cpp)\n",
+                            argv[argAt], argv[argAt], argv[argAt]);
                     print_usage();
                     return 1;
                 }
-                mode = parsedMode;
+                g_project = argv[argAt];
+                argAt += 1;
             }
-            if (argc > 3) {
+            if (argc > argAt) {
                 fprintf(stderr, "Error: too many arguments\n");
                 print_usage();
                 return 1;
@@ -1796,7 +1831,9 @@ int main(int argc, char** argv) {
         } else if (parse_mode(argv[1], &parsedMode)) {
             target = BuildTarget_Run;
             mode = parsedMode;
-            if (argc > 2) {
+            if (argc > 2 && project_exists(argv[2])) {
+                g_project = argv[2];
+            } else if (argc > 2) {
                 fprintf(stderr, "Error: too many arguments\n");
                 print_usage();
                 return 1;

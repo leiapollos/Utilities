@@ -5,59 +5,36 @@
 // lane writers, GPU visibility passes, and the forward pass.
 //
 
-#include "app_world_kernels.hpp"
+#include "engine_world_kernels.hpp"
 
-enum AppWorldShaderSlot {
-    AppWorldShaderSlot_Vertex = 0,
-    AppWorldShaderSlot_Fragment,
-    AppWorldShaderSlot_Reset,
-    AppWorldShaderSlot_Cull,
-    AppWorldShaderSlot_Prefix,
-    AppWorldShaderSlot_Scatter,
-    AppWorldShaderSlot_Args,
+enum EngWorldShaderSlot {
+    EngWorldShaderSlot_Vertex = 0,
+    EngWorldShaderSlot_Fragment,
+    EngWorldShaderSlot_Reset,
+    EngWorldShaderSlot_Cull,
+    EngWorldShaderSlot_Prefix,
+    EngWorldShaderSlot_Scatter,
+    EngWorldShaderSlot_Args,
 };
 
-static const char* APP_WORLD_SHADER_PATHS[APP_WORLD_SHADER_COUNT] = {
-    APP_SHADER_WORLD_VERTEX_RUNTIME_PATH,
-    APP_SHADER_WORLD_FRAGMENT_RUNTIME_PATH,
-    APP_SHADER_WORLD_RESET_RUNTIME_PATH,
-    APP_SHADER_WORLD_CULL_RUNTIME_PATH,
-    APP_SHADER_WORLD_PREFIX_RUNTIME_PATH,
-    APP_SHADER_WORLD_SCATTER_RUNTIME_PATH,
-    APP_SHADER_WORLD_ARGS_RUNTIME_PATH,
+static const char* ENG_WORLD_SHADER_PATHS[ENG_WORLD_SHADER_COUNT] = {
+    ENG_SHADER_WORLD_VERTEX_RUNTIME_PATH,
+    ENG_SHADER_WORLD_FRAGMENT_RUNTIME_PATH,
+    ENG_SHADER_WORLD_RESET_RUNTIME_PATH,
+    ENG_SHADER_WORLD_CULL_RUNTIME_PATH,
+    ENG_SHADER_WORLD_PREFIX_RUNTIME_PATH,
+    ENG_SHADER_WORLD_SCATTER_RUNTIME_PATH,
+    ENG_SHADER_WORLD_ARGS_RUNTIME_PATH,
 };
 
-// Demo asset policy: which cooked models exist. Module rodata; hot state
-// stores the published model resources. A model's textures cook as
-// "<stem>_tex<N>.utex" siblings; the runtime derives those paths.
-struct AppWorldDemoAssetDesc {
-    const char* modelPath;
-    const char* modelLabel;
-};
-
-static const AppWorldDemoAssetDesc APP_WORLD_DEMO_ASSETS[APP_WORLD_DEMO_ASSET_COUNT] = {
-    {"app/assets/cooked/Duck.umdl", "assets/Duck.umdl"},
-    {"app/assets/cooked/Avocado.umdl", "assets/Avocado.umdl"},
-    {"app/assets/cooked/Lantern.umdl", "assets/Lantern.umdl"},
-    {"app/assets/cooked/Buggy.umdl", "assets/Buggy.umdl"},
-};
-
-// Cooked sounds ride the same path: watch -> artifact -> publish into the
-// host audio buffer table. Indexed by AppSound.
-struct AppAudioSoundDesc {
-    const char* soundPath;
-    const char* soundLabel;
-};
-
-static const AppAudioSoundDesc APP_AUDIO_SOUND_DESCS[AppSound_Count] = {
-    {"app/assets/cooked/jump.uaud", "assets/jump.uaud"},
-    {"app/assets/cooked/land.uaud", "assets/land.uaud"},
-    {"app/assets/cooked/click.uaud", "assets/click.uaud"},
-    {"app/assets/cooked/ambience.uaud", "assets/ambience.uaud"},
-};
+// Which cooked models and sounds exist is project policy (the EngProject
+// desc tables); the machinery here — watch -> artifact -> publish into
+// the mesh tables / the host audio buffer table — is the engine's. A
+// model's textures cook as "<stem>_tex<N>.utex" siblings; the runtime
+// derives those paths.
 
 // "<dir>/<stem>.umdl" -> "<dir>/<stem>_tex<N>.utex"
-static StringU8 app_world_model_texture_path_(Arena* arena, const char* modelPath, U32 textureLocal) {
+static StringU8 eng_world_model_texture_path_(Arena* arena, const char* modelPath, U32 textureLocal) {
     StringU8 path = str8(modelPath);
     StringU8 base = path;
     base.size = (path.size > 5u) ? path.size - 5u : 0u;
@@ -65,16 +42,16 @@ static StringU8 app_world_model_texture_path_(Arena* arena, const char* modelPat
 }
 
 
-static void app_world_resource_cache_reset_(APP_Context* ctx) {
-    AppWorldState* world = &ctx->core->world;
-    for (U32 shaderIndex = 0u; shaderIndex < APP_WORLD_SHADER_COUNT; ++shaderIndex) {
+static void eng_world_resource_cache_reset_(EngContext* ctx) {
+    EngWorldState* world = &ctx->engine->world;
+    for (U32 shaderIndex = 0u; shaderIndex < ENG_WORLD_SHADER_COUNT; ++shaderIndex) {
         world->shaderFiles[shaderIndex] = FILE_HANDLE_ZERO;
         world->shaderHashes[shaderIndex] = CONTENT_HASH_ZERO;
     }
 }
 
-static void app_world_watch_files_(APP_Context* ctx) {
-    AppCoreState* state = ctx->core;
+static void eng_world_watch_files_(EngContext* ctx) {
+    EngState* state = ctx->engine;
     if (!state->resources.fileStream) {
         return;
     }
@@ -85,26 +62,30 @@ static void app_world_watch_files_(APP_Context* ctx) {
     }
     DEFER_REF(temp_end(&scratch));
 
+    const EngProject* project = eng_project_();
+    ASSERT_ALWAYS(project->modelCount <= ENG_WORLD_MAX_MODELS);
+    ASSERT_ALWAYS(project->soundCount <= ENG_AUDIO_MAX_SOUNDS);
+
     StringU8 exeDir = OS_get_executable_directory(scratch.arena);
-    for (U32 assetIndex = 0u; assetIndex < APP_WORLD_DEMO_ASSET_COUNT; ++assetIndex) {
-        const AppWorldDemoAssetDesc* asset = APP_WORLD_DEMO_ASSETS + assetIndex;
+    for (U32 assetIndex = 0u; assetIndex < project->modelCount; ++assetIndex) {
+        const EngModelDesc* asset = project->models + assetIndex;
         StringU8 modelPath = str8_concat(scratch.arena, exeDir, str8("/../"));
-        modelPath = str8_concat(scratch.arena, modelPath, str8(asset->modelPath));
+        modelPath = str8_concat(scratch.arena, modelPath, str8(asset->path));
         state->world.assetModelFiles[assetIndex] = file_watch(state->resources.fileStream, modelPath, 0u);
         // Texture watches are model-driven: the publish proc watches exactly
         // the textureCount the cooked model declares (a boot-time guess would
         // leave permanently-failing watches screaming in the stats).
     }
 
-    for (U32 shaderIndex = 0u; shaderIndex < APP_WORLD_SHADER_COUNT; ++shaderIndex) {
+    for (U32 shaderIndex = 0u; shaderIndex < ENG_WORLD_SHADER_COUNT; ++shaderIndex) {
         StringU8 worldPath = str8_concat(scratch.arena, exeDir, str8("/../"));
-        worldPath = str8_concat(scratch.arena, worldPath, str8(APP_WORLD_SHADER_PATHS[shaderIndex]));
+        worldPath = str8_concat(scratch.arena, worldPath, str8(ENG_WORLD_SHADER_PATHS[shaderIndex]));
         state->world.shaderFiles[shaderIndex] = file_watch(state->resources.fileStream, worldPath, 0u);
     }
 
-    for (U32 soundIndex = 0u; soundIndex < AppSound_Count; ++soundIndex) {
+    for (U32 soundIndex = 0u; soundIndex < project->soundCount; ++soundIndex) {
         StringU8 soundPath = str8_concat(scratch.arena, exeDir, str8("/../"));
-        soundPath = str8_concat(scratch.arena, soundPath, str8(APP_AUDIO_SOUND_DESCS[soundIndex].soundPath));
+        soundPath = str8_concat(scratch.arena, soundPath, str8(project->sounds[soundIndex].path));
         state->audio.soundFiles[soundIndex] = file_watch(state->resources.fileStream, soundPath, 0u);
     }
 }
@@ -112,22 +93,22 @@ static void app_world_watch_files_(APP_Context* ctx) {
 // ////////////////////////
 // World renderer (U5)
 
-#define APP_WORLD_CULL_GROUP_SIZE 64u
-#define APP_WORLD_MATERIAL_FLAG_ALPHA_TEST 1u
-#define APP_WORLD_MATERIAL_FLAG_TEXTURED 2u
+#define ENG_WORLD_CULL_GROUP_SIZE 64u
+#define ENG_WORLD_MATERIAL_FLAG_ALPHA_TEST 1u
+#define ENG_WORLD_MATERIAL_FLAG_TEXTURED 2u
 // Sentinel for ShdWorldForwardRootData.directFirstRenderable: draw goes
 // through cellOffsets/visibleBuffer instead of a direct base index.
-#define APP_WORLD_DIRECT_NONE 0xFFFFFFFFu
+#define ENG_WORLD_DIRECT_NONE 0xFFFFFFFFu
 
-enum AppWorldFailLog {
-    AppWorldFailLog_FrameAlloc = (1u << 0u),
-    AppWorldFailLog_MappedBuffers = (1u << 1u),
-    AppWorldFailLog_TransparentBuild = (1u << 2u),
-    AppWorldFailLog_RootTemp = (1u << 3u),
-    AppWorldFailLog_DrawAlloc = (1u << 4u),
+enum EngWorldFailLog {
+    EngWorldFailLog_FrameAlloc = (1u << 0u),
+    EngWorldFailLog_MappedBuffers = (1u << 1u),
+    EngWorldFailLog_TransparentBuild = (1u << 2u),
+    EngWorldFailLog_RootTemp = (1u << 3u),
+    EngWorldFailLog_DrawAlloc = (1u << 4u),
 };
 
-static void app_world_fail_once_(AppWorldState* world, U32 bit, const char* message) {
+static void eng_world_fail_once_(EngWorldState* world, U32 bit, const char* message) {
     if (FLAGS_HAS(world->failLogMask, bit)) {
         return;
     }
@@ -135,28 +116,28 @@ static void app_world_fail_once_(AppWorldState* world, U32 bit, const char* mess
     world->failLogMask |= bit;
 }
 
-static const char* APP_WORLD_COMPUTE_ENTRIES[5] = {
-    APP_SHADER_WORLD_RESET_ENTRY,
-    APP_SHADER_WORLD_CULL_ENTRY,
-    APP_SHADER_WORLD_PREFIX_ENTRY,
-    APP_SHADER_WORLD_SCATTER_ENTRY,
-    APP_SHADER_WORLD_ARGS_ENTRY,
+static const char* ENG_WORLD_COMPUTE_ENTRIES[5] = {
+    ENG_SHADER_WORLD_RESET_ENTRY,
+    ENG_SHADER_WORLD_CULL_ENTRY,
+    ENG_SHADER_WORLD_PREFIX_ENTRY,
+    ENG_SHADER_WORLD_SCATTER_ENTRY,
+    ENG_SHADER_WORLD_ARGS_ENTRY,
 };
 
-static const U32 APP_WORLD_COMPUTE_GROUP_SIZES[5] = {
-    APP_WORLD_CULL_GROUP_SIZE,
-    APP_WORLD_CULL_GROUP_SIZE,
+static const U32 ENG_WORLD_COMPUTE_GROUP_SIZES[5] = {
+    ENG_WORLD_CULL_GROUP_SIZE,
+    ENG_WORLD_CULL_GROUP_SIZE,
     1u,
-    APP_WORLD_CULL_GROUP_SIZE,
-    APP_WORLD_CULL_GROUP_SIZE,
+    ENG_WORLD_CULL_GROUP_SIZE,
+    ENG_WORLD_CULL_GROUP_SIZE,
 };
 
-static U32 app_world_cell_count_(const AppWorldState* world) {
+static U32 eng_world_cell_count_(const EngWorldState* world) {
     (void)world;
-    return APP_WORLD_CELL_COUNT;
+    return ENG_WORLD_CELL_COUNT;
 }
 
-static Vec3F32 app_world_vec3_(F32 x, F32 y, F32 z) {
+static Vec3F32 eng_world_vec3_(F32 x, F32 y, F32 z) {
     Vec3F32 result;
     result.x = x;
     result.y = y;
@@ -164,21 +145,21 @@ static Vec3F32 app_world_vec3_(F32 x, F32 y, F32 z) {
     return result;
 }
 
-static AppWorldMeshHandle app_world_register_mesh_(AppWorldState* world, U32 firstIndex, U32 indexCount,
+static EngWorldMeshHandle eng_world_register_mesh_(EngWorldState* world, U32 firstIndex, U32 indexCount,
                                                    U32 baseVertex, GfxBuffer vertexBuffer,
                                                    GfxResourceId vertexBufferId, GfxBuffer indexBuffer,
                                                    B32 ownsBuffers, Vec3F32 center, Vec3F32 extents) {
     // World tables are immutable between begin and execute; publishes run in
     // the artifact tick before the frame opens.
     ASSERT_DEBUG(!world->frameOpen);
-    AppWorldMeshHandle handle = {};
+    EngWorldMeshHandle handle = {};
     void* item = 0;
     U32 slot = 0u;
     U32 generation = 0u;
     if (!slot_map_alloc(&world->meshes, &item, &slot, &generation)) {
         return handle;
     }
-    AppWorldMesh* mesh = (AppWorldMesh*)item;
+    EngWorldMesh* mesh = (EngWorldMesh*)item;
     mesh->indexCount = indexCount;
     mesh->firstIndex = firstIndex;
     mesh->baseVertex = baseVertex;
@@ -198,13 +179,13 @@ static AppWorldMeshHandle app_world_register_mesh_(AppWorldState* world, U32 fir
     return handle;
 }
 
-static void app_world_release_mesh_(GfxDevice* device, AppWorldState* world, AppWorldMeshHandle handle) {
+static void eng_world_release_mesh_(GfxDevice* device, EngWorldState* world, EngWorldMeshHandle handle) {
     ASSERT_DEBUG(!world->frameOpen);
     void* item = 0;
     if (!slot_map_release(&world->meshes, handle.index, handle.generation, &item) || !item) {
         return;
     }
-    AppWorldMesh* mesh = (AppWorldMesh*)item;
+    EngWorldMesh* mesh = (EngWorldMesh*)item;
     if (mesh->ownsBuffers) {
         gfx_destroy_buffer(device, mesh->vertexBuffer);
         gfx_destroy_buffer(device, mesh->indexBuffer);
@@ -218,8 +199,8 @@ static void app_world_release_mesh_(GfxDevice* device, AppWorldState* world, App
 // Material table: fixed slots behind a used mask. Slot 0 is the builtin
 // "missing" material (magenta) so unset or released references fail loudly.
 
-static B32 app_world_material_alloc(AppWorldState* world, U32* outIndex) {
-    for (U32 index = APP_WORLD_MATERIAL_MISSING + 1u; index < APP_WORLD_MAX_MATERIALS; ++index) {
+static B32 eng_world_material_alloc(EngWorldState* world, U32* outIndex) {
+    for (U32 index = ENG_WORLD_MATERIAL_MISSING + 1u; index < ENG_WORLD_MAX_MATERIALS; ++index) {
         if (FLAGS_HAS(world->materialUsedMask, 1ull << index)) {
             continue;
         }
@@ -229,32 +210,32 @@ static B32 app_world_material_alloc(AppWorldState* world, U32* outIndex) {
         *outIndex = index;
         return 1;
     }
-    LOG_ERROR("gfx", "World material table full ({} slots)", APP_WORLD_MAX_MATERIALS);
+    LOG_ERROR("gfx", "World material table full ({} slots)", ENG_WORLD_MAX_MATERIALS);
     return 0;
 }
 
-static void app_world_material_set(AppWorldState* world, U32 index, const ShdWorldMaterialRecord* record) {
-    if (index >= APP_WORLD_MAX_MATERIALS || !FLAGS_HAS(world->materialUsedMask, 1ull << index)) {
+static void eng_world_material_set(EngWorldState* world, U32 index, const ShdWorldMaterialRecord* record) {
+    if (index >= ENG_WORLD_MAX_MATERIALS || !FLAGS_HAS(world->materialUsedMask, 1ull << index)) {
         return;
     }
     world->materialRecords[index] = *record;
     world->materialsDirty = 1;
 }
 
-static void app_world_material_release(AppWorldState* world, U32 index) {
-    if (index <= APP_WORLD_MATERIAL_MISSING || index >= APP_WORLD_MAX_MATERIALS) {
+static void eng_world_material_release(EngWorldState* world, U32 index) {
+    if (index <= ENG_WORLD_MATERIAL_MISSING || index >= ENG_WORLD_MAX_MATERIALS) {
         return;
     }
     world->materialUsedMask &= ~(1ull << index);
     // In-flight references to the freed slot show the missing color until
     // the slot is reused.
-    world->materialRecords[index] = world->materialRecords[APP_WORLD_MATERIAL_MISSING];
+    world->materialRecords[index] = world->materialRecords[ENG_WORLD_MATERIAL_MISSING];
     world->materialsDirty = 1;
 }
 
-static B32 app_world_try_create_resources_(APP_Context* ctx) {
-    AppCoreState* state = ctx->core;
-    AppWorldState* world = &state->world;
+static B32 eng_world_try_create_resources_(EngContext* ctx) {
+    EngState* state = ctx->engine;
+    EngWorldState* world = &state->world;
     if (world->gpuResourcesCreated || ctx->host->gfxDevice == 0 || state->resources.arena == 0) {
         return world->gpuResourcesCreated;
     }
@@ -267,11 +248,11 @@ static B32 app_world_try_create_resources_(APP_Context* ctx) {
     DEFER_REF(temp_end(&scratch));
 
     if (world->meshes.items == 0 &&
-        !slot_map_init(&world->meshes, state->resources.arena, sizeof(AppWorldMesh), APP_WORLD_MAX_MESHES)) {
+        !slot_map_init(&world->meshes, state->resources.arena, sizeof(EngWorldMesh), ENG_WORLD_MAX_MESHES)) {
         return 0;
     }
 
-    AppWorldMeshBuilder builder = {};
+    EngWorldMeshBuilder builder = {};
     builder.vertexCapacity = 4096u;
     builder.indexCapacity = 16384u;
     builder.vertices = ARENA_PUSH_ARRAY(scratch.arena, ShdWorldVertexRecord, builder.vertexCapacity);
@@ -281,15 +262,15 @@ static B32 app_world_try_create_resources_(APP_Context* ctx) {
     }
 
     U32 cubeFirstIndex = builder.indexCount;
-    app_world_build_cube_(&builder);
+    eng_world_build_cube_(&builder);
     U32 cubeIndexCount = builder.indexCount - cubeFirstIndex;
 
     U32 sphereFirstIndex = builder.indexCount;
-    app_world_build_sphere_(&builder, 12u, 18u);
+    eng_world_build_sphere_(&builder, 12u, 18u);
     U32 sphereIndexCount = builder.indexCount - sphereFirstIndex;
 
     U32 planeFirstIndex = builder.indexCount;
-    app_world_build_plane_(&builder);
+    eng_world_build_plane_(&builder);
     U32 planeIndexCount = builder.indexCount - planeFirstIndex;
 
     GfxBufferDesc vertexDesc = {};
@@ -312,19 +293,19 @@ static B32 app_world_try_create_resources_(APP_Context* ctx) {
     // Builder indices are pool-absolute, so builtin records carry baseVertex 0;
     // cooked meshes bring mesh-relative indices in their own buffers.
     world->meshCount = 0u;
-    world->builtinMeshes[0] = app_world_register_mesh_(world, cubeFirstIndex, cubeIndexCount, 0u,
+    world->builtinMeshes[0] = eng_world_register_mesh_(world, cubeFirstIndex, cubeIndexCount, 0u,
                                                        world->vertexBuffer, world->vertexBufferId, world->indexBuffer, 0,
-                                                       app_world_vec3_(0.0f, 0.0f, 0.0f), app_world_vec3_(0.5f, 0.5f, 0.5f));
-    world->builtinMeshes[1] = app_world_register_mesh_(world, sphereFirstIndex, sphereIndexCount, 0u,
+                                                       eng_world_vec3_(0.0f, 0.0f, 0.0f), eng_world_vec3_(0.5f, 0.5f, 0.5f));
+    world->builtinMeshes[1] = eng_world_register_mesh_(world, sphereFirstIndex, sphereIndexCount, 0u,
                                                        world->vertexBuffer, world->vertexBufferId, world->indexBuffer, 0,
-                                                       app_world_vec3_(0.0f, 0.0f, 0.0f), app_world_vec3_(0.5f, 0.5f, 0.5f));
-    world->builtinMeshes[2] = app_world_register_mesh_(world, planeFirstIndex, planeIndexCount, 0u,
+                                                       eng_world_vec3_(0.0f, 0.0f, 0.0f), eng_world_vec3_(0.5f, 0.5f, 0.5f));
+    world->builtinMeshes[2] = eng_world_register_mesh_(world, planeFirstIndex, planeIndexCount, 0u,
                                                        world->vertexBuffer, world->vertexBufferId, world->indexBuffer, 0,
-                                                       app_world_vec3_(0.0f, 0.0f, 0.0f), app_world_vec3_(0.5f, 0.02f, 0.5f));
+                                                       eng_world_vec3_(0.0f, 0.0f, 0.0f), eng_world_vec3_(0.5f, 0.02f, 0.5f));
 
     GfxBufferDesc meshRecordDesc = {};
     meshRecordDesc.name = "world mesh records";
-    meshRecordDesc.size = sizeof(ShdWorldMeshRecord) * APP_WORLD_MAX_MESHES;
+    meshRecordDesc.size = sizeof(ShdWorldMeshRecord) * ENG_WORLD_MAX_MESHES;
     meshRecordDesc.usageFlags = GfxBufferUsageFlags_Storage | GfxBufferUsageFlags_CopyDst;
     meshRecordDesc.memoryKind = GfxMemoryKind_Device;
     world->meshRecordBuffer = gfx_create_buffer(device, &meshRecordDesc);
@@ -334,12 +315,12 @@ static B32 app_world_try_create_resources_(APP_Context* ctx) {
     // Materials are scene/asset-allocated; the table starts with only the
     // builtin missing material in slot 0.
     MEMSET(world->materialRecords, 0, sizeof(world->materialRecords));
-    ShdWorldMaterialRecord* missing = &world->materialRecords[APP_WORLD_MATERIAL_MISSING];
+    ShdWorldMaterialRecord* missing = &world->materialRecords[ENG_WORLD_MATERIAL_MISSING];
     missing->baseColor[0] = 1.0f;
     missing->baseColor[1] = 0.0f;
     missing->baseColor[2] = 1.0f;
     missing->baseColor[3] = 1.0f;
-    world->materialUsedMask = 1u << APP_WORLD_MATERIAL_MISSING;
+    world->materialUsedMask = 1u << ENG_WORLD_MATERIAL_MISSING;
     world->materialsDirty = 1;
 
     GfxSamplerDesc worldSamplerDesc = {};
@@ -359,7 +340,7 @@ static B32 app_world_try_create_resources_(APP_Context* ctx) {
     world->materialBuffer = gfx_create_buffer(device, &materialDesc);
     world->materialBufferId = gfx_register_buffer(device, world->materialBuffer);
 
-    for (U32 bufferIndex = 0u; bufferIndex < APP_WORLD_FRAME_BUFFER_COUNT; ++bufferIndex) {
+    for (U32 bufferIndex = 0u; bufferIndex < ENG_WORLD_FRAME_BUFFER_COUNT; ++bufferIndex) {
         GfxBufferDesc frameDesc = {};
         frameDesc.name = "world frame record";
         frameDesc.size = sizeof(ShdWorldFrameRecord);
@@ -370,7 +351,7 @@ static B32 app_world_try_create_resources_(APP_Context* ctx) {
 
         GfxBufferDesc renderableDesc = {};
         renderableDesc.name = "world renderables";
-        renderableDesc.size = sizeof(ShdWorldRenderableRecord) * APP_WORLD_MAX_RENDERABLES;
+        renderableDesc.size = sizeof(ShdWorldRenderableRecord) * ENG_WORLD_MAX_RENDERABLES;
         // Per-frame data is written by the CPU straight into the mapping;
         // the [2] round-robin is the frames-in-flight protection.
         renderableDesc.usageFlags = GfxBufferUsageFlags_Storage;
@@ -381,13 +362,13 @@ static B32 app_world_try_create_resources_(APP_Context* ctx) {
 
     GfxBufferDesc flagsDesc = {};
     flagsDesc.name = "world visibility flags";
-    flagsDesc.size = sizeof(U32) * APP_WORLD_MAX_RENDERABLES;
+    flagsDesc.size = sizeof(U32) * ENG_WORLD_MAX_RENDERABLES;
     flagsDesc.usageFlags = GfxBufferUsageFlags_Storage;
     flagsDesc.memoryKind = GfxMemoryKind_Device;
     world->flagsBuffer = gfx_create_buffer(device, &flagsDesc);
     world->flagsBufferId = gfx_register_buffer(device, world->flagsBuffer);
 
-    U32 maxCells = APP_WORLD_BIN_COUNT * APP_WORLD_MAX_MESHES;
+    U32 maxCells = ENG_WORLD_BIN_COUNT * ENG_WORLD_MAX_MESHES;
     GfxBufferDesc cellDesc = {};
     cellDesc.name = "world cell counts";
     cellDesc.size = sizeof(U32) * maxCells;
@@ -404,7 +385,7 @@ static B32 app_world_try_create_resources_(APP_Context* ctx) {
 
     GfxBufferDesc visibleDesc = {};
     visibleDesc.name = "world visible list";
-    visibleDesc.size = sizeof(U32) * APP_WORLD_MAX_RENDERABLES;
+    visibleDesc.size = sizeof(U32) * ENG_WORLD_MAX_RENDERABLES;
     visibleDesc.usageFlags = GfxBufferUsageFlags_Storage;
     visibleDesc.memoryKind = GfxMemoryKind_Device;
     world->visibleBuffer = gfx_create_buffer(device, &visibleDesc);
@@ -428,7 +409,7 @@ static B32 app_world_try_create_resources_(APP_Context* ctx) {
                   world->cellCursorBuffer.generation != 0u &&
                   world->visibleBuffer.generation != 0u &&
                   world->argsBuffer.generation != 0u;
-    for (U32 bufferIndex = 0u; bufferIndex < APP_WORLD_FRAME_BUFFER_COUNT; ++bufferIndex) {
+    for (U32 bufferIndex = 0u; bufferIndex < ENG_WORLD_FRAME_BUFFER_COUNT; ++bufferIndex) {
         created = created &&
                   world->frameRecordBuffers[bufferIndex].generation != 0u &&
                   world->renderableBuffers[bufferIndex].generation != 0u;
@@ -447,9 +428,9 @@ static B32 app_world_try_create_resources_(APP_Context* ctx) {
 // ////////////////////////
 // Cooked asset decode (mesh + texture artifacts)
 
-#define APP_ARTIFACT_TYPE_MODEL 0x4C444D55u
-#define APP_ARTIFACT_TYPE_TEXTURE 0x54455855u
-#define APP_ARTIFACT_TYPE_AUDIO 0x44554155u
+#define ENG_ARTIFACT_TYPE_MODEL 0x4C444D55u
+#define ENG_ARTIFACT_TYPE_TEXTURE 0x54455855u
+#define ENG_ARTIFACT_TYPE_AUDIO 0x44554155u
 #define APP_ARTIFACT_PUBLISHED_MARK 1ull
 
 // assetIndex names the demo-asset slot; textureLocal is the model-local
@@ -501,18 +482,18 @@ static B32 app_texture_artifact_build_(ArtifactBuildContext* buildCtx, ArtifactV
 
 static B32 app_model_artifact_publish_(ArtifactPublishContext* publishCtx, ArtifactValue buildValue,
                                        ArtifactValue* outValue, U64* outBytes) {
-    AppWorldArtifactBridge* bridge = (AppWorldArtifactBridge*)publishCtx->typeUserData;
+    EngWorldArtifactBridge* bridge = (EngWorldArtifactBridge*)publishCtx->typeUserData;
     Arena* arena = (Arena*)buildValue.u64[0];
     const U8* blob = (const U8*)buildValue.u64[1];
     U64 blobSize = buildValue.u64[2];
     const AppAssetRequest* request = (const AppAssetRequest*)publishCtx->requestData;
     if (!bridge || !bridge->device || !bridge->state || !blob ||
         !request || publishCtx->requestDataSize < sizeof(AppAssetRequest) ||
-        request->assetIndex >= APP_WORLD_DEMO_ASSET_COUNT) {
+        request->assetIndex >= ENG_WORLD_MAX_MODELS) {
         arena_release(arena);
         return 0;
     }
-    AppWorldState* world = &bridge->state->world;
+    EngWorldState* world = &bridge->state->world;
 
     const AssetModelHeader* header = (const AssetModelHeader*)blob;
     U64 sectionBytes = (U64)header->sectionCount * sizeof(AssetModelSection);
@@ -524,7 +505,7 @@ static B32 app_model_artifact_publish_(ArtifactPublishContext* publishCtx, Artif
                        vertexBytes + indexBytes;
     if (header->version != ASSET_MODEL_VERSION ||
         header->sectionCount == 0u || header->instanceCount == 0u || header->materialCount == 0u ||
-        header->textureCount > APP_WORLD_MODEL_MAX_TEXTURES ||
+        header->textureCount > ENG_WORLD_MODEL_MAX_TEXTURES ||
         header->vertexCount == 0u || header->indexCount == 0u ||
         expectedSize > blobSize) {
         LOG_ERROR("asset", "Model blob rejected (asset {})", request->assetIndex);
@@ -588,13 +569,13 @@ static B32 app_model_artifact_publish_(ArtifactPublishContext* publishCtx, Artif
     }
 
     Arena* modelArena = arena_alloc(.arenaSize = MB(4), .committedSize = KB(64));
-    AppWorldModelResources* resources = modelArena ? ARENA_PUSH_STRUCT(modelArena, AppWorldModelResources) : 0;
-    AppWorldMeshHandle* sectionMeshes = resources
-        ? ARENA_PUSH_ARRAY(modelArena, AppWorldMeshHandle, header->sectionCount) : 0;
-    AppWorldModelMaterialRef* materialRefs = resources
-        ? ARENA_PUSH_ARRAY(modelArena, AppWorldModelMaterialRef, header->materialCount) : 0;
-    AppWorldModelInstanceRef* instanceRefs = resources
-        ? ARENA_PUSH_ARRAY(modelArena, AppWorldModelInstanceRef, header->instanceCount) : 0;
+    EngWorldModelResources* resources = modelArena ? ARENA_PUSH_STRUCT(modelArena, EngWorldModelResources) : 0;
+    EngWorldMeshHandle* sectionMeshes = resources
+        ? ARENA_PUSH_ARRAY(modelArena, EngWorldMeshHandle, header->sectionCount) : 0;
+    EngWorldModelMaterialRef* materialRefs = resources
+        ? ARENA_PUSH_ARRAY(modelArena, EngWorldModelMaterialRef, header->materialCount) : 0;
+    EngWorldModelInstanceRef* instanceRefs = resources
+        ? ARENA_PUSH_ARRAY(modelArena, EngWorldModelInstanceRef, header->instanceCount) : 0;
     if (!resources || !sectionMeshes || !materialRefs || !instanceRefs) {
         gfx_destroy_buffer(bridge->device, vertexBuffer);
         gfx_destroy_buffer(bridge->device, indexBuffer);
@@ -610,10 +591,10 @@ static B32 app_model_artifact_publish_(ArtifactPublishContext* publishCtx, Artif
     U32 registeredSections = 0u;
     for (U32 section = 0u; section < header->sectionCount; ++section) {
         const AssetModelSection* source = sections + section;
-        Vec3F32 center = app_world_vec3_(source->boundsCenter[0], source->boundsCenter[1], source->boundsCenter[2]);
-        Vec3F32 extents = app_world_vec3_(source->boundsExtents[0], source->boundsExtents[1], source->boundsExtents[2]);
+        Vec3F32 center = eng_world_vec3_(source->boundsCenter[0], source->boundsCenter[1], source->boundsCenter[2]);
+        Vec3F32 extents = eng_world_vec3_(source->boundsExtents[0], source->boundsExtents[1], source->boundsExtents[2]);
         // baseVertex 0: indices were rebased to pool-absolute above.
-        sectionMeshes[section] = app_world_register_mesh_(world, source->firstIndex, source->indexCount,
+        sectionMeshes[section] = eng_world_register_mesh_(world, source->firstIndex, source->indexCount,
                                                           0u, vertexBuffer, vertexBufferId,
                                                           indexBuffer, 0, center, extents);
         if (sectionMeshes[section].generation == 0u) {
@@ -625,7 +606,7 @@ static B32 app_model_artifact_publish_(ArtifactPublishContext* publishCtx, Artif
 
     U32 allocatedMaterials = 0u;
     for (U32 material = 0u; !failed && material < header->materialCount; ++material) {
-        if (!app_world_material_alloc(world, &materialRefs[material].worldSlot)) {
+        if (!eng_world_material_alloc(world, &materialRefs[material].worldSlot)) {
             failed = 1;
             break;
         }
@@ -636,7 +617,7 @@ static B32 app_model_artifact_publish_(ArtifactPublishContext* publishCtx, Artif
         record.baseColor[1] = materials[material].baseColor[1];
         record.baseColor[2] = materials[material].baseColor[2];
         record.baseColor[3] = materials[material].baseColor[3];
-        app_world_material_set(world, materialRefs[material].worldSlot, &record);
+        eng_world_material_set(world, materialRefs[material].worldSlot, &record);
     }
 
     for (U32 instance = 0u; !failed && instance < header->instanceCount; ++instance) {
@@ -652,10 +633,10 @@ static B32 app_model_artifact_publish_(ArtifactPublishContext* publishCtx, Artif
 
     if (failed) {
         for (U32 section = 0u; section < registeredSections; ++section) {
-            app_world_release_mesh_(bridge->device, world, sectionMeshes[section]);
+            eng_world_release_mesh_(bridge->device, world, sectionMeshes[section]);
         }
         for (U32 material = 0u; material < allocatedMaterials; ++material) {
-            app_world_material_release(world, materialRefs[material].worldSlot);
+            eng_world_material_release(world, materialRefs[material].worldSlot);
         }
         gfx_destroy_buffer(bridge->device, vertexBuffer);
         gfx_destroy_buffer(bridge->device, indexBuffer);
@@ -688,12 +669,12 @@ static B32 app_model_artifact_publish_(ArtifactPublishContext* publishCtx, Artif
         if (scratch.arena) {
             StringU8 exeDir = OS_get_executable_directory(scratch.arena);
             for (U32 textureLocal = 0u;
-                 textureLocal < resources->textureCount && textureLocal < APP_WORLD_MODEL_MAX_TEXTURES;
+                 textureLocal < resources->textureCount && textureLocal < ENG_WORLD_MODEL_MAX_TEXTURES;
                  ++textureLocal) {
                 StringU8 path = str8_concat(scratch.arena, exeDir, str8("/../"));
                 path = str8_concat(scratch.arena, path,
-                                   app_world_model_texture_path_(scratch.arena,
-                                                                 APP_WORLD_DEMO_ASSETS[request->assetIndex].modelPath,
+                                   eng_world_model_texture_path_(scratch.arena,
+                                                                 eng_project_()->models[request->assetIndex].path,
                                                                  textureLocal));
                 world->assetModelTextureFiles[request->assetIndex][textureLocal] =
                     file_watch(bridge->state->resources.fileStream, path, 0u);
@@ -718,7 +699,7 @@ static B32 app_model_artifact_publish_(ArtifactPublishContext* publishCtx, Artif
 
 static B32 app_texture_artifact_publish_(ArtifactPublishContext* publishCtx, ArtifactValue buildValue,
                                          ArtifactValue* outValue, U64* outBytes) {
-    AppWorldArtifactBridge* bridge = (AppWorldArtifactBridge*)publishCtx->typeUserData;
+    EngWorldArtifactBridge* bridge = (EngWorldArtifactBridge*)publishCtx->typeUserData;
     Arena* arena = (Arena*)buildValue.u64[0];
     const U8* blob = (const U8*)buildValue.u64[1];
     U64 blobSize = buildValue.u64[2];
@@ -726,7 +707,7 @@ static B32 app_texture_artifact_publish_(ArtifactPublishContext* publishCtx, Art
         arena_release(arena);
         return 0;
     }
-    AppWorldState* world = &bridge->state->world;
+    EngWorldState* world = &bridge->state->world;
 
     const AssetTextureHeader* header = (const AssetTextureHeader*)blob;
     if (header->version != ASSET_TEXTURE_VERSION ||
@@ -800,7 +781,7 @@ static B32 app_texture_artifact_publish_(ArtifactPublishContext* publishCtx, Art
         return 0;
     }
 
-    if (world->assetTextureCount < APP_WORLD_MAX_ASSET_TEXTURES) {
+    if (world->assetTextureCount < ENG_WORLD_MAX_ASSET_TEXTURES) {
         world->assetTextures[world->assetTextureCount] = texture;
         world->assetTextureCount += 1u;
     }
@@ -809,19 +790,19 @@ static B32 app_texture_artifact_publish_(ArtifactPublishContext* publishCtx, Art
     const AppAssetRequest* request = (const AppAssetRequest*)publishCtx->requestData;
     U32 boundCount = 0u;
     if (request && publishCtx->requestDataSize >= sizeof(AppAssetRequest) &&
-        request->assetIndex < APP_WORLD_DEMO_ASSET_COUNT) {
-        AppWorldModelResources* resources = world->models[request->assetIndex];
+        request->assetIndex < ENG_WORLD_MAX_MODELS) {
+        EngWorldModelResources* resources = world->models[request->assetIndex];
         for (U32 at = 0u; resources && at < resources->materialCount; ++at) {
-            const AppWorldModelMaterialRef* ref = resources->materials + at;
+            const EngWorldModelMaterialRef* ref = resources->materials + at;
             if (ref->textureLocal != request->textureLocal ||
-                ref->worldSlot >= APP_WORLD_MAX_MATERIALS ||
+                ref->worldSlot >= ENG_WORLD_MAX_MATERIALS ||
                 !FLAGS_HAS(world->materialUsedMask, 1ull << ref->worldSlot)) {
                 continue;
             }
             ShdWorldMaterialRecord* material = &world->materialRecords[ref->worldSlot];
             material->textureIndex = textureId.index;
             material->samplerIndex = world->worldSamplerId.index;
-            material->flags |= APP_WORLD_MATERIAL_FLAG_TEXTURED;
+            material->flags |= ENG_WORLD_MATERIAL_FLAG_TEXTURED;
             world->materialsDirty = 1;
             boundCount += 1u;
         }
@@ -842,7 +823,7 @@ static B32 app_texture_artifact_publish_(ArtifactPublishContext* publishCtx, Art
 }
 
 static void app_model_artifact_destroy_(void* typeUserData, ArtifactValue value) {
-    AppWorldArtifactBridge* bridge = (AppWorldArtifactBridge*)typeUserData;
+    EngWorldArtifactBridge* bridge = (EngWorldArtifactBridge*)typeUserData;
     if (!bridge || !bridge->device || !bridge->state) {
         return;
     }
@@ -851,21 +832,21 @@ static void app_model_artifact_destroy_(void* typeUserData, ArtifactValue value)
         arena_release(arena);
         return;
     }
-    AppWorldState* world = &bridge->state->world;
+    EngWorldState* world = &bridge->state->world;
     Arena* modelArena = (Arena*)value.u64[0];
-    AppWorldModelResources* resources = (AppWorldModelResources*)value.u64[1];
+    EngWorldModelResources* resources = (EngWorldModelResources*)value.u64[1];
     U32 assetIndex = (U32)value.u64[2];
     for (U32 section = 0u; section < resources->sectionCount; ++section) {
-        app_world_release_mesh_(bridge->device, world, resources->sections[section]);
+        eng_world_release_mesh_(bridge->device, world, resources->sections[section]);
     }
     for (U32 material = 0u; material < resources->materialCount; ++material) {
-        app_world_material_release(world, resources->materials[material].worldSlot);
+        eng_world_material_release(world, resources->materials[material].worldSlot);
     }
     gfx_destroy_buffer(bridge->device, resources->vertexBuffer);
     gfx_destroy_buffer(bridge->device, resources->indexBuffer);
     // A supersede has already pointed models[] at the replacement; only a
     // terminal destroy (eviction, shutdown) still owns the slot.
-    if (assetIndex < APP_WORLD_DEMO_ASSET_COUNT && world->models[assetIndex] == resources) {
+    if (assetIndex < ENG_WORLD_MAX_MODELS && world->models[assetIndex] == resources) {
         world->models[assetIndex] = 0;
     }
     arena_release(modelArena);
@@ -873,7 +854,7 @@ static void app_model_artifact_destroy_(void* typeUserData, ArtifactValue value)
 }
 
 static void app_texture_artifact_destroy_(void* typeUserData, ArtifactValue value) {
-    AppWorldArtifactBridge* bridge = (AppWorldArtifactBridge*)typeUserData;
+    EngWorldArtifactBridge* bridge = (EngWorldArtifactBridge*)typeUserData;
     if (!bridge || !bridge->device) {
         return;
     }
@@ -886,7 +867,7 @@ static void app_texture_artifact_destroy_(void* typeUserData, ArtifactValue valu
     texture.index = (U32)value.u64[0];
     texture.generation = (U32)value.u64[1];
     U32 textureId = (U32)value.u64[2];
-    AppWorldState* world = &bridge->state->world;
+    EngWorldState* world = &bridge->state->world;
     for (U32 at = 0u; at < world->assetTextureCount; ++at) {
         if (world->assetTextures[at].index == texture.index &&
             world->assetTextures[at].generation == texture.generation) {
@@ -897,11 +878,11 @@ static void app_texture_artifact_destroy_(void* typeUserData, ArtifactValue valu
     }
     // Unbind any material still pointing at this texture's bindless id; a
     // supersede has already rebound to the replacement and matches nothing.
-    for (U32 materialIndex = 0u; materialIndex < APP_WORLD_MAX_MATERIALS; ++materialIndex) {
+    for (U32 materialIndex = 0u; materialIndex < ENG_WORLD_MAX_MATERIALS; ++materialIndex) {
         ShdWorldMaterialRecord* material = &world->materialRecords[materialIndex];
-        if (FLAGS_HAS(material->flags, APP_WORLD_MATERIAL_FLAG_TEXTURED) &&
+        if (FLAGS_HAS(material->flags, ENG_WORLD_MATERIAL_FLAG_TEXTURED) &&
             material->textureIndex == textureId) {
-            material->flags &= ~APP_WORLD_MATERIAL_FLAG_TEXTURED;
+            material->flags &= ~ENG_WORLD_MATERIAL_FLAG_TEXTURED;
             material->textureIndex = 0u;
             material->samplerIndex = 0u;
             world->materialsDirty = 1;
@@ -911,20 +892,20 @@ static void app_texture_artifact_destroy_(void* typeUserData, ArtifactValue valu
     gfx_destroy_texture(bridge->device, texture);
 }
 
-static B32 app_audio_artifact_build_(ArtifactBuildContext* buildCtx, ArtifactValue* outValue, U64* outBytes) {
+static B32 eng_audio_artifact_build_(ArtifactBuildContext* buildCtx, ArtifactValue* outValue, U64* outBytes) {
     return app_asset_build_blob_(buildCtx, ASSET_AUDIO_MAGIC, sizeof(AssetAudioHeader), outValue, outBytes);
 }
 
-static B32 app_audio_artifact_publish_(ArtifactPublishContext* publishCtx, ArtifactValue buildValue,
+static B32 eng_audio_artifact_publish_(ArtifactPublishContext* publishCtx, ArtifactValue buildValue,
                                        ArtifactValue* outValue, U64* outBytes) {
-    AppWorldArtifactBridge* bridge = (AppWorldArtifactBridge*)publishCtx->typeUserData;
+    EngWorldArtifactBridge* bridge = (EngWorldArtifactBridge*)publishCtx->typeUserData;
     Arena* arena = (Arena*)buildValue.u64[0];
     const U8* blob = (const U8*)buildValue.u64[1];
     U64 blobSize = buildValue.u64[2];
     const AppAssetRequest* request = (const AppAssetRequest*)publishCtx->requestData;
     if (!bridge || !bridge->audioSystem || !bridge->state || !blob ||
         !request || publishCtx->requestDataSize < sizeof(AppAssetRequest) ||
-        request->assetIndex >= AppSound_Count) {
+        request->assetIndex >= ENG_AUDIO_MAX_SOUNDS) {
         arena_release(arena);
         return 0;
     }
@@ -952,13 +933,12 @@ static B32 app_audio_artifact_publish_(ArtifactPublishContext* publishCtx, Artif
         return 0;
     }
 
-    AppAudioState* audio = &bridge->state->audio;
+    EngAudio* audio = &bridge->state->audio;
     audio->sounds[request->assetIndex] = handle;
-    // Republishing the ambience bed killed its looping voice through the
-    // generation bump; restart it so the toggle stays truthful.
-    if (request->assetIndex == AppSound_Ambience && audio->ambienceOn) {
-        audio_play(bridge->audioSystem, handle, APP_SOUND_GAIN_AMBIENCE, 1);
-    }
+    // A (re)publish bumps the slot generation; what to do about it (e.g.
+    // restarting a looping bed whose voice the buffer bump killed) is
+    // project policy, watched from its pre_frame.
+    audio->soundGenerations[request->assetIndex] += 1u;
 
     // The blob (and header) die here; log from locals only (the U6 class).
     U32 frameCount = header->frameCount;
@@ -974,8 +954,8 @@ static B32 app_audio_artifact_publish_(ArtifactPublishContext* publishCtx, Artif
     return 1;
 }
 
-static void app_audio_artifact_destroy_(void* typeUserData, ArtifactValue value) {
-    AppWorldArtifactBridge* bridge = (AppWorldArtifactBridge*)typeUserData;
+static void eng_audio_artifact_destroy_(void* typeUserData, ArtifactValue value) {
+    EngWorldArtifactBridge* bridge = (EngWorldArtifactBridge*)typeUserData;
     if (!bridge || !bridge->state) {
         return;
     }
@@ -990,8 +970,8 @@ static void app_audio_artifact_destroy_(void* typeUserData, ArtifactValue value)
     U32 soundIndex = (U32)value.u64[1];
     // A supersede has already rebound sounds[]; only a terminal destroy
     // still owns the slot.
-    AppAudioState* audio = &bridge->state->audio;
-    if (soundIndex < AppSound_Count &&
+    EngAudio* audio = &bridge->state->audio;
+    if (soundIndex < ENG_AUDIO_MAX_SOUNDS &&
         audio->sounds[soundIndex].index == handle.index &&
         audio->sounds[soundIndex].generation == handle.generation) {
         AudioBufferHandle zero = {};
@@ -1001,9 +981,9 @@ static void app_audio_artifact_destroy_(void* typeUserData, ArtifactValue value)
     LOG_INFO("asset", "Sound destroyed (sound {} slot {} gen {})", soundIndex, handle.index, handle.generation);
 }
 
-static B32 app_world_register_artifact_types_(APP_Context* ctx) {
+static B32 eng_world_register_artifact_types_(EngContext* ctx) {
     ASSERT_ALWAYS(ctx != 0);
-    AppCoreState* state = ctx->core;
+    EngState* state = ctx->engine;
     if (!state->resources.artifactCache || !ctx->host->gfxDevice) {
         return 1;
     }
@@ -1013,7 +993,7 @@ static B32 app_world_register_artifact_types_(APP_Context* ctx) {
     state->world.artifactBridge.state = state;
 
     ArtifactTypeDesc modelType = {};
-    modelType.typeId = APP_ARTIFACT_TYPE_MODEL;
+    modelType.typeId = ENG_ARTIFACT_TYPE_MODEL;
     modelType.name = str8("model");
     modelType.buildProc = app_model_artifact_build_;
     modelType.publishProc = app_model_artifact_publish_;
@@ -1024,7 +1004,7 @@ static B32 app_world_register_artifact_types_(APP_Context* ctx) {
     }
 
     ArtifactTypeDesc textureType = {};
-    textureType.typeId = APP_ARTIFACT_TYPE_TEXTURE;
+    textureType.typeId = ENG_ARTIFACT_TYPE_TEXTURE;
     textureType.name = str8("texture");
     textureType.buildProc = app_texture_artifact_build_;
     textureType.publishProc = app_texture_artifact_publish_;
@@ -1035,11 +1015,11 @@ static B32 app_world_register_artifact_types_(APP_Context* ctx) {
     }
 
     ArtifactTypeDesc audioType = {};
-    audioType.typeId = APP_ARTIFACT_TYPE_AUDIO;
+    audioType.typeId = ENG_ARTIFACT_TYPE_AUDIO;
     audioType.name = str8("audio");
-    audioType.buildProc = app_audio_artifact_build_;
-    audioType.publishProc = app_audio_artifact_publish_;
-    audioType.destroyProc = app_audio_artifact_destroy_;
+    audioType.buildProc = eng_audio_artifact_build_;
+    audioType.publishProc = eng_audio_artifact_publish_;
+    audioType.destroyProc = eng_audio_artifact_destroy_;
     audioType.userData = &state->world.artifactBridge;
     if (!artifact_register_type(state->resources.artifactCache, &audioType)) {
         return 0;
@@ -1050,25 +1030,26 @@ static B32 app_world_register_artifact_types_(APP_Context* ctx) {
 // Resolves every demo asset through the artifact cache and records whether
 // the set is settled (all artifacts Ready for the current file generations)
 // in world->assetsSettled, which gates the per-frame resource polls.
-static void app_world_try_load_assets_(APP_Context* ctx) {
-    AppCoreState* state = ctx->core;
-    AppWorldState* world = &state->world;
+static void eng_world_try_load_assets_(EngContext* ctx) {
+    EngState* state = ctx->engine;
+    EngWorldState* world = &state->world;
 
     if (!state->resources.fileStream || !state->resources.artifactCache || !world->gpuResourcesCreated) {
         return;
     }
 
+    const EngProject* project = eng_project_();
     B32 settled = 1;
-    for (U32 assetIndex = 0u; assetIndex < APP_WORLD_DEMO_ASSET_COUNT; ++assetIndex) {
-        const AppWorldDemoAssetDesc* asset = APP_WORLD_DEMO_ASSETS + assetIndex;
+    for (U32 assetIndex = 0u; assetIndex < project->modelCount; ++assetIndex) {
+        const EngModelDesc* asset = project->models + assetIndex;
 
         FileView modelView = file_view(state->resources.fileStream, world->assetModelFiles[assetIndex]);
         if (modelView.status == FileStatus_Ready && !content_hash_is_zero(modelView.hash)) {
             AppAssetRequest request = {};
             request.hash = modelView.hash;
             request.assetIndex = assetIndex;
-            ArtifactResult result = artifact_get(state->resources.artifactCache, APP_ARTIFACT_TYPE_MODEL,
-                                                 app_artifact_key_from_label(asset->modelLabel),
+            ArtifactResult result = artifact_get(state->resources.artifactCache, ENG_ARTIFACT_TYPE_MODEL,
+                                                 eng_artifact_key_from_label(asset->label),
                                                  modelView.generation, &request, sizeof(request),
                                                  ArtifactGetFlags_None, 0u);
             if (result.status != ArtifactStatus_Ready ||
@@ -1080,7 +1061,7 @@ static void app_world_try_load_assets_(APP_Context* ctx) {
         }
 
         // The published model declares how many sibling textures exist.
-        const AppWorldModelResources* resources = world->models[assetIndex];
+        const EngWorldModelResources* resources = world->models[assetIndex];
         if (!resources) {
             settled = 0;
             continue;
@@ -1105,8 +1086,8 @@ static void app_world_try_load_assets_(APP_Context* ctx) {
                 settled = 0;
                 continue;
             }
-            StringU8 label = str8_fmt(scratch.arena, "{}#tex{}", str8(asset->modelLabel), textureLocal);
-            ArtifactResult result = artifact_get(state->resources.artifactCache, APP_ARTIFACT_TYPE_TEXTURE,
+            StringU8 label = str8_fmt(scratch.arena, "{}#tex{}", str8(asset->label), textureLocal);
+            ArtifactResult result = artifact_get(state->resources.artifactCache, ENG_ARTIFACT_TYPE_TEXTURE,
                                                  artifact_key_from_bytes(label.data, label.size),
                                                  textureView.generation, &request, sizeof(request),
                                                  ArtifactGetFlags_None, 0u);
@@ -1122,17 +1103,18 @@ static void app_world_try_load_assets_(APP_Context* ctx) {
 
 // Same shape as the model poll: resolve every sound through the artifact
 // cache and record whether the set is settled for the current generations.
-static void app_audio_try_load_sounds_(APP_Context* ctx) {
-    AppCoreState* state = ctx->core;
-    AppAudioState* audio = &state->audio;
+static void eng_audio_try_load_sounds_(EngContext* ctx) {
+    EngState* state = ctx->engine;
+    EngAudio* audio = &state->audio;
 
     if (!state->resources.fileStream || !state->resources.artifactCache ||
         !ctx->host->audioSystem) {
         return;
     }
 
+    const EngProject* project = eng_project_();
     B32 settled = 1;
-    for (U32 soundIndex = 0u; soundIndex < AppSound_Count; ++soundIndex) {
+    for (U32 soundIndex = 0u; soundIndex < project->soundCount; ++soundIndex) {
         FileView soundView = file_view(state->resources.fileStream, audio->soundFiles[soundIndex]);
         if (soundView.status != FileStatus_Ready || content_hash_is_zero(soundView.hash)) {
             settled = 0;
@@ -1141,8 +1123,8 @@ static void app_audio_try_load_sounds_(APP_Context* ctx) {
         AppAssetRequest request = {};
         request.hash = soundView.hash;
         request.assetIndex = soundIndex;
-        ArtifactResult result = artifact_get(state->resources.artifactCache, APP_ARTIFACT_TYPE_AUDIO,
-                                             app_artifact_key_from_label(APP_AUDIO_SOUND_DESCS[soundIndex].soundLabel),
+        ArtifactResult result = artifact_get(state->resources.artifactCache, ENG_ARTIFACT_TYPE_AUDIO,
+                                             eng_artifact_key_from_label(project->sounds[soundIndex].label),
                                              soundView.generation, &request, sizeof(request),
                                              ArtifactGetFlags_None, 0u);
         if (result.status != ArtifactStatus_Ready ||
@@ -1153,11 +1135,11 @@ static void app_audio_try_load_sounds_(APP_Context* ctx) {
     audio->settled = settled;
 }
 
-static B32 app_world_create_graphics_pipeline_(APP_Context* ctx, ContentHash vertexHash, ContentHash fragmentHash,
+static B32 eng_world_create_graphics_pipeline_(EngContext* ctx, ContentHash vertexHash, ContentHash fragmentHash,
                                                B32 transparent, GfxPipeline* outPipeline) {
     *outPipeline = {};
-    ContentView vertexView = content_view_hash(ctx->core->resources.contentStore, vertexHash);
-    ContentView fragmentView = content_view_hash(ctx->core->resources.contentStore, fragmentHash);
+    ContentView vertexView = content_view_hash(ctx->engine->resources.contentStore, vertexHash);
+    ContentView fragmentView = content_view_hash(ctx->engine->resources.contentStore, fragmentHash);
     if (!vertexView.valid || vertexView.size == 0u || !fragmentView.valid || fragmentView.size == 0u) {
         return 0;
     }
@@ -1184,10 +1166,10 @@ static B32 app_world_create_graphics_pipeline_(APP_Context* ctx, ContentHash ver
     desc.vertexShader.format = GfxShaderFormat_MSL_Source;
     desc.fragmentShader.format = GfxShaderFormat_MSL_Source;
 #endif
-    desc.vertexShader.entry = APP_SHADER_WORLD_VERTEX_ENTRY;
+    desc.vertexShader.entry = ENG_SHADER_WORLD_VERTEX_ENTRY;
     desc.vertexShader.data = vertexView.data;
     desc.vertexShader.size = vertexView.size;
-    desc.fragmentShader.entry = APP_SHADER_WORLD_FRAGMENT_ENTRY;
+    desc.fragmentShader.entry = ENG_SHADER_WORLD_FRAGMENT_ENTRY;
     desc.fragmentShader.data = fragmentView.data;
     desc.fragmentShader.size = fragmentView.size;
     desc.topology = GfxPrimitiveTopology_TriangleList;
@@ -1215,17 +1197,17 @@ static B32 app_world_create_graphics_pipeline_(APP_Context* ctx, ContentHash ver
     return 1;
 }
 
-static void app_world_try_update_pipelines_(APP_Context* ctx) {
-    AppCoreState* state = ctx->core;
-    AppWorldState* world = &state->world;
+static void eng_world_try_update_pipelines_(EngContext* ctx) {
+    EngState* state = ctx->engine;
+    EngWorldState* world = &state->world;
     if (state->resources.fileStream == 0 || state->resources.contentStore == 0 || ctx->host->gfxDevice == 0) {
         return;
     }
 
-    FileView views[APP_WORLD_SHADER_COUNT];
+    FileView views[ENG_WORLD_SHADER_COUNT];
     B32 allReady = 1;
     B32 anyChanged = 0;
-    for (U32 shaderIndex = 0u; shaderIndex < APP_WORLD_SHADER_COUNT; ++shaderIndex) {
+    for (U32 shaderIndex = 0u; shaderIndex < ENG_WORLD_SHADER_COUNT; ++shaderIndex) {
         views[shaderIndex] = file_view(state->resources.fileStream, world->shaderFiles[shaderIndex]);
         if (views[shaderIndex].status != FileStatus_Ready || content_hash_is_zero(views[shaderIndex].hash)) {
             allReady = 0;
@@ -1241,10 +1223,10 @@ static void app_world_try_update_pipelines_(APP_Context* ctx) {
 
     GfxPipeline newOpaque = {};
     GfxPipeline newTransparent = {};
-    if (!app_world_create_graphics_pipeline_(ctx, views[AppWorldShaderSlot_Vertex].hash,
-                                             views[AppWorldShaderSlot_Fragment].hash, 0, &newOpaque) ||
-        !app_world_create_graphics_pipeline_(ctx, views[AppWorldShaderSlot_Vertex].hash,
-                                             views[AppWorldShaderSlot_Fragment].hash, 1, &newTransparent)) {
+    if (!eng_world_create_graphics_pipeline_(ctx, views[EngWorldShaderSlot_Vertex].hash,
+                                             views[EngWorldShaderSlot_Fragment].hash, 0, &newOpaque) ||
+        !eng_world_create_graphics_pipeline_(ctx, views[EngWorldShaderSlot_Vertex].hash,
+                                             views[EngWorldShaderSlot_Fragment].hash, 1, &newTransparent)) {
         gfx_destroy_pipeline(ctx->host->gfxDevice, newOpaque);
         return;
     }
@@ -1252,23 +1234,23 @@ static void app_world_try_update_pipelines_(APP_Context* ctx) {
     GfxPipeline newCompute[5] = {};
     B32 computeOk = 1;
     for (U32 passIndex = 0u; passIndex < 5u; ++passIndex) {
-        ContentView view = content_view_hash(ctx->core->resources.contentStore,
-                                             views[AppWorldShaderSlot_Reset + passIndex].hash);
+        ContentView view = content_view_hash(ctx->engine->resources.contentStore,
+                                             views[EngWorldShaderSlot_Reset + passIndex].hash);
         if (!view.valid || view.size == 0u) {
             computeOk = 0;
             break;
         }
         GfxComputePipelineDesc desc = {};
-        desc.name = APP_WORLD_COMPUTE_ENTRIES[passIndex];
+        desc.name = ENG_WORLD_COMPUTE_ENTRIES[passIndex];
 #if defined(PLATFORM_OS_WINDOWS)
         desc.shader.format = GfxShaderFormat_SPIRV;
 #else
         desc.shader.format = GfxShaderFormat_MSL_Source;
 #endif
-        desc.shader.entry = APP_WORLD_COMPUTE_ENTRIES[passIndex];
+        desc.shader.entry = ENG_WORLD_COMPUTE_ENTRIES[passIndex];
         desc.shader.data = view.data;
         desc.shader.size = view.size;
-        desc.threadsPerThreadgroupX = APP_WORLD_COMPUTE_GROUP_SIZES[passIndex];
+        desc.threadsPerThreadgroupX = ENG_WORLD_COMPUTE_GROUP_SIZES[passIndex];
         desc.threadsPerThreadgroupY = 1u;
         desc.threadsPerThreadgroupZ = 1u;
         newCompute[passIndex] = gfx_create_compute_pipeline(ctx->host->gfxDevice, &desc);
@@ -1294,15 +1276,15 @@ static void app_world_try_update_pipelines_(APP_Context* ctx) {
     }
     world->opaquePipeline = newOpaque;
     world->transparentPipeline = newTransparent;
-    for (U32 shaderIndex = 0u; shaderIndex < APP_WORLD_SHADER_COUNT; ++shaderIndex) {
+    for (U32 shaderIndex = 0u; shaderIndex < ENG_WORLD_SHADER_COUNT; ++shaderIndex) {
         world->shaderHashes[shaderIndex] = views[shaderIndex].hash;
     }
     LOG_INFO("gfx", "World pipelines ready");
 }
 
-static void app_world_ensure_depth_(APP_Context* ctx) {
-    AppCoreState* state = ctx->core;
-    AppWorldState* world = &state->world;
+static void eng_world_ensure_depth_(EngContext* ctx) {
+    EngState* state = ctx->engine;
+    EngWorldState* world = &state->world;
     U32 width = ctx->host->windowWidth;
     U32 height = ctx->host->windowHeight;
     if (width == 0u || height == 0u) {
@@ -1327,31 +1309,34 @@ static void app_world_ensure_depth_(APP_Context* ctx) {
     world->depthHeight = height;
 }
 
-static void app_world_begin_frame_(APP_Context* ctx) {
-    AppCoreState* state = ctx->core;
-    AppWorldState* world = &state->world;
+static void eng_world_begin_frame_(EngContext* ctx) {
+    EngState* state = ctx->engine;
+    EngWorldState* world = &state->world;
     Arena* arena = ctx->host->frameArena;
 
+    // Lane policy is the project's (set per frame in pre_frame);
     // spmd_dispatch lanes must not exceed worker count (debug-asserted).
-    U32 laneCount = 1u;
-    if (state->demo.threadedExtract && state->jobSystem && state->workerCount > 1u) {
-        laneCount = MIN(state->workerCount, MIN(state->demo.maxLanes, APP_WORLD_MAX_LANES));
-        laneCount = MAX(laneCount, 1u);
+    U32 laneCount = MAX(world->requestedLaneCount, 1u);
+    laneCount = MIN(laneCount, ENG_WORLD_MAX_LANES);
+    if (!state->jobSystem || state->workerCount <= 1u) {
+        laneCount = 1u;
+    } else {
+        laneCount = MIN(laneCount, state->workerCount);
     }
     world->laneCount = laneCount;
-    world->laneWriters = ARENA_PUSH_ARRAY(arena, AppWorldLaneWriter, laneCount);
-    ShdWorldRenderableRecord* records = ARENA_PUSH_ARRAY(arena, ShdWorldRenderableRecord, APP_WORLD_MAX_RENDERABLES);
-    ShdWorldRenderableRecord* transparents = ARENA_PUSH_ARRAY(arena, ShdWorldRenderableRecord, APP_WORLD_MAX_TRANSPARENTS);
+    world->laneWriters = ARENA_PUSH_ARRAY(arena, EngWorldLaneWriter, laneCount);
+    ShdWorldRenderableRecord* records = ARENA_PUSH_ARRAY(arena, ShdWorldRenderableRecord, ENG_WORLD_MAX_RENDERABLES);
+    ShdWorldRenderableRecord* transparents = ARENA_PUSH_ARRAY(arena, ShdWorldRenderableRecord, ENG_WORLD_MAX_TRANSPARENTS);
     world->frameOpen = (world->laneWriters != 0 && records != 0 && transparents != 0);
     if (!world->frameOpen) {
-        app_world_fail_once_(world, AppWorldFailLog_FrameAlloc, "frame arena exhausted in begin");
+        eng_world_fail_once_(world, EngWorldFailLog_FrameAlloc, "frame arena exhausted in begin");
         return;
     }
 
-    U32 cap = APP_WORLD_MAX_RENDERABLES / laneCount;
-    U32 transparentCap = APP_WORLD_MAX_TRANSPARENTS / laneCount;
+    U32 cap = ENG_WORLD_MAX_RENDERABLES / laneCount;
+    U32 transparentCap = ENG_WORLD_MAX_TRANSPARENTS / laneCount;
     for (U32 lane = 0u; lane < laneCount; ++lane) {
-        AppWorldLaneWriter* writer = world->laneWriters + lane;
+        EngWorldLaneWriter* writer = world->laneWriters + lane;
         writer->records = records + (U64)lane * cap;
         writer->count = 0u;
         writer->cap = cap;
@@ -1362,25 +1347,25 @@ static void app_world_begin_frame_(APP_Context* ctx) {
     }
 }
 
-static void app_world_set_camera(APP_Context* ctx, Vec3F32 eye, Vec3F32 target, F32 fovYRadians,
+static void eng_world_set_camera(EngContext* ctx, Vec3F32 eye, Vec3F32 target, F32 fovYRadians,
                                  F32 zNear, F32 zFar) {
-    AppCoreState* state = ctx->core;
-    AppWorldState* world = &state->world;
+    EngState* state = ctx->engine;
+    EngWorldState* world = &state->world;
     F32 aspect = (ctx->host->windowHeight != 0u)
         ? ((F32)ctx->host->windowWidth / (F32)ctx->host->windowHeight)
         : 1.0f;
-    Mat4x4F32 viewProj = app_world_camera_view_proj_(eye, target, app_world_vec3_(0.0f, 1.0f, 0.0f),
+    Mat4x4F32 viewProj = eng_world_camera_view_proj_(eye, target, eng_world_vec3_(0.0f, 1.0f, 0.0f),
                                                      fovYRadians, aspect, zNear, zFar);
 
     MEMSET(&world->frameRecord, 0, sizeof(world->frameRecord));
     MEMCPY(world->frameRecord.viewProj, &viewProj, sizeof(world->frameRecord.viewProj));
-    app_world_frustum_planes_(&viewProj, world->frameRecord.frustumPlanes);
+    eng_world_frustum_planes_(&viewProj, world->frameRecord.frustumPlanes);
     world->frameRecord.cameraPos[0] = eye.x;
     world->frameRecord.cameraPos[1] = eye.y;
     world->frameRecord.cameraPos[2] = eye.z;
     world->frameRecord.time = (F32)state->simTimeSeconds;
 
-    Vec3F32 forward = app_world_vec3_(target.x - eye.x, target.y - eye.y, target.z - eye.z);
+    Vec3F32 forward = eng_world_vec3_(target.x - eye.x, target.y - eye.y, target.z - eye.z);
     F32 length = vec3_length(forward);
     if (length > 0.0f) {
         forward.x /= length;
@@ -1390,10 +1375,10 @@ static void app_world_set_camera(APP_Context* ctx, Vec3F32 eye, Vec3F32 target, 
     world->cameraForward = forward;
 }
 
-static void app_world_writer_push_(AppWorldState* world, AppWorldLaneWriter* writer,
-                                   AppWorldMeshHandle meshHandle, U32 materialIndex,
-                                   AppWorldBin bin, const Mat4x4F32* transform) {
-    AppWorldMesh* mesh = (AppWorldMesh*)slot_map_get(&world->meshes, meshHandle.index, meshHandle.generation);
+static void eng_world_writer_push_(EngWorldState* world, EngWorldLaneWriter* writer,
+                                   EngWorldMeshHandle meshHandle, U32 materialIndex,
+                                   EngWorldBin bin, const Mat4x4F32* transform) {
+    EngWorldMesh* mesh = (EngWorldMesh*)slot_map_get(&world->meshes, meshHandle.index, meshHandle.generation);
     if (!mesh) {
         return;
     }
@@ -1422,12 +1407,12 @@ static void app_world_writer_push_(AppWorldState* world, AppWorldLaneWriter* wri
     record.materialIndex = materialIndex;
     // Transparents are CPU-direct and own no GPU cell; their cellIndex is
     // just the mesh slot for run grouping in the sorted tail.
-    record.cellIndex = (bin == AppWorldBin_Transparent)
+    record.cellIndex = (bin == EngWorldBin_Transparent)
         ? meshHandle.index
-        : (U32)bin * APP_WORLD_MAX_MESHES + meshHandle.index;
+        : (U32)bin * ENG_WORLD_MAX_MESHES + meshHandle.index;
     record.flags = 0u;
 
-    if (bin == AppWorldBin_Transparent) {
+    if (bin == EngWorldBin_Transparent) {
         if (writer->transparentCount >= writer->transparentCap) {
             writer->dropped += 1u;
             return;
@@ -1445,13 +1430,13 @@ static void app_world_writer_push_(AppWorldState* world, AppWorldLaneWriter* wri
     writer->count += 1u;
 }
 
-static void app_world_push(APP_Context* ctx, AppWorldMeshHandle meshHandle, U32 materialIndex,
-                           AppWorldBin bin, const Mat4x4F32* transform) {
-    AppWorldState* world = &ctx->core->world;
+static void eng_world_push(EngContext* ctx, EngWorldMeshHandle meshHandle, U32 materialIndex,
+                           EngWorldBin bin, const Mat4x4F32* transform) {
+    EngWorldState* world = &ctx->engine->world;
     if (!world->frameOpen) {
         return;
     }
-    app_world_writer_push_(world, world->laneWriters, meshHandle, materialIndex, bin, transform);
+    eng_world_writer_push_(world, world->laneWriters, meshHandle, materialIndex, bin, transform);
 }
 
 // Merges every lane's transparent slice, frustum-culls on the CPU (the GPU
@@ -1462,7 +1447,7 @@ static void app_world_push(APP_Context* ctx, AppWorldMeshHandle meshHandle, U32 
 // memory so the run walk never reads GPU memory back. Cap overflow drops
 // the nearest records and counts as dropped; culled records are just
 // invisible. Returns 0 only on allocation failure.
-static B32 app_world_cull_sort_transparents_(AppWorldState* world, Arena* frameArena,
+static B32 eng_world_cull_sort_transparents_(EngWorldState* world, Arena* frameArena,
                                              U32 total, U32 maxUpload,
                                              ShdWorldRenderableRecord* tailOut,
                                              U32** outTailCells,
@@ -1481,14 +1466,14 @@ static B32 app_world_cull_sort_transparents_(AppWorldState* world, Arena* frameA
     Vec3F32 forward = world->cameraForward;
     U32 visible = 0u;
     for (U32 lane = 0u; lane < world->laneCount; ++lane) {
-        const AppWorldLaneWriter* writer = world->laneWriters + lane;
+        const EngWorldLaneWriter* writer = world->laneWriters + lane;
         for (U32 at = 0u; at < writer->transparentCount; ++at) {
             const ShdWorldRenderableRecord* record = writer->transparents + at;
             F32 radius = record->boundsRadius;
-            if (!app_world_sphere_visible_(planes, record->boundsCenter, radius)) {
+            if (!eng_world_sphere_visible_(planes, record->boundsCenter, radius)) {
                 continue;
             }
-            depths[visible] = app_world_transparent_depth_(record->boundsCenter, radius, eye, forward);
+            depths[visible] = eng_world_transparent_depth_(record->boundsCenter, radius, eye, forward);
             sources[visible] = record;
             visible += 1u;
         }
@@ -1521,7 +1506,7 @@ static B32 app_world_cull_sort_transparents_(AppWorldState* world, Arena* frameA
     }
     // Back-to-front: descending view depth; ascending radix, reversed
     // copy-out.
-    app_world_order_ascending_(depths, order, scratch, visible);
+    eng_world_order_ascending_(depths, order, scratch, visible);
     for (U32 at = 0u; at < uploadCount; ++at) {
         const ShdWorldRenderableRecord* source = sources[order[visible - 1u - at]];
         tailOut[at] = *source;
@@ -1532,9 +1517,9 @@ static B32 app_world_cull_sort_transparents_(AppWorldState* world, Arena* frameA
     return 1;
 }
 
-static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame) {
-    AppCoreState* state = ctx->core;
-    AppWorldState* world = &state->world;
+static void eng_world_execute_(EngContext* ctx, EngRendererFrame* rendererFrame) {
+    EngState* state = ctx->engine;
+    EngWorldState* world = &state->world;
     GfxFrame* frame = rendererFrame->frame;
 
     if (!world->frameOpen) {
@@ -1547,7 +1532,7 @@ static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame
     U32 transparentTotal = 0u;
     U32 dropped = 0u;
     for (U32 lane = 0u; lane < world->laneCount; ++lane) {
-        const AppWorldLaneWriter* writer = world->laneWriters + lane;
+        const EngWorldLaneWriter* writer = world->laneWriters + lane;
         opaqueTotal += writer->count;
         transparentTotal += writer->transparentCount;
         dropped += writer->dropped;
@@ -1565,14 +1550,14 @@ static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame
 
     // Per-frame GPU data is written straight into the mapped Upload buffers;
     // the frame-parity round robin protects frames in flight.
-    U32 frameBufferIndex = (U32)(state->frameCounter & (APP_WORLD_FRAME_BUFFER_COUNT - 1u));
+    U32 frameBufferIndex = (U32)(state->frameCounter & (ENG_WORLD_FRAME_BUFFER_COUNT - 1u));
     GfxDevice* device = ctx->host->gfxDevice;
     ShdWorldRenderableRecord* mappedRenderables =
         (ShdWorldRenderableRecord*)gfx_buffer_contents(device, world->renderableBuffers[frameBufferIndex]);
     ShdWorldFrameRecord* mappedFrameRecord =
         (ShdWorldFrameRecord*)gfx_buffer_contents(device, world->frameRecordBuffers[frameBufferIndex]);
     if (!mappedRenderables || !mappedFrameRecord) {
-        app_world_fail_once_(world, AppWorldFailLog_MappedBuffers, "per-frame buffers are not mapped");
+        eng_world_fail_once_(world, EngWorldFailLog_MappedBuffers, "per-frame buffers are not mapped");
         return;
     }
 
@@ -1583,11 +1568,11 @@ static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame
     if (transparentTotal != 0u) {
         PROF_SCOPE("world transparents");
         U32 transparentDropped = 0u;
-        if (!app_world_cull_sort_transparents_(world, ctx->host->frameArena, transparentTotal,
-                                               APP_WORLD_MAX_RENDERABLES - opaqueTotal,
+        if (!eng_world_cull_sort_transparents_(world, ctx->host->frameArena, transparentTotal,
+                                               ENG_WORLD_MAX_RENDERABLES - opaqueTotal,
                                                mappedRenderables + opaqueTotal,
                                                &transparentCells, &transparentUpload, &transparentDropped)) {
-            app_world_fail_once_(world, AppWorldFailLog_TransparentBuild, "transparent cull/sort allocation failed");
+            eng_world_fail_once_(world, EngWorldFailLog_TransparentBuild, "transparent cull/sort allocation failed");
             return;
         }
         dropped += transparentDropped;
@@ -1603,7 +1588,7 @@ static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame
     *mappedFrameRecord = world->frameRecord;
     U32 uploadOffset = 0u;
     for (U32 lane = 0u; lane < world->laneCount; ++lane) {
-        const AppWorldLaneWriter* writer = world->laneWriters + lane;
+        const EngWorldLaneWriter* writer = world->laneWriters + lane;
         if (writer->count == 0u) {
             continue;
         }
@@ -1613,12 +1598,12 @@ static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame
     }
 
     if (world->meshRecordsDirty) {
-        ShdWorldMeshRecord meshRecords[APP_WORLD_MAX_MESHES] = {};
-        for (U32 meshSlot = 0u; meshSlot < APP_WORLD_MAX_MESHES; ++meshSlot) {
+        ShdWorldMeshRecord meshRecords[ENG_WORLD_MAX_MESHES] = {};
+        for (U32 meshSlot = 0u; meshSlot < ENG_WORLD_MAX_MESHES; ++meshSlot) {
             if (!slot_map_is_occupied(&world->meshes, meshSlot)) {
                 continue;
             }
-            AppWorldMesh* mesh = (AppWorldMesh*)slot_map_item_at(&world->meshes, meshSlot);
+            EngWorldMesh* mesh = (EngWorldMesh*)slot_map_item_at(&world->meshes, meshSlot);
             meshRecords[meshSlot].indexCount = mesh->indexCount;
             meshRecords[meshSlot].firstIndex = mesh->firstIndex;
             meshRecords[meshSlot].baseVertex = mesh->baseVertex;
@@ -1634,11 +1619,11 @@ static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame
         }
     }
 
-    U32 cellCount = app_world_cell_count_(world);
+    U32 cellCount = eng_world_cell_count_(world);
 
     GfxTemp rootTemp = gfx_allocate_temp(frame, sizeof(ShdWorldCullRootData), 16u);
     if (!rootTemp.cpu) {
-        app_world_fail_once_(world, AppWorldFailLog_RootTemp, "cull root temp allocation failed");
+        eng_world_fail_once_(world, EngWorldFailLog_RootTemp, "cull root temp allocation failed");
         world->lastRenderableCount = 0u;
         return;
     }
@@ -1655,20 +1640,20 @@ static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame
     cullRoot->meshBuffer = world->meshRecordBufferId.index;
     cullRoot->renderableCount = opaqueTotal;
     cullRoot->cellCount = cellCount;
-    cullRoot->meshCount = APP_WORLD_MAX_MESHES;
+    cullRoot->meshCount = ENG_WORLD_MAX_MESHES;
 
     static const char* passNames[5] = {
         "world reset", "world cull", "world prefix", "world scatter", "world args",
     };
     // groupsX floors at 1 so an all-transparent frame still dispatches legally;
     // the kernels early-out on renderableCount.
-    U32 renderableGroups = MAX(1u, (opaqueTotal + APP_WORLD_CULL_GROUP_SIZE - 1u) / APP_WORLD_CULL_GROUP_SIZE);
+    U32 renderableGroups = MAX(1u, (opaqueTotal + ENG_WORLD_CULL_GROUP_SIZE - 1u) / ENG_WORLD_CULL_GROUP_SIZE);
     U32 groupCounts[5] = {
-        (cellCount + APP_WORLD_CULL_GROUP_SIZE - 1u) / APP_WORLD_CULL_GROUP_SIZE,
+        (cellCount + ENG_WORLD_CULL_GROUP_SIZE - 1u) / ENG_WORLD_CULL_GROUP_SIZE,
         renderableGroups,
         1u,
         renderableGroups,
-        (cellCount + APP_WORLD_CULL_GROUP_SIZE - 1u) / APP_WORLD_CULL_GROUP_SIZE,
+        (cellCount + ENG_WORLD_CULL_GROUP_SIZE - 1u) / ENG_WORLD_CULL_GROUP_SIZE,
     };
 
     for (U32 passIndex = 0u; passIndex < 5u; ++passIndex) {
@@ -1750,10 +1735,10 @@ static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame
     depthTarget.storeOp = GfxStoreOp_DontCare;
     depthTarget.clearDepth = 1.0f;
 
-    U32 maxDrawUses = 7u + APP_WORLD_DEMO_ASSET_COUNT + world->assetTextureCount;
+    U32 maxDrawUses = 7u + ENG_WORLD_MAX_MODELS + world->assetTextureCount;
     GfxResourceUse* drawUses = ARENA_PUSH_ARRAY(ctx->host->frameArena, GfxResourceUse, maxDrawUses);
     if (!drawUses) {
-        app_world_fail_once_(world, AppWorldFailLog_DrawAlloc, "forward pass allocation failed");
+        eng_world_fail_once_(world, EngWorldFailLog_DrawAlloc, "forward pass allocation failed");
         world->lastRenderableCount = 0u;
         return;
     }
@@ -1797,8 +1782,8 @@ static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame
     // Residency contract (U6): every buffer the resource table reaches must
     // appear in the pass uses. Model sections share one vertex buffer per
     // model — declare per model, not per slot.
-    for (U32 assetIndex = 0u; assetIndex < APP_WORLD_DEMO_ASSET_COUNT; ++assetIndex) {
-        const AppWorldModelResources* model = world->models[assetIndex];
+    for (U32 assetIndex = 0u; assetIndex < ENG_WORLD_MAX_MODELS; ++assetIndex) {
+        const EngWorldModelResources* model = world->models[assetIndex];
         if (!model) {
             continue;
         }
@@ -1826,24 +1811,24 @@ static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame
 
     GfxDraw* draws = ARENA_PUSH_ARRAY(ctx->host->frameArena, GfxDraw, cellCount + transparentUpload);
     if (!draws) {
-        app_world_fail_once_(world, AppWorldFailLog_DrawAlloc, "forward pass allocation failed");
+        eng_world_fail_once_(world, EngWorldFailLog_DrawAlloc, "forward pass allocation failed");
         world->lastRenderableCount = 0u;
         return;
     }
     // One temp block holds every draw's root record at a fixed stride.
     GfxTemp rootBlock = gfx_allocate_temp(frame, sizeof(ShdWorldForwardRootData) * (cellCount + transparentUpload), 16u);
     if (!rootBlock.cpu) {
-        app_world_fail_once_(world, AppWorldFailLog_RootTemp, "draw root temp allocation failed");
+        eng_world_fail_once_(world, EngWorldFailLog_RootTemp, "draw root temp allocation failed");
         world->lastRenderableCount = 0u;
         return;
     }
     U32 drawCount = 0u;
     for (U32 cell = 0u; cell < cellCount; ++cell) {
-        U32 meshSlot = cell % APP_WORLD_MAX_MESHES;
+        U32 meshSlot = cell % ENG_WORLD_MAX_MESHES;
         if (!slot_map_is_occupied(&world->meshes, meshSlot)) {
             continue;
         }
-        AppWorldMesh* mesh = (AppWorldMesh*)slot_map_item_at(&world->meshes, meshSlot);
+        EngWorldMesh* mesh = (EngWorldMesh*)slot_map_item_at(&world->meshes, meshSlot);
 
         ShdWorldForwardRootData* rootData = (ShdWorldForwardRootData*)rootBlock.cpu + drawCount;
         MEMSET(rootData, 0, sizeof(*rootData));
@@ -1855,7 +1840,7 @@ static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame
         rootData->vertexBuffer = mesh->vertexBufferId.index;
         rootData->vertexByteOffset = mesh->vertexByteOffset;
         rootData->cellIndex = cell;
-        rootData->directFirstRenderable = APP_WORLD_DIRECT_NONE;
+        rootData->directFirstRenderable = ENG_WORLD_DIRECT_NONE;
 
         GfxDraw* draw = draws + drawCount;
         *draw = {};
@@ -1880,12 +1865,12 @@ static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame
         while (runEnd < transparentUpload && transparentCells[runEnd] == cellIndex) {
             runEnd += 1u;
         }
-        U32 meshSlot = cellIndex % APP_WORLD_MAX_MESHES;
+        U32 meshSlot = cellIndex % ENG_WORLD_MAX_MESHES;
         if (!slot_map_is_occupied(&world->meshes, meshSlot)) {
             runStart = runEnd;
             continue;
         }
-        AppWorldMesh* mesh = (AppWorldMesh*)slot_map_item_at(&world->meshes, meshSlot);
+        EngWorldMesh* mesh = (EngWorldMesh*)slot_map_item_at(&world->meshes, meshSlot);
 
         ShdWorldForwardRootData* rootData = (ShdWorldForwardRootData*)rootBlock.cpu + drawCount;
         MEMSET(rootData, 0, sizeof(*rootData));
@@ -1926,19 +1911,19 @@ static void app_world_execute_(APP_Context* ctx, AppRendererFrame* rendererFrame
     gfx_render_pass(rendererFrame->commands, &passDesc, &area, 1u);
 }
 
-static void app_world_shutdown_(APP_Context* ctx) {
-    AppCoreState* state = ctx->core;
+static void eng_world_shutdown_(EngContext* ctx) {
+    EngState* state = ctx->engine;
     GfxDevice* device = ctx->host ? ctx->host->gfxDevice : 0;
     if (device == 0) {
         return;
     }
 
-    AppWorldState* world = &state->world;
+    EngWorldState* world = &state->world;
     gfx_destroy_buffer(device, world->vertexBuffer);
     gfx_destroy_buffer(device, world->indexBuffer);
     gfx_destroy_buffer(device, world->meshRecordBuffer);
     gfx_destroy_buffer(device, world->materialBuffer);
-    for (U32 bufferIndex = 0u; bufferIndex < APP_WORLD_FRAME_BUFFER_COUNT; ++bufferIndex) {
+    for (U32 bufferIndex = 0u; bufferIndex < ENG_WORLD_FRAME_BUFFER_COUNT; ++bufferIndex) {
         gfx_destroy_buffer(device, world->frameRecordBuffers[bufferIndex]);
         gfx_destroy_buffer(device, world->renderableBuffers[bufferIndex]);
     }

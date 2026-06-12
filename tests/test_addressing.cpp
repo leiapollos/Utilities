@@ -1,7 +1,7 @@
 //
 // Index addressing conventions. Builtins: pool-absolute indices, mesh
 // records carry baseVertex 0. Cooked meshes are the opposite (relative
-// indices + baseVertex; app/assets/asset_formats.hpp). Applying the base
+// indices + baseVertex; engine/engine_assets.hpp). Applying the base
 // twice was U5's invisible-sphere bug — a relative emitter here would
 // restart each mesh's indices at 0, which this suite would catch.
 //
@@ -10,23 +10,23 @@ static void test_addressing_(void) {
     enum { TEST_CAP_V = 2048u, TEST_CAP_I = 8192u };
     static ShdWorldVertexRecord verts[TEST_CAP_V];
     static U32 indices[TEST_CAP_I];
-    AppWorldMeshBuilder b = {};
+    EngWorldMeshBuilder b = {};
     b.vertices = verts;
     b.indices = indices;
     b.vertexCapacity = TEST_CAP_V;
     b.indexCapacity = TEST_CAP_I;
 
     U32 cubeFirst = b.indexCount;
-    app_world_build_cube_(&b);
+    eng_world_build_cube_(&b);
     U32 cubeIndexEnd = b.indexCount;
     U32 cubeVertexCount = b.vertexCount;
 
     U32 sphereFirst = b.indexCount;
-    app_world_build_sphere_(&b, 12u, 18u);
+    eng_world_build_sphere_(&b, 12u, 18u);
     U32 sphereIndexEnd = b.indexCount;
     U32 sphereVertexEnd = b.vertexCount;
 
-    app_world_build_plane_(&b);
+    eng_world_build_plane_(&b);
 
     U32 cubeMin = 0xFFFFFFFFu;
     U32 cubeMax = 0u;

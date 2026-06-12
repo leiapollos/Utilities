@@ -5,6 +5,7 @@
 
 # Local planning and research notes
 documentation/
+docs/
 
 # User-specific files
 *.rsuser
@@ -416,8 +417,8 @@ Utilities
 # MacOS
 .DS_Store
 
-# Cooked assets are generated from app/assets/src by `sob cook`
-app/assets/cooked/
+# Cooked assets are generated from projects/*/assets/src by `sob cook`
+projects/*/assets/cooked/
 
 # sob bootstrap executable
 /sob

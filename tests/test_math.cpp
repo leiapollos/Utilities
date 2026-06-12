@@ -35,7 +35,7 @@ static void test_math_(void) {
     F32 aspect = 16.0f / 9.0f;
     F32 zNear = 0.1f;
     F32 zFar = 100.0f;
-    Mat4x4F32 vp = app_world_camera_view_proj_(eye, target, up, fovY, aspect, zNear, zFar);
+    Mat4x4F32 vp = eng_world_camera_view_proj_(eye, target, up, fovY, aspect, zNear, zFar);
     Mat4x4F32 view = mat4_look_at(eye, target, up);
     Mat4x4F32 projection = mat4_perspective(fovY, aspect, zNear, zFar);
     Mat4x4F32 composed = view * projection;
@@ -76,7 +76,7 @@ static void test_math_(void) {
     // the camera-right axis is -X (right-handed), so world +X lands at
     // NEGATIVE clip x. The original camera commit shipped a Vulkan-style
     // Y-flip in the projection that inverted the whole image.
-    Mat4x4F32 level = app_world_camera_view_proj_(test_vec3_(0.0f, 0.0f, -10.0f),
+    Mat4x4F32 level = eng_world_camera_view_proj_(test_vec3_(0.0f, 0.0f, -10.0f),
                                                   test_vec3_(0.0f, 0.0f, 0.0f), up,
                                                   fovY, 1.0f, zNear, zFar);
     Vec4F32 above = test_mul_point_(&level, test_vec3_(0.0f, 1.0f, 0.0f));

@@ -2,126 +2,11 @@
 // Created by André Leite on 10/06/2026.
 //
 
-#define app_ui_stat_line(ui, rgba8, fmt, ...) \
+#define eng_stat_line(ui, rgba8, fmt, ...) \
     ui_label_value((ui), (rgba8), fmt, __VA_ARGS__)
 
-static void app_demo_state_reset(AppDemoState* demo) {
-    StringU8 title = str8("world: gpu-driven indirect draws");
-    MEMSET(demo, 0, sizeof(*demo));
-    MEMCPY(demo->titleBuffer, title.data, title.size);
-    demo->titleLength = (U32)title.size;
-    demo->titleSize = 32.0f;
-    demo->showBounds = 0;
-    demo->animate = 1;
-    demo->threadedExtract = (B32)app_env_u32_(str8("UTILITIES_DEMO_THREADED"), 1u, 0u, 1u);
-    demo->playerMode = (B32)app_env_u32_(str8("UTILITIES_DEMO_PLAYER"), 0u, 0u, 1u);
-    demo->maxLanes = app_env_u32_(str8("UTILITIES_DEMO_MAX_LANES"), APP_WORLD_MAX_LANES,
-                                  1u, APP_WORLD_MAX_LANES);
-    demo->gridSide = app_env_u32_(str8("UTILITIES_DEMO_GRID"), 48u,
-                                  APP_DEMO_GRID_MIN, APP_DEMO_GRID_MAX);
-}
-
-static void app_ui_controls_panel(APP_Context* ctx, UI_Context* ui) {
-    AppDemoState* demo = &ctx->core->demo;
-
-    UI_PanelDesc desc = {};
-    desc.anchorX = 0.0f;
-    desc.anchorY = 0.0f;
-    desc.offsetX = 40.0f;
-    desc.offsetY = 440.0f;
-    desc.width = ui_px(480.0f);
-    desc.height = ui_fit();
-    ui_panel_begin(ui, str8("controls###controls"), &desc);
-
-    ui_row_begin(ui, ui_grow(1.0f), ui_fit());
-    ui_label(ui, str8("title"));
-    ui_text_edit(ui, str8("###title_edit"), demo->titleBuffer,
-                 (U32)sizeof(demo->titleBuffer), &demo->titleLength);
-    ui_row_end(ui);
-
-    ui_slider(ui, str8("size###title_size"), &demo->titleSize, 20.0f, 60.0f);
-
-    F32 gridSide = (F32)demo->gridSide;
-    ui_slider(ui, str8("grid###world_grid"), &gridSide, (F32)APP_DEMO_GRID_MIN, (F32)APP_DEMO_GRID_MAX);
-    demo->gridSide = (U32)(gridSide + 0.5f);
-
-    ui_checkbox(ui, str8("cull bounds"), &demo->showBounds);
-    ui_checkbox(ui, str8("animate"), &demo->animate);
-    ui_checkbox(ui, str8("threaded extract"), &demo->threadedExtract);
-    ui_checkbox(ui, str8("player mode"), &demo->playerMode);
-    AppAudioState* audio = &ctx->core->audio;
-    if (ui_checkbox(ui, str8("ambience"), &audio->ambienceOn)) {
-        if (audio->ambienceOn) {
-            audio_play(ctx->host->audioSystem, audio->sounds[AppSound_Ambience],
-                       APP_SOUND_GAIN_AMBIENCE, 1);
-        } else {
-            audio_stop(ctx->host->audioSystem, audio->sounds[AppSound_Ambience]);
-        }
-    }
-
-    AppCoreState* core = ctx->core;
-    AppReplayState* replay = &core->replay;
-    ui_row_begin(ui, ui_grow(1.0f), ui_fit());
-    if (ui_button(ui, str8("save [F5]###persist_save")).clicked) {
-        app_game_save_write_(core);
-    }
-    if (ui_button(ui, str8("load [F9]###persist_load")).clicked) {
-        app_game_save_read_(core);
-    }
-    if (ui_button(ui, replay->mode == AppReplayMode_Recording
-                          ? str8("stop rec [F6]###replay_rec")
-                          : str8("record [F6]###replay_rec")).clicked) {
-        if (replay->mode == AppReplayMode_Recording) {
-            app_game_record_stop_(core);
-        } else {
-            app_game_record_start_(core);
-        }
-    }
-    if (ui_button(ui, replay->mode == AppReplayMode_Playing
-                          ? str8("stop play [F7]###replay_play")
-                          : str8("replay [F7]###replay_play")).clicked) {
-        if (replay->mode == AppReplayMode_Playing) {
-            app_game_replay_stop_(core);
-        } else {
-            app_game_replay_start_(core);
-        }
-    }
-    ui_row_end(ui);
-    {
-        const char* modeName = replay->mode == AppReplayMode_Recording ? "recording"
-                             : replay->mode == AppReplayMode_Playing ? "playing"
-                             : "idle";
-        StringU8 status;
-        if (replay->divergedAtTick != 0ull) {
-            status = str8_fmt(ui->frameArena, "replay {} {}/{}  DIVERGED @{}",
-                              str8(modeName), replay->cursor,
-                              replay->mode == AppReplayMode_Recording ? APP_REPLAY_MAX_TICKS
-                                                                      : replay->tickCount,
-                              replay->divergedAtTick);
-        } else {
-            status = str8_fmt(ui->frameArena, "replay {} {}/{}", str8(modeName), replay->cursor,
-                              replay->mode == AppReplayMode_Recording ? APP_REPLAY_MAX_TICKS
-                                                                      : replay->tickCount);
-        }
-        ui_label(ui, status);
-    }
-
-    ui_row_begin(ui, ui_grow(1.0f), ui_fit());
-    if (ui_button(ui, str8("reset demo")).clicked) {
-        app_demo_state_reset(demo);
-    }
-    ui_spacer(ui, ui_grow(1.0f));
-    if (ui_button(ui, str8("hide stats [F1]")).clicked) {
-        ctx->core->debugOverlayVisible = !ctx->core->debugOverlayVisible;
-    }
-    ui_row_end(ui);
-
-
-    ui_panel_end(ui);
-}
-
-static void app_ui_stats_panel(APP_Context* ctx, UI_Context* ui) {
-    AppCoreState* state = ctx->core;
+static void eng_stats_panel(EngContext* ctx, UI_Context* ui) {
+    EngState* state = ctx->engine;
     const GfxStats* gfx = &state->render2d.lastGfxStats;
     const Draw2DStats* draw2d = &state->render2d.lastDraw2DStats;
     const UI_Stats* uiStats = &state->ui.stats;
@@ -135,63 +20,63 @@ static void app_ui_stats_panel(APP_Context* ctx, UI_Context* ui) {
     desc.height = ui_fit();
     ui_panel_begin(ui, str8("debug###stats"), &desc);
 
-    app_ui_stat_line(ui, UI_COLOR_TEXT_BRIGHT, "frame {}  reloads {}  [F1] stats  [F2] profiler",
+    eng_stat_line(ui, UI_COLOR_TEXT_BRIGHT, "frame {}  reloads {}  [F1] stats  [F2] profiler",
                      gfx->frameIndex, state->reloadCount);
-    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "gfx  draws {}  dispatches {}  pso {}  table {}",
+    eng_stat_line(ui, UI_COLOR_TEXT_DIM, "gfx  draws {}  dispatches {}  pso {}  table {}",
                      gfx->drawCount, gfx->dispatchCount, gfx->pipelineSwitchCount, gfx->resourceTableCount);
-    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "temp {}KB ovf {}   staging {}KB ovf {}",
+    eng_stat_line(ui, UI_COLOR_TEXT_DIM, "temp {}KB ovf {}   staging {}KB ovf {}",
                      gfx->tempBytesUsed / 1024u, gfx->tempOverflowCount,
                      gfx->stagingBytesUsed / 1024u, gfx->stagingOverflowCount);
-    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "draw2d  quads {}  clipped {}  dropped {}  batches {}",
+    eng_stat_line(ui, UI_COLOR_TEXT_DIM, "draw2d  quads {}  clipped {}  dropped {}  batches {}",
                      draw2d->quadsSubmitted, draw2d->quadsClipped, draw2d->quadsDropped, draw2d->batchesBuilt);
-    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "ui  widgets {}  retained {}  hits {}  evict {}  dup {}",
+    eng_stat_line(ui, UI_COLOR_TEXT_DIM, "ui  widgets {}  retained {}  hits {}  evict {}  dup {}",
                      uiStats->widgetCount, uiStats->retainedCount, uiStats->hitRectCount,
                      uiStats->retainedEvictCount, uiStats->duplicateKeyCount);
-    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "ui text  value hits {}  misses {}  uncached {}",
+    eng_stat_line(ui, UI_COLOR_TEXT_DIM, "ui text  value hits {}  misses {}  uncached {}",
                      uiStats->valueRunHits, uiStats->valueRunMisses, uiStats->valueRunUninsertable);
-    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "world  renderables {}  dropped {}  lanes {}  meshes {}  tdraws {}",
+    eng_stat_line(ui, UI_COLOR_TEXT_DIM, "world  renderables {}  dropped {}  lanes {}  meshes {}  tdraws {}",
                      state->world.lastRenderableCount, state->world.lastDroppedCount,
                      state->world.laneCount, state->world.meshCount,
                      state->world.lastTransparentDraws);
     {
         AudioStats audioStats = audio_stats(ctx->host->audioSystem);
-        app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "audio  voices {}/{}  buffers {}  drop v{} c{}  cb {}us max {}us",
+        eng_stat_line(ui, UI_COLOR_TEXT_DIM, "audio  voices {}/{}  buffers {}  drop v{} c{}  cb {}us max {}us",
                          audioStats.voicesActive, AUDIO_VOICE_COUNT, audioStats.buffersLive,
                          audioStats.voicesDropped, audioStats.commandsDropped,
                          audioStats.lastCallbackNanos / 1000ull, audioStats.maxCallbackNanos / 1000ull);
     }
-    if (state->demo.playerMode) {
-        const AppGameTickStats* tick = &state->game.lastTickStats;
-        app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "collision  colliders {}  contacts {}  depth {}  tick {}us",
-                         state->colliders.count, tick->contactCount,
-                         (F64)tick->deepestDepth, state->game.lastTickNanos / 1000ull);
+    {
+        const EngProject* project = eng_project_();
+        if (project->debug_stats) {
+            project->debug_stats(ctx, ui);
+        }
     }
 
     if (state->resources.artifactCache) {
         ArtifactStats artifact = artifact_cache_stats(state->resources.artifactCache);
-        app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "artifact  live {}  working {}  hits {}  misses {}  {}KB",
+        eng_stat_line(ui, UI_COLOR_TEXT_DIM, "artifact  live {}  working {}  hits {}  misses {}  {}KB",
                          artifact.liveCount, artifact.workingCount, artifact.hits, artifact.misses,
                          artifact.bytesLive / 1024u);
     }
     if (state->resources.contentStore) {
         ContentStats content = content_stats(state->resources.contentStore);
-        app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "content  blobs {}  keys {}  {}KB  hits {}  misses {}",
+        eng_stat_line(ui, UI_COLOR_TEXT_DIM, "content  blobs {}  keys {}  {}KB  hits {}  misses {}",
                          content.blobCount, content.keyCount, content.payloadBytes / 1024u,
                          content.hitCount, content.missCount);
     }
     if (state->resources.fileStream) {
         FileStreamStats files = file_stream_stats(state->resources.fileStream);
-        app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "files  watched {}  checked {}  published {}  failed {}",
+        eng_stat_line(ui, UI_COLOR_TEXT_DIM, "files  watched {}  checked {}  published {}  failed {}",
                          files.fileCount, files.checkedCount, files.publishCount, files.failedCount);
     }
 
-    app_ui_stat_line(ui, 0x6B7480FFu, "window {}x{}  workers {}",
+    eng_stat_line(ui, 0x6B7480FFu, "window {}x{}  workers {}",
                      state->windowWidth, state->windowHeight, state->workerCount);
 
     ui_panel_end(ui);
 }
 
-static void app_ui_profiler_row(UI_Context* ui, const ProfSiteStats* stats, U32 site, U32 depth,
+static void eng_profiler_row(UI_Context* ui, const ProfSiteStats* stats, U32 site, U32 depth,
                                 StringU8 rowKey, U32* ioSelectedSite) {
     const ProfSiteStats* siteStats = stats + site;
 
@@ -217,14 +102,14 @@ static void app_ui_profiler_row(UI_Context* ui, const ProfSiteStats* stats, U32 
     }
 
     ui_spacer(ui, ui_grow(1.0f));
-    app_ui_stat_line(ui, UI_COLOR_TEXT, "{:.3}", siteStats->avgInclMs);
-    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "{:.3}", siteStats->avgExclMs);
-    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "{:.3}", siteStats->maxInclMs);
-    app_ui_stat_line(ui, 0x6B7480FFu, "x{}", (U32)(siteStats->avgHits + 0.5f));
+    eng_stat_line(ui, UI_COLOR_TEXT, "{:.3}", siteStats->avgInclMs);
+    eng_stat_line(ui, UI_COLOR_TEXT_DIM, "{:.3}", siteStats->avgExclMs);
+    eng_stat_line(ui, UI_COLOR_TEXT_DIM, "{:.3}", siteStats->maxInclMs);
+    eng_stat_line(ui, 0x6B7480FFu, "x{}", (U32)(siteStats->avgHits + 0.5f));
     ui_row_end(ui);
 }
 
-static void app_ui_profiler_path_row(UI_Context* ui, const ProfSiteStats* stats,
+static void eng_profiler_path_row(UI_Context* ui, const ProfSiteStats* stats,
                                      const ProfPathStats* path, U32 pathIndex, U32* ioSelectedSite) {
     const ProfSiteStats* siteStats = stats + path->site;
 
@@ -251,19 +136,19 @@ static void app_ui_profiler_path_row(UI_Context* ui, const ProfSiteStats* stats,
     }
 
     ui_spacer(ui, ui_grow(1.0f));
-    app_ui_stat_line(ui, UI_COLOR_TEXT, "{:.3}", path->avgInclMs);
-    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "{:.3}", path->avgExclMs);
-    app_ui_stat_line(ui, UI_COLOR_TEXT_DIM, "{:.3}", path->maxInclMs);
-    app_ui_stat_line(ui, 0x6B7480FFu, "x{}", (U32)(path->avgHits + 0.5f));
+    eng_stat_line(ui, UI_COLOR_TEXT, "{:.3}", path->avgInclMs);
+    eng_stat_line(ui, UI_COLOR_TEXT_DIM, "{:.3}", path->avgExclMs);
+    eng_stat_line(ui, UI_COLOR_TEXT_DIM, "{:.3}", path->maxInclMs);
+    eng_stat_line(ui, 0x6B7480FFu, "x{}", (U32)(path->avgHits + 0.5f));
     ui_row_end(ui);
 }
 
-static B32 app_ui_profiler_path_live(const ProfPathStats* path) {
+static B32 eng_profiler_path_live(const ProfPathStats* path) {
     return (path->avgInclMs > 0.0f || path->lastInclMs > 0.0f || path->avgHits > 0.0f) ? 1 : 0;
 }
 
-static void app_ui_profiler_panel(APP_Context* ctx, UI_Context* ui) {
-    AppCoreState* state = ctx->core;
+static void eng_profiler_panel(EngContext* ctx, UI_Context* ui) {
+    EngState* state = ctx->engine;
     ProfInfo info = prof_info();
     U32 siteCount = 0u;
     const ProfSiteStats* stats = prof_site_stats(&siteCount);
@@ -282,7 +167,7 @@ static void app_ui_profiler_panel(APP_Context* ctx, UI_Context* ui) {
 
     F32 averageFrameMs = state->averageDeltaSeconds * 1000.0f;
     F32 fps = (state->averageDeltaSeconds > 0.0f) ? (1.0f / state->averageDeltaSeconds) : 0.0f;
-    app_ui_stat_line(ui, UI_COLOR_TEXT, "frame {:.2}ms  {:.0}fps  tick {}  clamps {}  |  res {:.0}ns  scope {:.1}ns  drops {}  sites {}",
+    eng_stat_line(ui, UI_COLOR_TEXT, "frame {:.2}ms  {:.0}fps  tick {}  clamps {}  |  res {:.0}ns  scope {:.1}ns  drops {}  sites {}",
                      averageFrameMs, fps, (U32)state->simTickCounter, state->simClampCount,
                      info.resolutionNs, info.overheadNsPerScope,
                      info.droppedEvents, info.siteCount);
@@ -330,7 +215,7 @@ static void app_ui_profiler_panel(APP_Context* ctx, UI_Context* ui) {
             order[at] = site;
         }
         for (U32 at = 0u; at < orderCount; ++at) {
-            app_ui_profiler_row(ui, stats, order[at], 0u,
+            eng_profiler_row(ui, stats, order[at], 0u,
                                 str8_fmt(ui->frameArena, "###prof_flat_{}", at),
                                 &state->profSelectedSite);
         }
@@ -348,10 +233,10 @@ static void app_ui_profiler_panel(APP_Context* ctx, UI_Context* ui) {
                     if (paths[root].parent != PROF_PATH_NIL || paths[root].thread != lane->threadIndex) {
                         continue;
                     }
-                    if (!app_ui_profiler_path_live(paths + root)) {
+                    if (!eng_profiler_path_live(paths + root)) {
                         continue;
                     }
-                    app_ui_profiler_path_row(ui, stats, paths + root, root, &state->profSelectedSite);
+                    eng_profiler_path_row(ui, stats, paths + root, root, &state->profSelectedSite);
 
                     U32 walkStack[PROF_OPEN_STACK_DEPTH];
                     U32 walkTop = 0u;
@@ -362,11 +247,11 @@ static void app_ui_profiler_panel(APP_Context* ctx, UI_Context* ui) {
                             current = paths[walkStack[walkTop]].nextSibling;
                             continue;
                         }
-                        if (!app_ui_profiler_path_live(paths + current)) {
+                        if (!eng_profiler_path_live(paths + current)) {
                             current = paths[current].nextSibling;
                             continue;
                         }
-                        app_ui_profiler_path_row(ui, stats, paths + current, current,
+                        eng_profiler_path_row(ui, stats, paths + current, current,
                                                  &state->profSelectedSite);
                         if (paths[current].firstChild != PROF_PATH_NIL && walkTop < PROF_OPEN_STACK_DEPTH) {
                             walkStack[walkTop] = current;
@@ -384,7 +269,7 @@ static void app_ui_profiler_panel(APP_Context* ctx, UI_Context* ui) {
 
     if (state->profSelectedSite != 0u && state->profSelectedSite < siteCount) {
         const ProfSiteStats* selected = stats + state->profSelectedSite;
-        app_ui_stat_line(ui, UI_COLOR_TEXT_BRIGHT, "{}  avg {:.3}ms  max {:.3}ms",
+        eng_stat_line(ui, UI_COLOR_TEXT_BRIGHT, "{}  avg {:.3}ms  max {:.3}ms",
                          str8(selected->label), selected->avgInclMs, selected->maxInclMs);
         ui_plot(ui, selected->historyMs, PROF_HISTORY_FRAMES, historyOffset, ui_grow(1.0f), ui_px(48.0f));
     }
@@ -392,9 +277,9 @@ static void app_ui_profiler_panel(APP_Context* ctx, UI_Context* ui) {
     ui_panel_end(ui);
 }
 
-static void app_ui_panels_submit(APP_Context* ctx, AppRendererFrame* rendererFrame, const AppInput* input) {
-    AppCoreState* state = ctx->core;
-    AppRender2DState* render = &state->render2d;
+static void eng_panels_submit(EngContext* ctx, EngRendererFrame* rendererFrame, const EngInput* input) {
+    EngState* state = ctx->engine;
+    EngRender2D* render = &state->render2d;
     if (render->textContext == 0 || render->font.generation == 0u) {
         return;
     }
@@ -420,26 +305,24 @@ static void app_ui_panels_submit(APP_Context* ctx, AppRendererFrame* rendererFra
         return;
     }
 
+    const EngProject* project = eng_project_();
     {
         PROF_SCOPE("ui build");
-        {
-            PROF_SCOPE("controls panel");
-            app_ui_controls_panel(ctx, ui);
+        if (project->panels) {
+            project->panels(ctx, ui);
         }
         if (state->debugOverlayVisible) {
             PROF_SCOPE("stats panel");
-            app_ui_stats_panel(ctx, ui);
+            eng_stats_panel(ctx, ui);
         }
         if (state->profilerVisible) {
             PROF_SCOPE("profiler panel");
-            app_ui_profiler_panel(ctx, ui);
+            eng_profiler_panel(ctx, ui);
         }
     }
 
-    // One site for the whole UI: any widget click this frame ticks.
-    if (ui->clickedKey != 0u) {
-        audio_play(ctx->host->audioSystem, state->audio.sounds[AppSound_Click],
-                   APP_SOUND_GAIN_CLICK, 0);
+    if (project->panels_post) {
+        project->panels_post(ctx, ui);
     }
 
     UI_Output output = {};
@@ -447,5 +330,5 @@ static void app_ui_panels_submit(APP_Context* ctx, AppRendererFrame* rendererFra
         PROF_SCOPE("ui end");
         output = ui_end(ui);
     }
-    app_renderer_apply_text_uploads(ctx, rendererFrame, output.uploads, output.uploadCount);
+    eng_renderer_apply_text_uploads(ctx, rendererFrame, output.uploads, output.uploadCount);
 }
