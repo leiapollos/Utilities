@@ -1592,8 +1592,9 @@ static S32 write_module_inputs_manifest(BuildMode mode) {
     {
         char command[2048];
         // /Zs: syntax-only; /showIncludes prints every include used.
+        // /Zc:preprocessor matches the real build's language mode (__VA_OPT__).
         snprintf(command, sizeof(command),
-                 "cl /nologo /Zs /showIncludes /I. /std:c++20 /D%s \"%s\" > \"%s\" 2>&1",
+                 "cl /nologo /Zs /showIncludes /Zc:preprocessor /I. /std:c++20 /D%s \"%s\" > \"%s\" 2>&1",
                  modeDefine, g_projectMainPath, MODULE_INPUTS_DEP_PATH);
         if (system(command) != 0) {
             fprintf(stderr, "Error: module dep scan failed\n");
