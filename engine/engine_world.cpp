@@ -17,30 +17,28 @@ enum EngWorldShaderSlot {
     EngWorldShaderSlot_Args,
 };
 
-static const char* ENG_WORLD_SHADER_PATHS[ENG_WORLD_SHADER_COUNT] = {
-    ENG_SHADER_WORLD_VERTEX_RUNTIME_PATH,
-    ENG_SHADER_WORLD_FRAGMENT_RUNTIME_PATH,
-    ENG_SHADER_WORLD_RESET_RUNTIME_PATH,
-    ENG_SHADER_WORLD_CULL_RUNTIME_PATH,
-    ENG_SHADER_WORLD_PREFIX_RUNTIME_PATH,
-    ENG_SHADER_WORLD_SCATTER_RUNTIME_PATH,
-    ENG_SHADER_WORLD_ARGS_RUNTIME_PATH,
+// World pass slot -> manifest id; paths come off the runtime table.
+static const EngShaderId ENG_WORLD_SHADERS[ENG_WORLD_SHADER_COUNT] = {
+    EngShader_WorldVertex,
+    EngShader_WorldFragment,
+    EngShader_WorldReset,
+    EngShader_WorldCull,
+    EngShader_WorldPrefix,
+    EngShader_WorldScatter,
+    EngShader_WorldArgs,
 };
+
+// "<exe>/../<runtime path>" — shared by the world and 2D passes.
+static StringU8 eng_shader_runtime_path_(Arena* arena, StringU8 exeDir, EngShaderId shader) {
+    StringU8 path = str8_concat(arena, exeDir, str8("/../"));
+    return str8_concat(arena, path, str8(ENG_SHADER_RUNTIME_PATHS[shader]));
+}
 
 // Which cooked models and sounds exist is project policy (the EngProject
 // desc tables); the machinery here — watch -> artifact -> publish into
-// the mesh tables / the host audio buffer table — is the engine's. A
-// model's textures cook as "<stem>_tex<N>.utex" siblings; the runtime
-// derives those paths.
-
-// "<dir>/<stem>.umdl" -> "<dir>/<stem>_tex<N>.utex"
-static StringU8 eng_world_model_texture_path_(Arena* arena, const char* modelPath, U32 textureLocal) {
-    StringU8 path = str8(modelPath);
-    StringU8 base = path;
-    base.size = (path.size > 5u) ? path.size - 5u : 0u;
-    return str8_fmt(arena, "{}_tex{}.utex", base, textureLocal);
-}
-
+// the mesh tables / the host audio buffer table — is the engine's.
+// Sibling texture paths derive via asset_model_texture_path (the rule
+// lives with the cooked format in engine_assets.hpp).
 
 static void eng_world_resource_cache_reset_(EngContext* ctx) {
     EngWorldState* world = &ctx->engine->world;
@@ -63,30 +61,37 @@ static void eng_world_watch_files_(EngContext* ctx) {
     DEFER_REF(temp_end(&scratch));
 
     const EngProject* project = eng_project_();
+    U32 caps = project->capabilities;
     ASSERT_ALWAYS(project->modelCount <= ENG_WORLD_MAX_MODELS);
     ASSERT_ALWAYS(project->soundCount <= ENG_AUDIO_MAX_SOUNDS);
+    // Declaring assets without the matching capability is a project bug.
+    ASSERT_ALWAYS((caps & ENG_CAP_WORLD3D) || project->modelCount == 0u);
+    ASSERT_ALWAYS((caps & ENG_CAP_AUDIO) || project->soundCount == 0u);
 
     StringU8 exeDir = OS_get_executable_directory(scratch.arena);
-    for (U32 assetIndex = 0u; assetIndex < project->modelCount; ++assetIndex) {
-        const EngModelDesc* asset = project->models + assetIndex;
-        StringU8 modelPath = str8_concat(scratch.arena, exeDir, str8("/../"));
-        modelPath = str8_concat(scratch.arena, modelPath, str8(asset->path));
-        state->world.assetModelFiles[assetIndex] = file_watch(state->resources.fileStream, modelPath, 0u);
-        // Texture watches are model-driven: the publish proc watches exactly
-        // the textureCount the cooked model declares (a boot-time guess would
-        // leave permanently-failing watches screaming in the stats).
+    if (caps & ENG_CAP_WORLD3D) {
+        for (U32 assetIndex = 0u; assetIndex < project->modelCount; ++assetIndex) {
+            const EngModelDesc* asset = project->models + assetIndex;
+            StringU8 modelPath = str8_concat(scratch.arena, exeDir, str8("/../"));
+            modelPath = str8_concat(scratch.arena, modelPath, str8(asset->path));
+            state->world.assetModelFiles[assetIndex] = file_watch(state->resources.fileStream, modelPath, 0u);
+            // Texture watches are model-driven: the publish proc watches exactly
+            // the textureCount the cooked model declares (a boot-time guess would
+            // leave permanently-failing watches screaming in the stats).
+        }
+
+        for (U32 shaderIndex = 0u; shaderIndex < ENG_WORLD_SHADER_COUNT; ++shaderIndex) {
+            StringU8 worldPath = eng_shader_runtime_path_(scratch.arena, exeDir, ENG_WORLD_SHADERS[shaderIndex]);
+            state->world.shaderFiles[shaderIndex] = file_watch(state->resources.fileStream, worldPath, 0u);
+        }
     }
 
-    for (U32 shaderIndex = 0u; shaderIndex < ENG_WORLD_SHADER_COUNT; ++shaderIndex) {
-        StringU8 worldPath = str8_concat(scratch.arena, exeDir, str8("/../"));
-        worldPath = str8_concat(scratch.arena, worldPath, str8(ENG_WORLD_SHADER_PATHS[shaderIndex]));
-        state->world.shaderFiles[shaderIndex] = file_watch(state->resources.fileStream, worldPath, 0u);
-    }
-
-    for (U32 soundIndex = 0u; soundIndex < project->soundCount; ++soundIndex) {
-        StringU8 soundPath = str8_concat(scratch.arena, exeDir, str8("/../"));
-        soundPath = str8_concat(scratch.arena, soundPath, str8(project->sounds[soundIndex].path));
-        state->audio.soundFiles[soundIndex] = file_watch(state->resources.fileStream, soundPath, 0u);
+    if (caps & ENG_CAP_AUDIO) {
+        for (U32 soundIndex = 0u; soundIndex < project->soundCount; ++soundIndex) {
+            StringU8 soundPath = str8_concat(scratch.arena, exeDir, str8("/../"));
+            soundPath = str8_concat(scratch.arena, soundPath, str8(project->sounds[soundIndex].path));
+            state->audio.soundFiles[soundIndex] = file_watch(state->resources.fileStream, soundPath, 0u);
+        }
     }
 }
 
@@ -115,14 +120,6 @@ static void eng_world_fail_once_(EngWorldState* world, U32 bit, const char* mess
     LOG_ERROR("gfx", "World frame dropped: {}", str8(message));
     world->failLogMask |= bit;
 }
-
-static const char* ENG_WORLD_COMPUTE_ENTRIES[5] = {
-    ENG_SHADER_WORLD_RESET_ENTRY,
-    ENG_SHADER_WORLD_CULL_ENTRY,
-    ENG_SHADER_WORLD_PREFIX_ENTRY,
-    ENG_SHADER_WORLD_SCATTER_ENTRY,
-    ENG_SHADER_WORLD_ARGS_ENTRY,
-};
 
 static const U32 ENG_WORLD_COMPUTE_GROUP_SIZES[5] = {
     ENG_WORLD_CULL_GROUP_SIZE,
@@ -673,9 +670,9 @@ static B32 app_model_artifact_publish_(ArtifactPublishContext* publishCtx, Artif
                  ++textureLocal) {
                 StringU8 path = str8_concat(scratch.arena, exeDir, str8("/../"));
                 path = str8_concat(scratch.arena, path,
-                                   eng_world_model_texture_path_(scratch.arena,
-                                                                 eng_project_()->models[request->assetIndex].path,
-                                                                 textureLocal));
+                                   asset_model_texture_path(scratch.arena,
+                                                            str8(eng_project_()->models[request->assetIndex].path),
+                                                            textureLocal));
                 world->assetModelTextureFiles[request->assetIndex][textureLocal] =
                     file_watch(bridge->state->resources.fileStream, path, 0u);
             }
@@ -988,41 +985,46 @@ static B32 eng_world_register_artifact_types_(EngContext* ctx) {
         return 1;
     }
 
+    U32 caps = eng_project_()->capabilities;
     state->world.artifactBridge.device = ctx->host->gfxDevice;
     state->world.artifactBridge.audioSystem = ctx->host->audioSystem;
     state->world.artifactBridge.state = state;
 
-    ArtifactTypeDesc modelType = {};
-    modelType.typeId = ENG_ARTIFACT_TYPE_MODEL;
-    modelType.name = str8("model");
-    modelType.buildProc = app_model_artifact_build_;
-    modelType.publishProc = app_model_artifact_publish_;
-    modelType.destroyProc = app_model_artifact_destroy_;
-    modelType.userData = &state->world.artifactBridge;
-    if (!artifact_register_type(state->resources.artifactCache, &modelType)) {
-        return 0;
+    if (caps & ENG_CAP_WORLD3D) {
+        ArtifactTypeDesc modelType = {};
+        modelType.typeId = ENG_ARTIFACT_TYPE_MODEL;
+        modelType.name = str8("model");
+        modelType.buildProc = app_model_artifact_build_;
+        modelType.publishProc = app_model_artifact_publish_;
+        modelType.destroyProc = app_model_artifact_destroy_;
+        modelType.userData = &state->world.artifactBridge;
+        if (!artifact_register_type(state->resources.artifactCache, &modelType)) {
+            return 0;
+        }
+
+        ArtifactTypeDesc textureType = {};
+        textureType.typeId = ENG_ARTIFACT_TYPE_TEXTURE;
+        textureType.name = str8("texture");
+        textureType.buildProc = app_texture_artifact_build_;
+        textureType.publishProc = app_texture_artifact_publish_;
+        textureType.destroyProc = app_texture_artifact_destroy_;
+        textureType.userData = &state->world.artifactBridge;
+        if (!artifact_register_type(state->resources.artifactCache, &textureType)) {
+            return 0;
+        }
     }
 
-    ArtifactTypeDesc textureType = {};
-    textureType.typeId = ENG_ARTIFACT_TYPE_TEXTURE;
-    textureType.name = str8("texture");
-    textureType.buildProc = app_texture_artifact_build_;
-    textureType.publishProc = app_texture_artifact_publish_;
-    textureType.destroyProc = app_texture_artifact_destroy_;
-    textureType.userData = &state->world.artifactBridge;
-    if (!artifact_register_type(state->resources.artifactCache, &textureType)) {
-        return 0;
-    }
-
-    ArtifactTypeDesc audioType = {};
-    audioType.typeId = ENG_ARTIFACT_TYPE_AUDIO;
-    audioType.name = str8("audio");
-    audioType.buildProc = eng_audio_artifact_build_;
-    audioType.publishProc = eng_audio_artifact_publish_;
-    audioType.destroyProc = eng_audio_artifact_destroy_;
-    audioType.userData = &state->world.artifactBridge;
-    if (!artifact_register_type(state->resources.artifactCache, &audioType)) {
-        return 0;
+    if (caps & ENG_CAP_AUDIO) {
+        ArtifactTypeDesc audioType = {};
+        audioType.typeId = ENG_ARTIFACT_TYPE_AUDIO;
+        audioType.name = str8("audio");
+        audioType.buildProc = eng_audio_artifact_build_;
+        audioType.publishProc = eng_audio_artifact_publish_;
+        audioType.destroyProc = eng_audio_artifact_destroy_;
+        audioType.userData = &state->world.artifactBridge;
+        if (!artifact_register_type(state->resources.artifactCache, &audioType)) {
+            return 0;
+        }
     }
     return 1;
 }
@@ -1166,10 +1168,10 @@ static B32 eng_world_create_graphics_pipeline_(EngContext* ctx, ContentHash vert
     desc.vertexShader.format = GfxShaderFormat_MSL_Source;
     desc.fragmentShader.format = GfxShaderFormat_MSL_Source;
 #endif
-    desc.vertexShader.entry = ENG_SHADER_WORLD_VERTEX_ENTRY;
+    desc.vertexShader.entry = ENG_SHADER_ENTRY_NAMES[EngShader_WorldVertex];
     desc.vertexShader.data = vertexView.data;
     desc.vertexShader.size = vertexView.size;
-    desc.fragmentShader.entry = ENG_SHADER_WORLD_FRAGMENT_ENTRY;
+    desc.fragmentShader.entry = ENG_SHADER_ENTRY_NAMES[EngShader_WorldFragment];
     desc.fragmentShader.data = fragmentView.data;
     desc.fragmentShader.size = fragmentView.size;
     desc.topology = GfxPrimitiveTopology_TriangleList;
@@ -1240,14 +1242,15 @@ static void eng_world_try_update_pipelines_(EngContext* ctx) {
             computeOk = 0;
             break;
         }
+        const char* entryName = ENG_SHADER_ENTRY_NAMES[ENG_WORLD_SHADERS[EngWorldShaderSlot_Reset + passIndex]];
         GfxComputePipelineDesc desc = {};
-        desc.name = ENG_WORLD_COMPUTE_ENTRIES[passIndex];
+        desc.name = entryName;
 #if defined(PLATFORM_OS_WINDOWS)
         desc.shader.format = GfxShaderFormat_SPIRV;
 #else
         desc.shader.format = GfxShaderFormat_MSL_Source;
 #endif
-        desc.shader.entry = ENG_WORLD_COMPUTE_ENTRIES[passIndex];
+        desc.shader.entry = entryName;
         desc.shader.data = view.data;
         desc.shader.size = view.size;
         desc.threadsPerThreadgroupX = ENG_WORLD_COMPUTE_GROUP_SIZES[passIndex];

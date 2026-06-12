@@ -6,19 +6,17 @@
 // collision-world rebuild trigger, lane policy, the ambience loop).
 //
 
-static const EngModelDesc DEMO_MODEL_DESCS[] = {
-    {"projects/demo/assets/cooked/Duck.umdl", "assets/Duck.umdl"},
-    {"projects/demo/assets/cooked/Avocado.umdl", "assets/Avocado.umdl"},
-    {"projects/demo/assets/cooked/Lantern.umdl", "assets/Lantern.umdl"},
-    {"projects/demo/assets/cooked/Buggy.umdl", "assets/Buggy.umdl"},
+#define DEMO_MODEL_DESC_ENTRY_(name) {DEMO_ASSET_COOKED_DIR #name ".umdl", "assets/" #name ".umdl"},
+static const EngModelDesc DEMO_MODEL_DESCS[DemoModel_Count] = {
+    DEMO_MODEL_LIST(DEMO_MODEL_DESC_ENTRY_)
 };
+#undef DEMO_MODEL_DESC_ENTRY_
 
+#define DEMO_SOUND_DESC_ENTRY_(name) {DEMO_ASSET_COOKED_DIR #name ".uaud", "assets/" #name ".uaud"},
 static const EngSoundDesc DEMO_SOUND_DESCS[DemoSound_Count] = {
-    {"projects/demo/assets/cooked/jump.uaud", "assets/jump.uaud"},
-    {"projects/demo/assets/cooked/land.uaud", "assets/land.uaud"},
-    {"projects/demo/assets/cooked/click.uaud", "assets/click.uaud"},
-    {"projects/demo/assets/cooked/ambience.uaud", "assets/ambience.uaud"},
+    DEMO_SOUND_LIST(DEMO_SOUND_DESC_ENTRY_)
 };
+#undef DEMO_SOUND_DESC_ENTRY_
 
 static void demo_state_init_(EngContext* ctx, void* memory) {
     DemoState* demo = (DemoState*)memory;
@@ -100,30 +98,30 @@ static void demo_debug_stats_(EngContext* ctx, UI_Context* ui) {
 
 static const EngProject* eng_project_(void) {
     static const EngProject project = {
-        "demo",                                  // name
-        ENG_STATE_ID('D', 'E', 'M', 'O'),        // stateId
-        DEMO_STATE_VERSION,                      // stateVersion
-        sizeof(DemoState),                       // stateSize
-        alignof(DemoState),                      // stateAlignment
-        ENG_CAP_WORLD3D | ENG_CAP_SIM | ENG_CAP_AUDIO, // capabilities
-        DEMO_MODEL_DESCS,                        // models
-        (U32)ARRAY_COUNT(DEMO_MODEL_DESCS),      // modelCount
-        DEMO_SOUND_DESCS,                        // sounds
-        (U32)DemoSound_Count,                    // soundCount
-        (U32)sizeof(DemoActions),                // actionSize
-        (U32)sizeof(DemoSaveState),              // saveSize
-        1u,                                      // saveVersion
-        demo_state_init_,                        // state_init
-        demo_pre_frame_,                         // pre_frame
-        demo_sim_sample_,                        // sim_sample
-        demo_sim_tick_,                          // sim_tick
-        demo_sim_capture_,                       // sim_capture
-        demo_sim_apply_,                         // sim_apply
-        demo_sim_checksum_,                      // sim_checksum
-        demo_scene_submit,                       // frame
-        demo_panels_,                            // panels
-        demo_panels_post_,                       // panels_post
-        demo_debug_stats_,                       // debug_stats
+        .name = "demo",
+        .stateId = ENG_STATE_ID('D', 'E', 'M', 'O'),
+        .stateVersion = DEMO_STATE_VERSION,
+        .stateSize = sizeof(DemoState),
+        .stateAlignment = alignof(DemoState),
+        .capabilities = ENG_CAP_WORLD3D | ENG_CAP_SIM | ENG_CAP_AUDIO,
+        .models = DEMO_MODEL_DESCS,
+        .modelCount = (U32)DemoModel_Count,
+        .sounds = DEMO_SOUND_DESCS,
+        .soundCount = (U32)DemoSound_Count,
+        .actionSize = (U32)sizeof(DemoActions),
+        .saveSize = (U32)sizeof(DemoSaveState),
+        .saveVersion = 1u,
+        .state_init = demo_state_init_,
+        .pre_frame = demo_pre_frame_,
+        .sim_sample = demo_sim_sample_,
+        .sim_tick = demo_sim_tick_,
+        .sim_capture = demo_sim_capture_,
+        .sim_apply = demo_sim_apply_,
+        .sim_checksum = demo_sim_checksum_,
+        .frame = demo_scene_submit,
+        .panels = demo_panels_,
+        .panels_post = demo_panels_post_,
+        .debug_stats = demo_debug_stats_,
     };
     return &project;
 }

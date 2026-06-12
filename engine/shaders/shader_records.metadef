@@ -1,7 +1,7 @@
 //
 // Shader ABI records, single source of truth.
-// metagen emits app/shaders/shader_records.generated.hpp with a Slang half
-// (structs + loaders) and a C half (structs + offset asserts).
+// metagen emits shader_records.generated.hpp next to this file with a
+// Slang half (structs + loaders) and a C half (structs + offset asserts).
 //
 
 @shader_record @root_data Draw2DRootData {

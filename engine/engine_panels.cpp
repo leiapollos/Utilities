@@ -34,11 +34,13 @@ static void eng_stats_panel(EngContext* ctx, UI_Context* ui) {
                      uiStats->retainedEvictCount, uiStats->duplicateKeyCount);
     eng_stat_line(ui, UI_COLOR_TEXT_DIM, "ui text  value hits {}  misses {}  uncached {}",
                      uiStats->valueRunHits, uiStats->valueRunMisses, uiStats->valueRunUninsertable);
-    eng_stat_line(ui, UI_COLOR_TEXT_DIM, "world  renderables {}  dropped {}  lanes {}  meshes {}  tdraws {}",
-                     state->world.lastRenderableCount, state->world.lastDroppedCount,
-                     state->world.laneCount, state->world.meshCount,
-                     state->world.lastTransparentDraws);
-    {
+    if (eng_project_()->capabilities & ENG_CAP_WORLD3D) {
+        eng_stat_line(ui, UI_COLOR_TEXT_DIM, "world  renderables {}  dropped {}  lanes {}  meshes {}  tdraws {}",
+                         state->world.lastRenderableCount, state->world.lastDroppedCount,
+                         state->world.laneCount, state->world.meshCount,
+                         state->world.lastTransparentDraws);
+    }
+    if (eng_project_()->capabilities & ENG_CAP_AUDIO) {
         AudioStats audioStats = audio_stats(ctx->host->audioSystem);
         eng_stat_line(ui, UI_COLOR_TEXT_DIM, "audio  voices {}/{}  buffers {}  drop v{} c{}  cb {}us max {}us",
                          audioStats.voicesActive, AUDIO_VOICE_COUNT, audioStats.buffersLive,

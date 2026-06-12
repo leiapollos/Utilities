@@ -1,6 +1,6 @@
 //
 // AUTO-GENERATED FILE - DO NOT EDIT
-// Generated from: ../app/shaders/shader_records.metadef
+// Generated from: ../engine/shaders/shader_records.metadef
 //
 
 #pragma once

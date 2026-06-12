@@ -11,7 +11,7 @@
 
 #define ENG_STATE_ID(a, b, c, d) ((((U64)(a)) << 56u) | (((U64)(b)) << 48u) | (((U64)(c)) << 40u) | (((U64)(d)) << 32u) | 0x53544154u)
 
-#define ENG_STATE_VERSION 1u
+#define ENG_STATE_VERSION 2u
 
 struct EngState;
 
@@ -70,7 +70,9 @@ struct EngRender2D {
 #define ENG_WORLD_FRAME_BUFFER_COUNT 2u
 #define ENG_WORLD_SHADER_COUNT 7u
 #define ENG_WORLD_MAX_LANES 16u
-#define ENG_WORLD_MAX_MODELS 4u
+// Engine budgets, not mirrors of any project's counts; boot asserts
+// project desc tables fit.
+#define ENG_WORLD_MAX_MODELS 16u
 #define ENG_WORLD_MAX_ASSET_TEXTURES 64u
 #define ENG_WORLD_MODEL_MAX_TEXTURES 4u
 // Material slot 0 is the builtin "missing" material (magenta); the allocator
@@ -226,7 +228,7 @@ struct EngWorldState {
 // owns the PCM, so playback survives module reloads). Indexed by the
 // project's sound table; generations bump per publish so the project can
 // react to republishes (e.g. restart a loop) without engine policy.
-#define ENG_AUDIO_MAX_SOUNDS 8u
+#define ENG_AUDIO_MAX_SOUNDS 16u
 
 struct EngAudio {
     FileHandle soundFiles[ENG_AUDIO_MAX_SOUNDS];

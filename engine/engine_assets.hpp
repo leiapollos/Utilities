@@ -93,3 +93,12 @@ struct AssetTextureHeader {
     U32 mipOffsets[ASSET_TEXTURE_MAX_MIPS];
     U32 mipSizes[ASSET_TEXTURE_MAX_MIPS];
 };
+
+// "<dir>/<stem>.umdl" -> "<dir>/<stem>_tex<N>.utex". The sibling rule
+// is part of the cooked model format: the cooker writes these paths,
+// the runtime derives them back from the model path.
+static StringU8 asset_model_texture_path(Arena* arena, StringU8 modelPath, U32 textureLocal) {
+    StringU8 base = modelPath;
+    base.size = (modelPath.size > 5u) ? modelPath.size - 5u : 0u;
+    return str8_fmt(arena, "{}_tex{}.utex", base, textureLocal);
+}

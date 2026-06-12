@@ -66,8 +66,8 @@ static void eng_renderer_watch_files(EngContext* ctx) {
     DEFER_REF(temp_end(&scratch));
 
     StringU8 exeDir = OS_get_executable_directory(scratch.arena);
-    StringU8 vertexPath = str8_concat(scratch.arena, exeDir, str8("/../" ENG_SHADER_DRAW2D_VERTEX_RUNTIME_PATH));
-    StringU8 fragmentPath = str8_concat(scratch.arena, exeDir, str8("/../" ENG_SHADER_DRAW2D_FRAGMENT_RUNTIME_PATH));
+    StringU8 vertexPath = eng_shader_runtime_path_(scratch.arena, exeDir, EngShader_Draw2dVertex);
+    StringU8 fragmentPath = eng_shader_runtime_path_(scratch.arena, exeDir, EngShader_Draw2dFragment);
     StringU8 fontPath = str8_concat(scratch.arena, exeDir, str8("/../" ENG_RENDERER_FONT_PATH));
 
     state->render2d.vertexShaderFile = file_watch(state->resources.fileStream, vertexPath, 0u);
@@ -164,10 +164,10 @@ static B32 eng_renderer_create_pipeline(EngContext* ctx, ContentHash vertexHash,
     pipelineDesc.vertexShader.format = GfxShaderFormat_MSL_Source;
     pipelineDesc.fragmentShader.format = GfxShaderFormat_MSL_Source;
 #endif
-    pipelineDesc.vertexShader.entry = ENG_SHADER_DRAW2D_VERTEX_ENTRY;
+    pipelineDesc.vertexShader.entry = ENG_SHADER_ENTRY_NAMES[EngShader_Draw2dVertex];
     pipelineDesc.vertexShader.data = vertexView.data;
     pipelineDesc.vertexShader.size = vertexView.size;
-    pipelineDesc.fragmentShader.entry = ENG_SHADER_DRAW2D_FRAGMENT_ENTRY;
+    pipelineDesc.fragmentShader.entry = ENG_SHADER_ENTRY_NAMES[EngShader_Draw2dFragment];
     pipelineDesc.fragmentShader.data = fragmentView.data;
     pipelineDesc.fragmentShader.size = fragmentView.size;
     pipelineDesc.topology = GfxPrimitiveTopology_TriangleList;
@@ -505,7 +505,9 @@ static void eng_renderer_shutdown(EngContext* ctx) {
         gfx_destroy_texture(device, render->atlasTexture);
         gfx_destroy_pipeline(device, render->pipeline);
     }
-    eng_world_shutdown_(ctx);
+    if (eng_project_()->capabilities & ENG_CAP_WORLD3D) {
+        eng_world_shutdown_(ctx);
+    }
 
     *render = {};
 }
@@ -555,10 +557,13 @@ static EngRendererFrame* eng_renderer_begin_frame(EngContext* ctx) {
         ctx->engine->world.artifactBridge.frame = 0;
     }
 
+    U32 caps = eng_project_()->capabilities;
     eng_renderer_try_create_gpu_resources(ctx);
     eng_renderer_try_seed_atlas(ctx, frame);
-    eng_world_try_create_resources_(ctx);
-    eng_world_ensure_depth_(ctx);
+    if (caps & ENG_CAP_WORLD3D) {
+        eng_world_try_create_resources_(ctx);
+        eng_world_ensure_depth_(ctx);
+    }
 
     // File-driven polls run only when the stream published something new or
     // a resource is still unresolved; the steady state is one stats compare.
@@ -569,20 +574,28 @@ static EngRendererFrame* eng_renderer_begin_frame(EngContext* ctx) {
         filesChanged = fileStats.publishCount != render->lastFilePublishCount;
         render->lastFilePublishCount = fileStats.publishCount;
     }
+    B32 worldSettled = !(caps & ENG_CAP_WORLD3D) ||
+                       (ctx->engine->world.opaquePipeline.generation != 0u &&
+                        ctx->engine->world.assetsSettled);
+    B32 audioSettled = !(caps & ENG_CAP_AUDIO) || ctx->engine->audio.settled;
     B32 resourcesSettled = render->font.generation != 0u &&
                            render->pipeline.generation != 0u &&
-                           ctx->engine->world.opaquePipeline.generation != 0u &&
-                           ctx->engine->world.assetsSettled &&
-                           ctx->engine->audio.settled;
+                           worldSettled && audioSettled;
     if (filesChanged || !resourcesSettled) {
         eng_renderer_try_load_font(ctx);
         eng_renderer_try_update_pipeline(ctx);
-        eng_world_try_update_pipelines_(ctx);
-        eng_world_try_load_assets_(ctx);
-        eng_audio_try_load_sounds_(ctx);
+        if (caps & ENG_CAP_WORLD3D) {
+            eng_world_try_update_pipelines_(ctx);
+            eng_world_try_load_assets_(ctx);
+        }
+        if (caps & ENG_CAP_AUDIO) {
+            eng_audio_try_load_sounds_(ctx);
+        }
     }
 
-    eng_world_begin_frame_(ctx);
+    if (caps & ENG_CAP_WORLD3D) {
+        eng_world_begin_frame_(ctx);
+    }
 
     F32 whiteU = 0.0f;
     F32 whiteV = 0.0f;
@@ -624,7 +637,7 @@ static void eng_renderer_end_frame(EngContext* ctx, EngRendererFrame* rendererFr
         return;
     }
 
-    {
+    if (eng_project_()->capabilities & ENG_CAP_WORLD3D) {
         PROF_SCOPE("world passes");
         eng_world_execute_(ctx, rendererFrame);
     }

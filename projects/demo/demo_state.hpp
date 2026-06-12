@@ -33,15 +33,6 @@ struct DemoSettings {
     U32 playerMaterial;
 };
 
-// Indexes the project sound table registered with the engine.
-enum DemoSound {
-    DemoSound_Jump = 0u,
-    DemoSound_Land = 1u,
-    DemoSound_Click = 2u,
-    DemoSound_Ambience = 3u,
-    DemoSound_Count = 4u,
-};
-
 #define DEMO_SOUND_GAIN_JUMP 0.5f
 #define DEMO_SOUND_GAIN_LAND 0.7f
 #define DEMO_SOUND_GAIN_CLICK 0.9f

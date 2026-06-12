@@ -925,7 +925,7 @@ static B32 cook_model(Arena* arena, GlbFile* glb, StringU8 outputDir, StringU8 s
            vertexTotal, indexTotal, (F64)header.boundsRadius);
 
     for (U32 texture = 0u; texture < model->textureCount; ++texture) {
-        StringU8 texturePath = str8_fmt(arena, "{}/{}_tex{}.utex", outputDir, stem, texture);
+        StringU8 texturePath = asset_model_texture_path(arena, modelPath, texture);
         if (!cook_texture_image(arena, glb, model->textureImages[texture], texturePath)) {
             return 0;
         }

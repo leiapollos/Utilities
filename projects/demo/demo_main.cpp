@@ -5,6 +5,7 @@
 
 #include "projects/demo/demo_game_kernels.hpp"
 #include "projects/demo/demo_scene_kernels.hpp"
+#include "projects/demo/demo_assets.h"
 #include "projects/demo/demo_state.hpp"
 
 #include "engine/engine_sim.cpp"

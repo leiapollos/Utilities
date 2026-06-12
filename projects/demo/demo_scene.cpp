@@ -176,7 +176,7 @@ static void demo_scene_extract_range_(const AppSceneExtractParams* params, U64 l
         DemoSceneCell cell = demo_scene_classify_cell_(x, z, side);
 
         if (cell.kind == DemoSceneCell_ModelProxy) {
-            U32 modelIndex = (cell.lane == 9u) ? 0u : 1u;
+            U32 modelIndex = (cell.lane == 9u) ? (U32)DemoModel_Duck : (U32)DemoModel_Avocado;
             if (world->models[modelIndex]) {
                 const EngWorldModelResources* model = world->models[modelIndex];
                 Vec3F32 position = eng_world_vec3_(cell.worldX, DEMO_SCENE_MODEL_PROXY_Y, cell.worldZ);
@@ -293,17 +293,17 @@ static void demo_scene_submit(EngContext* ctx, EngRendererFrame* rendererFrame) 
     // Showcase models at opposite grid edges: Lantern (node transforms) and
     // Buggy (148 deduped sections, 236 instances through mesh reuse).
     F32 gridExtent = (F32)side * DEMO_SCENE_GRID_SPACING * 0.5f;
-    if (world->models[2]) {
-        Mat4x4F32 placement = demo_scene_model_placement_(world->models[2], 12.0f,
+    if (world->models[DemoModel_Lantern]) {
+        Mat4x4F32 placement = demo_scene_model_placement_(world->models[DemoModel_Lantern], 12.0f,
                                                          eng_world_vec3_(gridExtent * 0.5f, 10.0f, gridExtent * 0.5f),
                                                          time * 0.25f);
-        demo_scene_push_model_(world, world->laneWriters, world->models[2], EngWorldBin_Opaque, &placement);
+        demo_scene_push_model_(world, world->laneWriters, world->models[DemoModel_Lantern], EngWorldBin_Opaque, &placement);
     }
-    if (world->models[3]) {
-        Mat4x4F32 placement = demo_scene_model_placement_(world->models[3], 16.0f,
+    if (world->models[DemoModel_Buggy]) {
+        Mat4x4F32 placement = demo_scene_model_placement_(world->models[DemoModel_Buggy], 16.0f,
                                                          eng_world_vec3_(-gridExtent * 0.5f, 13.0f, -gridExtent * 0.5f),
                                                          time * -0.2f);
-        demo_scene_push_model_(world, world->laneWriters, world->models[3], EngWorldBin_Opaque, &placement);
+        demo_scene_push_model_(world, world->laneWriters, world->models[DemoModel_Buggy], EngWorldBin_Opaque, &placement);
     }
 
     AppSceneExtractParams extractParams = {};

@@ -35,6 +35,7 @@ static void write_module_project_record(void) {
         fclose(file);
     }
 }
+
 #define HOST_IMPORT_LIB_PATH BUILD_DIR "/" HOST_EXE_BASENAME ".lib"
 #if SOB_WINDOWS
 #define HOST_OUTPUT_PATH BUILD_DIR "/" HOST_EXE_BASENAME ".exe"
@@ -126,7 +127,7 @@ static void print_usage(void) {
     printf("  ship     Build one executable with app statically linked\n");
     printf("  metagen  Build metagen and regenerate metadata\n");
     printf("  shaders  Build reloadable shader artifacts\n");
-    printf("  cook     Build the asset cooker and cook projects/demo/assets/src\n");
+    printf("  cook     Build the asset cooker and cook projects/<project>/assets/src\n");
     printf("  test     Build and run the CPU seam tests\n");
     printf("  clean    Remove build artifacts\n");
     printf("\n");
@@ -1107,16 +1108,10 @@ static int build_slang_shaders(Sob_Arena* arena) {
         const char* stage;
         const char* stageKind;
     };
-#define SHADER_BUILD_ITEM(name, source, output, entry, stage, stageKind) \
-    {source, output, entry, SOB_STRINGIZE(stage), SOB_STRINGIZE(stageKind)},
+#define SHADER_BUILD_ITEM(name, source, entry, stage, kind) \
+    {source, ENG_SHADER_OUTPUT_PATH(entry), #entry, #stage, #kind},
     static const struct ShaderBuildItem shaders[] = {
-#if SOB_WINDOWS
-        ENG_SHADER_VULKAN_OUTPUT_LIST(SHADER_BUILD_ITEM)
-#elif SOB_MACOS
-        ENG_SHADER_METAL_OUTPUT_LIST(SHADER_BUILD_ITEM)
-#else
-#error No shader build backend configured for this platform.
-#endif
+        ENG_SHADER_LIST(SHADER_BUILD_ITEM)
     };
 #undef SHADER_BUILD_ITEM
 
@@ -1140,7 +1135,7 @@ static int build_slang_shaders(Sob_Arena* arena) {
         sob_cmd_append(cmd, slangcPath);
         sob_cmd_append(cmd, shaders[i].src);
         sob_cmd_append(cmd, "-I");
-        sob_cmd_append(cmd, "app/shaders");
+        sob_cmd_append(cmd, "engine/shaders");
 #if SOB_WINDOWS
         sob_cmd_append(cmd, "-DGFX_SHADER_TARGET_VULKAN=1");
         sob_cmd_append(cmd, "-target");
@@ -1284,6 +1279,7 @@ static S32 run_metagen_command(void) {
 static int metadata_outputs_are_fresh(void) {
     static const char* inputs[] = {
         "nstl/os/graphics/os_graphics.metadef",
+        "engine/shaders/shader_records.metadef",
         "meta/meta_main.cpp",
         "meta/generator.cpp",
         "meta/generator.hpp",
@@ -1294,8 +1290,12 @@ static int metadata_outputs_are_fresh(void) {
     };
 
     U64 outputTime = sob_fs_mtime("nstl/os/graphics/os_graphics.generated.hpp");
-    if (outputTime == 0u) {
+    U64 shaderRecordsTime = sob_fs_mtime("engine/shaders/shader_records.generated.hpp");
+    if (outputTime == 0u || shaderRecordsTime == 0u) {
         return 0;
+    }
+    if (shaderRecordsTime < outputTime) {
+        outputTime = shaderRecordsTime;
     }
 
     for (S32 i = 0; i < (S32)(sizeof(inputs) / sizeof(inputs[0])); ++i) {
@@ -1367,24 +1367,83 @@ static S32 build_and_run_metagen(BuildMode mode) {
 #define COOKER_RUN_PATH BUILD_DIR "/tools/" COOKER_EXE_BASENAME
 #endif
 
-static const char* COOK_ASSET_SOURCES[] = {
-    "projects/demo/assets/src/Duck.glb",
-    "projects/demo/assets/src/Avocado.glb",
-    "projects/demo/assets/src/Lantern.glb",
-    "projects/demo/assets/src/Buggy.glb",
-    "projects/demo/assets/src/jump.wav",
-    "projects/demo/assets/src/land.wav",
-    "projects/demo/assets/src/click.wav",
-    "projects/demo/assets/src/ambience.wav",
+// `sob cook [project]` discovers sources by scanning assets/src — the
+// filesystem is the cook manifest. One rule per extension; anything
+// else in src is reported and skipped.
+static const char* COOK_EXT_RULES[][2] = {
+    {".glb", ".umdl"},
+    {".wav", ".uaud"},
 };
 
+typedef struct CookScan {
+    Sob_Arena* arena;
+    const char* cookedDir;
+    S32 cookedCount;
+    S32 skippedCount;
+    S32 failedCount;
+} CookScan;
+
+static void cook_scan_file(void* userData, const char* fileName, const char* fullPath) {
+    CookScan* scan = (CookScan*)userData;
+    const char* ext = sob_path_ext(fileName);
+    const char* outExt = 0;
+    for (S32 i = 0; i < (S32)(sizeof(COOK_EXT_RULES) / sizeof(COOK_EXT_RULES[0])); ++i) {
+        if (strcmp(ext, COOK_EXT_RULES[i][0]) == 0) {
+            outExt = COOK_EXT_RULES[i][1];
+            break;
+        }
+    }
+    if (!outExt) {
+        printf("==> Skipping %s (no cook rule for '%s')\n", fullPath, ext);
+        return;
+    }
+
+    char dstPath[1024];
+    S32 stemLength = (S32)(strlen(fileName) - strlen(ext));
+    snprintf(dstPath, sizeof(dstPath), "%s/%.*s%s", scan->cookedDir, stemLength, fileName, outExt);
+
+    // Skip when the cooked output is newer than the source. Cooker
+    // format drift is the load-time magic/version checks' job: a format
+    // change bumps ASSET_*_VERSION and stale files fail loudly.
+    U64 srcTime = sob_fs_mtime(fullPath);
+    U64 dstTime = sob_fs_mtime(dstPath);
+    if (dstTime != 0u && dstTime >= srcTime) {
+        scan->skippedCount++;
+        return;
+    }
+
+    Sob_Cmd* cmd = sob_cmd_create(scan->arena);
+    if (!cmd) {
+        scan->failedCount++;
+        return;
+    }
+    sob_cmd_append(cmd, COOKER_RUN_PATH);
+    sob_cmd_append(cmd, fullPath);
+    sob_cmd_append(cmd, scan->cookedDir);
+    printf("==> Cooking %s...\n", fullPath);
+    if (sob_cmd_run(cmd) != 0) {
+        scan->failedCount++;
+        return;
+    }
+    scan->cookedCount++;
+}
+
 static S32 build_and_run_cooker(BuildMode mode) {
+    char srcDir[512];
+    char cookedDir[512];
+    snprintf(srcDir, sizeof(srcDir), "projects/%s/assets/src", g_project);
+    snprintf(cookedDir, sizeof(cookedDir), "projects/%s/assets/cooked", g_project);
+
+    if (!sob_fs_is_dir(srcDir)) {
+        printf("==> No '%s' — nothing to cook.\n", srcDir);
+        return 0;
+    }
     if (sob_fs_mkdir_p(BUILD_TOOLS_DIR) != 0 && !sob_fs_is_dir(BUILD_TOOLS_DIR)) {
         fprintf(stderr, "Error: failed to create '%s'\n", BUILD_TOOLS_DIR);
         return 1;
     }
-    if (sob_fs_mkdir_p("projects/demo/assets/cooked") != 0 && !sob_fs_is_dir("projects/demo/assets/cooked")) {
-        fprintf(stderr, "Error: failed to create 'projects/demo/assets/cooked'\n");
+    if (sob_fs_mkdir_p(cookedDir) != 0 && !sob_fs_is_dir(cookedDir)) {
+        fprintf(stderr, "Error: failed to create '%s'\n", cookedDir);
         return 1;
     }
 
@@ -1430,27 +1489,19 @@ static S32 build_and_run_cooker(BuildMode mode) {
         return buildResult;
     }
 
-    for (S32 i = 0; i < (S32)(sizeof(COOK_ASSET_SOURCES) / sizeof(COOK_ASSET_SOURCES[0])); ++i) {
-        Sob_Arena* cmdArena = sob_arena_create();
-        if (!cmdArena) {
-            return 1;
-        }
-        Sob_Cmd* cmd = sob_cmd_create(cmdArena);
-        if (!cmd) {
-            sob_arena_destroy(cmdArena);
-            return 1;
-        }
-        sob_cmd_append(cmd, COOKER_RUN_PATH);
-        sob_cmd_append(cmd, COOK_ASSET_SOURCES[i]);
-        sob_cmd_append(cmd, "projects/demo/assets/cooked");
-        printf("==> Cooking %s...\n", COOK_ASSET_SOURCES[i]);
-        S32 result = sob_cmd_run(cmd);
-        sob_arena_destroy(cmdArena);
-        if (result != 0) {
-            return result;
-        }
+    Sob_Arena* scanArena = sob_arena_create();
+    if (!scanArena) {
+        return 1;
     }
-    return 0;
+    CookScan scan = {0};
+    scan.arena = scanArena;
+    scan.cookedDir = cookedDir;
+    sob__for_each_file(scanArena, srcDir, 0, cook_scan_file, &scan);
+    sob_arena_destroy(scanArena);
+
+    printf("==> Cook done: %d cooked, %d skipped, %d failed\n",
+           scan.cookedCount, scan.skippedCount, scan.failedCount);
+    return scan.failedCount != 0 ? 1 : 0;
 }
 
 #define TEST_EXE_BASENAME "utilities_tests"
@@ -1529,6 +1580,133 @@ static S32 build_and_run_tests(BuildMode mode) {
     S32 result = sob_cmd_run(cmd);
     sob_arena_destroy(cmdArena);
     return result;
+}
+
+// The host's hot-reload watch list, generated per module build by a
+// compiler dep scan of the active project's TU. The host polls exactly
+// these paths; nothing is hand-listed.
+#define MODULE_INPUTS_MANIFEST_PATH "build/module_inputs.txt"
+#define MODULE_INPUTS_DEP_PATH "build/module_inputs.dep"
+
+static S32 write_module_inputs_manifest(BuildMode mode) {
+    const char* modeDefine = (mode == BuildMode_Release) ? "NDEBUG=1" : "DEBUG=1";
+
+#if SOB_WINDOWS
+    {
+        char command[2048];
+        // /Zs: syntax-only; /showIncludes prints every include used.
+        snprintf(command, sizeof(command),
+                 "cl /nologo /Zs /showIncludes /I. /std:c++20 /D%s \"%s\" > \"%s\" 2>&1",
+                 modeDefine, g_projectMainPath, MODULE_INPUTS_DEP_PATH);
+        if (system(command) != 0) {
+            fprintf(stderr, "Error: module dep scan failed\n");
+            return 1;
+        }
+    }
+#else
+    {
+        Sob_Arena* arena = sob_arena_create();
+        if (!arena) {
+            return 1;
+        }
+        Sob_Cmd* cmd = sob_cmd_create(arena);
+        if (!cmd) {
+            sob_arena_destroy(arena);
+            return 1;
+        }
+        char define[64];
+        snprintf(define, sizeof(define), "-D%s", modeDefine);
+        sob_cmd_append(cmd, "clang++");
+        sob_cmd_append(cmd, "-MM");
+        sob_cmd_append(cmd, "-I.");
+        sob_cmd_append(cmd, "-std=c++20");
+        sob_cmd_append(cmd, define);
+        sob_cmd_append(cmd, g_projectMainPath);
+        sob_cmd_append(cmd, "-o");
+        sob_cmd_append(cmd, MODULE_INPUTS_DEP_PATH);
+        S32 result = sob_cmd_run(cmd);
+        sob_arena_destroy(arena);
+        if (result != 0) {
+            fprintf(stderr, "Error: module dep scan failed\n");
+            return 1;
+        }
+    }
+#endif
+
+    FILE* in = fopen(MODULE_INPUTS_DEP_PATH, "rb");
+    if (!in) {
+        fprintf(stderr, "Error: cannot read '%s'\n", MODULE_INPUTS_DEP_PATH);
+        return 1;
+    }
+    fseek(in, 0, SEEK_END);
+    long size = ftell(in);
+    fseek(in, 0, SEEK_SET);
+    char* text = (char*)malloc((size_t)size + 1u);
+    if (!text) {
+        fclose(in);
+        return 1;
+    }
+    size_t readBytes = fread(text, 1, (size_t)size, in);
+    text[readBytes] = 0;
+    fclose(in);
+
+    FILE* out = fopen(MODULE_INPUTS_MANIFEST_PATH, "wb");
+    if (!out) {
+        free(text);
+        fprintf(stderr, "Error: cannot write '%s'\n", MODULE_INPUTS_MANIFEST_PATH);
+        return 1;
+    }
+
+    S32 lineCount = 0;
+#if SOB_WINDOWS
+    // Parse "Note: including file: <path>" lines; system headers come
+    // back absolute, so keep only paths under the repo root.
+    char cwd[1024];
+    cwd[0] = 0;
+    GetCurrentDirectoryA(sizeof(cwd), cwd);
+    size_t cwdLength = strlen(cwd);
+    char* line = text;
+    while (line && *line) {
+        char* end = strchr(line, '\n');
+        if (end) { *end = 0; }
+        const char* prefix = "Note: including file:";
+        if (strncmp(line, prefix, strlen(prefix)) == 0) {
+            char* path = line + strlen(prefix);
+            while (*path == ' ') { path++; }
+            size_t len = strlen(path);
+            while (len && (path[len - 1] == '\r' || path[len - 1] == ' ')) { path[--len] = 0; }
+            if (cwdLength != 0 && _strnicmp(path, cwd, cwdLength) == 0) {
+                const char* relative = path + cwdLength;
+                while (*relative == '\\' || *relative == '/') { relative++; }
+                fprintf(out, "%s\n", relative);
+                lineCount++;
+            }
+        }
+        line = end ? end + 1 : 0;
+    }
+    fprintf(out, "%s\n", g_projectMainPath);
+    lineCount++;
+#else
+    // Make-style .d: the first token is "<target>:", "\" tokens are line
+    // continuations, everything else is a path (the TU included).
+    char* at = text;
+    while (*at) {
+        while (*at == ' ' || *at == '\t' || *at == '\n' || *at == '\r') { at++; }
+        if (!*at) { break; }
+        char* token = at;
+        while (*at && *at != ' ' && *at != '\t' && *at != '\n' && *at != '\r') { at++; }
+        if (*at) { *at = 0; at++; }
+        size_t tokenLength = strlen(token);
+        if (tokenLength == 0 || strcmp(token, "\\") == 0) { continue; }
+        if (token[tokenLength - 1] == ':') { continue; }
+        fprintf(out, "%s\n", token);
+        lineCount++;
+    }
+#endif
+    fclose(out);
+    free(text);
+    printf("==> Module inputs manifest: %d files -> %s\n", lineCount, MODULE_INPUTS_MANIFEST_PATH);
+    return 0;
 }
 
 static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
@@ -1663,6 +1841,10 @@ static S32 build_project_targets(BuildTarget requestedTarget, BuildMode mode) {
     if (result == 0 && (requestedTarget == BuildTarget_Module || requestedTarget == BuildTarget_All ||
                         requestedTarget == BuildTarget_Dev || requestedTarget == BuildTarget_Ship)) {
         write_module_project_record();
+    }
+    if (result == 0 && (requestedTarget == BuildTarget_Module || requestedTarget == BuildTarget_All ||
+                        requestedTarget == BuildTarget_Dev)) {
+        result = write_module_inputs_manifest(mode);
     }
 
     return result;
