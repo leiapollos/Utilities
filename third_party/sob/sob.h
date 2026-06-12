@@ -377,6 +377,7 @@ SOBDEF S32 sob_fs_remove_tree(const char* path);
 SOBDEF S32 sob_fs_copy(const char* src, const char* dst);
 SOBDEF S32 sob_fs_write_text(const char* path, const char* text);
 SOBDEF U64 sob_fs_mtime(const char* path);
+SOBDEF U64 sob_fs_newest_mtime(const char* const* paths, S32 count);  /* missing files contribute 0 */
 
 SOBDEF const char* sob_path_join(Sob_Arena* arena, const char* a, const char* b);
 SOBDEF const char* sob_path_dirname(Sob_Arena* arena, const char* path);
@@ -439,15 +440,25 @@ SOBDEF void sob_log(Sob_BuildContext* ctx, Sob_LogLevel level, const char* fmt, 
 
 SOBDEF S32 sob_nprocs(void);  /* Get CPU count */
 
+#if SOB_WINDOWS
+SOBDEF S32 sob_command_exists(const char* name);  /* findable on PATH */
+#endif
+
 /*
- * SOB_GO_REBUILD_URSELF - Self-rebuilding build script
+ * sob_bootstrap - toolchain environment + self-rebuilding build script
  *
- * Call at the start of main(). If the build script source has changed,
- * it will recompile itself and re-execute with the same arguments.
+ * Call first in main(). On Windows, when no MSVC environment is active,
+ * re-launches the script under VsDevCmd and returns its exit code. Then,
+ * when any watched input is newer than the running binary, recompiles
+ * inputs[0], re-runs it with the same arguments, and replaces the running
+ * binary (on Windows via a batch scheduled after the child exits, since a
+ * running exe cannot be overwritten). scratchDir holds rebuilt binaries
+ * and launch batches. Returns 1 when the caller must exit with
+ * *outExitCode; set SOB_SKIP_SELF_REBUILD to suppress.
  */
-SOBDEF void sob_go_rebuild_urself_(int argc, char** argv, const char* sourceFile);
-#define SOB_GO_REBUILD_URSELF(argc, argv) \
-    sob_go_rebuild_urself_((argc), (argv), __FILE__)
+SOBDEF S32 sob_bootstrap(int argc, char** argv,
+                         const char* const* inputs, S32 inputCount,
+                         const char* scratchDir, S32* outExitCode);
 
 #endif /* SOB_H */
 
@@ -3222,59 +3233,512 @@ SOBDEF void sob_embed_(Sob_Arena* arena, const char* input, const char* varName,
 /*                              GO REBUILD URSELF                            */
 /* ========================================================================= */
 
-SOBDEF void sob_go_rebuild_urself_(int argc, char** argv, const char* sourceFile) {
-    if (!sourceFile) { return; }
-    
-    const char* exePath = argv[0];
-    
-    unsigned long long srcTime = sob_fs_mtime(sourceFile);
-    unsigned long long exeTime = sob_fs_mtime(exePath);
-    
-    if (srcTime <= exeTime) {
+SOBDEF U64 sob_fs_newest_mtime(const char* const* paths, S32 count) {
+    U64 newest = 0;
+    for (S32 i = 0; i < count; ++i) {
+        U64 time = sob_fs_mtime(paths[i]);
+        if (time > newest) {
+            newest = time;
+        }
+    }
+    return newest;
+}
+
+static char sob__bootstrapScratchDir[768];
+static char sob__bootstrapRebuiltExe[1024];
+
+#if SOB_WINDOWS
+
+static char sob__bootstrapRebuiltObj[1024];
+static char sob__bootstrapVsdevBatch[1024];
+static char sob__bootstrapReplaceBatch[1024];
+
+SOBDEF S32 sob_command_exists(const char* name) {
+    char path[MAX_PATH];
+    DWORD length = SearchPathA(0, name, 0, (DWORD)sizeof(path), path, 0);
+    return (length > 0 && length < (DWORD)sizeof(path));
+}
+
+static int sob__msvc_environment_ready(void) {
+    const char* vscmd = getenv("VSCMD_VER");
+    return (vscmd && vscmd[0] != 0 && sob_command_exists("cl.exe"));
+}
+
+static void sob__trim_line(char* str) {
+    if (!str) {
         return;
     }
-    
-    printf("[SOB] Rebuilding %s...\n", exePath);
-    
+
+    size_t length = strlen(str);
+    while (length > 0) {
+        char c = str[length - 1];
+        if (c != '\r' && c != '\n' && c != ' ' && c != '\t') {
+            break;
+        }
+        str[--length] = 0;
+    }
+}
+
+static int sob__win_full_path(const char* path, char* out, size_t outSize) {
+    if (!path || !out || outSize == 0) {
+        return 0;
+    }
+
+    DWORD length = GetFullPathNameA(path, (DWORD)outSize, out, 0);
+    return (length > 0 && length < (DWORD)outSize);
+}
+
+static int sob__try_vsdev_from_install(const char* installPath, char* outPath, size_t outPathSize) {
+    if (!installPath || !installPath[0] || !outPath || outPathSize == 0) {
+        return 0;
+    }
+
+    int length = snprintf(outPath, outPathSize, "%s\\Common7\\Tools\\VsDevCmd.bat", installPath);
+    return (length > 0 && length < (int)outPathSize && sob_fs_exists(outPath));
+}
+
+static int sob__find_vsdev_with_vswhere(char* outPath, size_t outPathSize) {
+    const char* programFilesX86 = getenv("ProgramFiles(x86)");
+    if (!programFilesX86 || !programFilesX86[0]) {
+        return 0;
+    }
+
+    char vswherePath[2048];
+    int vswhereLength = snprintf(vswherePath,
+                                 sizeof(vswherePath),
+                                 "%s\\Microsoft Visual Studio\\Installer\\vswhere.exe",
+                                 programFilesX86);
+    if (vswhereLength <= 0 || vswhereLength >= (int)sizeof(vswherePath) || !sob_fs_exists(vswherePath)) {
+        return 0;
+    }
+
+    char command[4096];
+    int commandLength = snprintf(command,
+                                 sizeof(command),
+                                 "\"%s\" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath",
+                                 vswherePath);
+    if (commandLength <= 0 || commandLength >= (int)sizeof(command)) {
+        return 0;
+    }
+
+    FILE* pipe = _popen(command, "r");
+    if (!pipe) {
+        return 0;
+    }
+
+    char installPath[2048] = {0};
+    int found = 0;
+    if (fgets(installPath, sizeof(installPath), pipe)) {
+        sob__trim_line(installPath);
+        found = sob__try_vsdev_from_install(installPath, outPath, outPathSize);
+    }
+
+    _pclose(pipe);
+    return found;
+}
+
+static int sob__find_vsdev_fallback(char* outPath, size_t outPathSize) {
+    const char* programFiles = getenv("ProgramFiles");
+    const char* programFilesX86 = getenv("ProgramFiles(x86)");
+    const char* editions[] = {"Community", "Professional", "Enterprise", "BuildTools"};
+    const char* roots[2] = {programFiles, programFilesX86};
+
+    for (int rootIndex = 0; rootIndex < (int)(sizeof(roots) / sizeof(roots[0])); ++rootIndex) {
+        const char* root = roots[rootIndex];
+        if (!root || !root[0]) {
+            continue;
+        }
+
+        for (int editionIndex = 0; editionIndex < (int)(sizeof(editions) / sizeof(editions[0])); ++editionIndex) {
+            int length = snprintf(outPath,
+                                  outPathSize,
+                                  "%s\\Microsoft Visual Studio\\2022\\%s\\Common7\\Tools\\VsDevCmd.bat",
+                                  root,
+                                  editions[editionIndex]);
+            if (length > 0 && length < (int)outPathSize && sob_fs_exists(outPath)) {
+                return 1;
+            }
+        }
+    }
+
+    if (programFilesX86 && programFilesX86[0]) {
+        int length = snprintf(outPath,
+                              outPathSize,
+                              "%s\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\Tools\\VsDevCmd.bat",
+                              programFilesX86);
+        if (length > 0 && length < (int)outPathSize && sob_fs_exists(outPath)) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int sob__find_vsdev_bat(char* outPath, size_t outPathSize) {
+    if (sob__find_vsdev_with_vswhere(outPath, outPathSize)) {
+        return 1;
+    }
+    return sob__find_vsdev_fallback(outPath, outPathSize);
+}
+
+static void sob__batch_write_quoted_arg(FILE* file, const char* arg) {
+    fputc('"', file);
+    if (arg) {
+        for (const char* p = arg; *p; ++p) {
+            if (*p == '%') {
+                fputs("%%", file);
+            } else if (*p == '"') {
+                fputs("\\\"", file);
+            } else {
+                fputc(*p, file);
+            }
+        }
+    }
+    fputc('"', file);
+}
+
+static int sob__write_vsdev_batch(const char* vsdevPath, int argc, char** argv) {
+    char exePath[2048];
+    const char* launchPath = argv[0];
+    if (sob__win_full_path(argv[0], exePath, sizeof(exePath))) {
+        launchPath = exePath;
+    }
+
+    FILE* file = fopen(sob__bootstrapVsdevBatch, "wb");
+    if (!file) {
+        return 0;
+    }
+
+    fputs("@echo off\r\n", file);
+    fputs("setlocal\r\n", file);
+    fputs("set \"SOB_VSDEV_BOOTSTRAPPED=1\"\r\n", file);
+    fputs("call ", file);
+    sob__batch_write_quoted_arg(file, vsdevPath);
+    fputs(" -arch=x64 -host_arch=x64\r\n", file);
+    fputs("if errorlevel 1 exit /b %errorlevel%\r\n", file);
+    sob__batch_write_quoted_arg(file, launchPath);
+    for (int i = 1; i < argc; ++i) {
+        fputc(' ', file);
+        sob__batch_write_quoted_arg(file, argv[i]);
+    }
+    fputs("\r\nexit /b %errorlevel%\r\n", file);
+
+    fclose(file);
+    return 1;
+}
+
+static S32 sob__run_batch_wait(const char* batchPath) {
     Sob_Arena* arena = sob_arena_create();
-    if (!arena) { return; }
-    
-    Sob_CompilerKind compiler = sob_detect_compiler();
-    const char* compilerCmd = sob__get_compiler_cmd(compiler, 0);
-    
-    Sob_Cmd* cmd = sob_cmd_create(arena);
-    sob_cmd_append(cmd, compilerCmd);
-    
-#if SOB_WINDOWS
-    if (compiler == Sob_CompilerKind_MSVC) {
-        sob_cmd_append(cmd, sob__flag_with_value(arena, "/Fe:", exePath));
-    } else {
-        sob_cmd_append(cmd, "-o");
-        sob_cmd_append(cmd, exePath);
+    if (!arena) {
+        return 1;
     }
-#else
-    sob_cmd_append(cmd, "-o");
-    sob_cmd_append(cmd, exePath);
-#endif
-    sob_cmd_append(cmd, sourceFile);
-    
-    int result = sob_cmd_run_(cmd, (Sob_CmdOpts){0});
+
+    Sob_Cmd* cmd = sob_cmd_create(arena);
+    if (!cmd) {
+        sob_arena_destroy(arena);
+        return 1;
+    }
+
+    sob_cmd_append(cmd, "cmd.exe");
+    sob_cmd_append(cmd, "/s");
+    sob_cmd_append(cmd, "/c");
+    sob_cmd_append(cmd, batchPath);
+
+    S32 result = sob_cmd_run_(cmd, (Sob_CmdOpts){0});
     sob_arena_destroy(arena);
-    
-    if (result != 0) {
-        printf("[SOB] Rebuild failed!\n");
+    return result;
+}
+
+static int sob__win_bootstrap_msvc_environment(int argc, char** argv, S32* outExitCode) {
+    if (sob__msvc_environment_ready()) {
+        return 0;
+    }
+
+    if (getenv("SOB_VSDEV_BOOTSTRAPPED")) {
+        fprintf(stderr,
+                "Error: Visual Studio C++ environment was entered, but cl.exe is still not usable.\n");
+        fprintf(stderr,
+                "Could not find Visual Studio C++ tools. Install Build Tools or run from a VS Developer shell.\n");
+        *outExitCode = 1;
+        return 1;
+    }
+
+    char vsdevPath[2048];
+    if (!sob__find_vsdev_bat(vsdevPath, sizeof(vsdevPath))) {
+        fprintf(stderr, "Error: Could not find Visual Studio C++ tools. Install Build Tools or run from a VS Developer shell.\n");
+        *outExitCode = 1;
+        return 1;
+    }
+
+    if (sob_fs_mkdir_p(sob__bootstrapScratchDir) != 0 && !sob_fs_is_dir(sob__bootstrapScratchDir)) {
+        fprintf(stderr, "Error: failed to create '%s'\n", sob__bootstrapScratchDir);
+        *outExitCode = 1;
+        return 1;
+    }
+
+    if (!sob__write_vsdev_batch(vsdevPath, argc, argv)) {
+        fprintf(stderr, "Error: failed to write '%s'\n", sob__bootstrapVsdevBatch);
+        *outExitCode = 1;
+        return 1;
+    }
+
+    printf("==> Entering Visual Studio C++ environment...\n");
+    fflush(stdout);
+    *outExitCode = sob__run_batch_wait(sob__bootstrapVsdevBatch);
+    return 1;
+}
+
+static int sob__write_replace_batch(const char* exePath) {
+    char fullExePath[2048];
+    const char* targetPath = exePath;
+    if (sob__win_full_path(exePath, fullExePath, sizeof(fullExePath))) {
+        targetPath = fullExePath;
+    }
+
+    FILE* file = fopen(sob__bootstrapReplaceBatch, "wb");
+    if (!file) {
+        return 0;
+    }
+
+    fputs("@echo off\r\n", file);
+    fputs("setlocal\r\n", file);
+    fputs("set tries=0\r\n", file);
+    fputs(":retry\r\n", file);
+    fputs("copy /Y ", file);
+    sob__batch_write_quoted_arg(file, sob__bootstrapRebuiltExe);
+    fputc(' ', file);
+    sob__batch_write_quoted_arg(file, targetPath);
+    fputs(" >nul\r\n", file);
+    fputs("if not errorlevel 1 goto done\r\n", file);
+    fputs("set /a tries+=1 >nul\r\n", file);
+    fputs("if %tries% geq 30 exit /b 1\r\n", file);
+    fputs("timeout /t 1 /nobreak >nul\r\n", file);
+    fputs("goto retry\r\n", file);
+    fputs(":done\r\n", file);
+    fputs("del ", file);
+    sob__batch_write_quoted_arg(file, sob__bootstrapRebuiltExe);
+    fputs(" >nul 2>nul\r\n", file);
+    fputs("exit /b 0\r\n", file);
+
+    fclose(file);
+    return 1;
+}
+
+static void sob__schedule_self_replacement(const char* exePath) {
+    if (!sob__write_replace_batch(exePath)) {
+        fprintf(stderr, "Warning: failed to write '%s'; '%s' was not replaced.\n",
+                sob__bootstrapReplaceBatch,
+                exePath);
         return;
     }
-    
+
+    char commandLine[2048];
+    int length = snprintf(commandLine, sizeof(commandLine), "cmd.exe /s /c \"%s\"", sob__bootstrapReplaceBatch);
+    if (length <= 0 || length >= (int)sizeof(commandLine)) {
+        fprintf(stderr, "Warning: replacement command was too long; '%s' was not replaced.\n", exePath);
+        return;
+    }
+
+    STARTUPINFOA startupInfo;
+    PROCESS_INFORMATION processInfo;
+    memset(&startupInfo, 0, sizeof(startupInfo));
+    memset(&processInfo, 0, sizeof(processInfo));
+    startupInfo.cb = sizeof(startupInfo);
+
+    if (!CreateProcessA(0, commandLine, 0, 0, FALSE, 0, 0, 0, &startupInfo, &processInfo)) {
+        fprintf(stderr, "Warning: failed to schedule replacement of '%s'.\n", exePath);
+        return;
+    }
+
+    CloseHandle(processInfo.hThread);
+    CloseHandle(processInfo.hProcess);
+}
+
+static int sob__win_self_rebuild(int argc, char** argv,
+                                 const char* const* inputs, S32 inputCount,
+                                 S32* outExitCode) {
+    if (getenv("SOB_SKIP_SELF_REBUILD")) {
+        return 0;
+    }
+
+    const char* exePath = argv[0];
+    U64 exeTime = sob_fs_mtime(exePath);
+    U64 inputTime = sob_fs_newest_mtime(inputs, inputCount);
+    if (inputTime == 0 || exeTime == 0 || inputTime <= exeTime) {
+        return 0;
+    }
+
+    if (sob_fs_mkdir_p(sob__bootstrapScratchDir) != 0 && !sob_fs_is_dir(sob__bootstrapScratchDir)) {
+        fprintf(stderr, "Error: failed to create '%s'\n", sob__bootstrapScratchDir);
+        *outExitCode = 1;
+        return 1;
+    }
+
+    printf("[SOB] Rebuilding %s...\n", exePath);
+    Sob_Arena* arena = sob_arena_create();
+    if (!arena) {
+        *outExitCode = 1;
+        return 1;
+    }
+
+    Sob_Cmd* buildCmd = sob_cmd_create(arena);
+    if (!buildCmd) {
+        sob_arena_destroy(arena);
+        *outExitCode = 1;
+        return 1;
+    }
+
+    char feArg[1100];
+    char foArg[1100];
+    snprintf(feArg, sizeof(feArg), "/Fe:%s", sob__bootstrapRebuiltExe);
+    snprintf(foArg, sizeof(foArg), "/Fo:%s", sob__bootstrapRebuiltObj);
+
+    sob_fs_remove(sob__bootstrapRebuiltExe);
+    sob_cmd_append(buildCmd, "cl");
+    sob_cmd_append(buildCmd, "/nologo");
+    sob_cmd_append(buildCmd, "/W4");
+    sob_cmd_append(buildCmd, "/wd4100");
+    sob_cmd_append(buildCmd, "/wd4189");
+    sob_cmd_append(buildCmd, "/wd4505");
+    sob_cmd_append(buildCmd, "/wd4996");
+    sob_cmd_append(buildCmd, feArg);
+    sob_cmd_append(buildCmd, foArg);
+    sob_cmd_append(buildCmd, inputs[0]);
+
+    S32 buildResult = sob_cmd_run_(buildCmd, (Sob_CmdOpts){0});
+    if (buildResult != 0) {
+        sob_arena_destroy(arena);
+        fprintf(stderr, "[SOB] Rebuild failed.\n");
+        *outExitCode = buildResult;
+        return 1;
+    }
+
+    Sob_Cmd* runCmd = sob_cmd_create(arena);
+    if (!runCmd) {
+        sob_arena_destroy(arena);
+        *outExitCode = 1;
+        return 1;
+    }
+
+    _putenv("SOB_SKIP_SELF_REBUILD=1");
+    sob_cmd_append(runCmd, sob__bootstrapRebuiltExe);
+    for (int i = 1; i < argc; ++i) {
+        sob_cmd_append(runCmd, argv[i]);
+    }
+
+    printf("[SOB] Running rebuilt build driver...\n");
+    S32 runResult = sob_cmd_run_(runCmd, (Sob_CmdOpts){0});
+    sob_arena_destroy(arena);
+
+    sob__schedule_self_replacement(exePath);
+    *outExitCode = runResult;
+    return 1;
+}
+
+#else /* !SOB_WINDOWS */
+
+static int sob__posix_self_rebuild(int argc, char** argv,
+                                   const char* const* inputs, S32 inputCount,
+                                   S32* outExitCode) {
+    if (getenv("SOB_SKIP_SELF_REBUILD")) {
+        return 0;
+    }
+
+    const char* exePath = argv[0];
+    U64 exeTime = sob_fs_mtime(exePath);
+    U64 inputTime = sob_fs_newest_mtime(inputs, inputCount);
+    if (inputTime == 0u || exeTime == 0u || inputTime <= exeTime) {
+        return 0;
+    }
+
+    if (sob_fs_mkdir_p(sob__bootstrapScratchDir) != 0 && !sob_fs_is_dir(sob__bootstrapScratchDir)) {
+        fprintf(stderr, "Error: failed to create '%s'\n", sob__bootstrapScratchDir);
+        *outExitCode = 1;
+        return 1;
+    }
+
+    printf("[SOB] Rebuilding %s...\n", exePath);
+    Sob_Arena* arena = sob_arena_create();
+    if (!arena) {
+        *outExitCode = 1;
+        return 1;
+    }
+
+    Sob_Cmd* buildCmd = sob_cmd_create(arena);
+    if (!buildCmd) {
+        sob_arena_destroy(arena);
+        *outExitCode = 1;
+        return 1;
+    }
+
+    const char* compiler = getenv("CC");
+    if (!compiler || compiler[0] == 0) {
+        compiler = "cc";
+    }
+
+    sob_fs_remove(sob__bootstrapRebuiltExe);
+    sob_cmd_append(buildCmd, compiler);
+    sob_cmd_append(buildCmd, inputs[0]);
+    sob_cmd_append(buildCmd, "-o");
+    sob_cmd_append(buildCmd, sob__bootstrapRebuiltExe);
+
+    S32 buildResult = sob_cmd_run_(buildCmd, (Sob_CmdOpts){0});
+    if (buildResult != 0) {
+        sob_arena_destroy(arena);
+        fprintf(stderr, "[SOB] Rebuild failed.\n");
+        *outExitCode = buildResult;
+        return 1;
+    }
+
+    if (rename(sob__bootstrapRebuiltExe, exePath) != 0) {
+        sob_arena_destroy(arena);
+        fprintf(stderr, "[SOB] Failed to replace '%s'.\n", exePath);
+        *outExitCode = 1;
+        return 1;
+    }
+
+    setenv("SOB_SKIP_SELF_REBUILD", "1", 1);
     printf("[SOB] Re-executing...\n");
-#if SOB_WINDOWS
-    intptr_t spawnResult = _spawnvp(_P_WAIT, exePath, (const char* const*)argv);
-    exit((int)spawnResult);
-#else
+    fflush(stdout);
     execvp(exePath, argv);
+
+    sob_arena_destroy(arena);
+    fprintf(stderr, "[SOB] Failed to re-execute '%s'.\n", exePath);
+    *outExitCode = 1;
+    return 1;
+}
+
+#endif /* SOB_WINDOWS */
+
+SOBDEF S32 sob_bootstrap(int argc, char** argv,
+                         const char* const* inputs, S32 inputCount,
+                         const char* scratchDir, S32* outExitCode) {
+    if (!argv || !argv[0] || !inputs || inputCount <= 0 || !inputs[0] || !scratchDir) {
+        return 0;
+    }
+
+    snprintf(sob__bootstrapScratchDir, sizeof(sob__bootstrapScratchDir), "%s", scratchDir);
+#if SOB_WINDOWS
+    char nativeDir[768];
+    snprintf(nativeDir, sizeof(nativeDir), "%s", scratchDir);
+    for (char* p = nativeDir; *p; ++p) {
+        if (*p == '/') {
+            *p = '\\';
+        }
+    }
+    snprintf(sob__bootstrapRebuiltExe, sizeof(sob__bootstrapRebuiltExe), "%s\\sob_rebuilt.exe", nativeDir);
+    snprintf(sob__bootstrapRebuiltObj, sizeof(sob__bootstrapRebuiltObj), "%s\\sob_rebuilt.obj", nativeDir);
+    snprintf(sob__bootstrapVsdevBatch, sizeof(sob__bootstrapVsdevBatch), "%s\\sob_vsdev_launch.bat", nativeDir);
+    snprintf(sob__bootstrapReplaceBatch, sizeof(sob__bootstrapReplaceBatch), "%s\\sob_replace.bat", nativeDir);
+
+    if (sob__win_bootstrap_msvc_environment(argc, argv, outExitCode)) {
+        return 1;
+    }
+    return sob__win_self_rebuild(argc, argv, inputs, inputCount, outExitCode);
+#else
+    snprintf(sob__bootstrapRebuiltExe, sizeof(sob__bootstrapRebuiltExe), "%s/sob_rebuilt", scratchDir);
+    return sob__posix_self_rebuild(argc, argv, inputs, inputCount, outExitCode);
 #endif
-    
-    (void)argc;
 }
 
 #endif /* SOB_IMPLEMENTATION */

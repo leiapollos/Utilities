@@ -57,10 +57,6 @@ static void write_module_project_record(void) {
 #endif
 
 #if SOB_WINDOWS
-#define SOB_REBUILT_EXE_PATH "build\\tools\\sob_rebuilt.exe"
-#define SOB_REBUILT_OBJ_PATH "build\\tools\\sob_rebuilt.obj"
-#define SOB_VSDEV_BATCH_PATH "build\\tools\\sob_vsdev_launch.bat"
-#define SOB_REPLACE_BATCH_PATH "build\\tools\\sob_replace.bat"
 #define VULKAN_VENDOR_ROOT "third_party/vulkan"
 #define VULKAN_VENDOR_INCLUDE_DIR VULKAN_VENDOR_ROOT "/include"
 #define VULKAN_VENDOR_LOADER_DIR VULKAN_VENDOR_ROOT "/loader"
@@ -77,19 +73,6 @@ static void write_module_project_record(void) {
 #else
 #define SLANG_VENDOR_PATH "third_party/slang/bin/linux/slangc"
 #endif
-
-static U64 newest_sob_input_mtime(void) {
-    U64 result = sob_fs_mtime("sob.c");
-    U64 sobHeaderTime = sob_fs_mtime("third_party/sob/sob.h");
-    if (sobHeaderTime > result) {
-        result = sobHeaderTime;
-    }
-    U64 shaderManifestTime = sob_fs_mtime(ENG_SHADER_MANIFEST_SOURCE);
-    if (shaderManifestTime > result) {
-        result = shaderManifestTime;
-    }
-    return result;
-}
 
 typedef enum BuildMode {
     BuildMode_Debug,
@@ -243,454 +226,6 @@ static const char* build_target_name(BuildTarget target) {
     return "clean";
 }
 
-#if SOB_WINDOWS
-static int windows_command_exists(const char* name) {
-    char path[MAX_PATH];
-    DWORD length = SearchPathA(0, name, 0, (DWORD)sizeof(path), path, 0);
-    return (length > 0 && length < (DWORD)sizeof(path));
-}
-
-static int windows_msvc_environment_ready(void) {
-    const char* vscmd = getenv("VSCMD_VER");
-    return (vscmd && vscmd[0] != 0 && windows_command_exists("cl.exe"));
-}
-
-static void windows_trim_line(char* str) {
-    if (!str) {
-        return;
-    }
-
-    size_t length = strlen(str);
-    while (length > 0) {
-        char c = str[length - 1];
-        if (c != '\r' && c != '\n' && c != ' ' && c != '\t') {
-            break;
-        }
-        str[--length] = 0;
-    }
-}
-
-static int windows_get_full_path(const char* path, char* out, size_t outSize) {
-    if (!path || !out || outSize == 0) {
-        return 0;
-    }
-
-    DWORD length = GetFullPathNameA(path, (DWORD)outSize, out, 0);
-    return (length > 0 && length < (DWORD)outSize);
-}
-
-static int windows_try_vsdev_from_install(const char* installPath, char* outPath, size_t outPathSize) {
-    if (!installPath || !installPath[0] || !outPath || outPathSize == 0) {
-        return 0;
-    }
-
-    int length = snprintf(outPath, outPathSize, "%s\\Common7\\Tools\\VsDevCmd.bat", installPath);
-    return (length > 0 && length < (int)outPathSize && sob_fs_exists(outPath));
-}
-
-static int windows_find_vsdev_with_vswhere(char* outPath, size_t outPathSize) {
-    const char* programFilesX86 = getenv("ProgramFiles(x86)");
-    if (!programFilesX86 || !programFilesX86[0]) {
-        return 0;
-    }
-
-    char vswherePath[2048];
-    int vswhereLength = snprintf(vswherePath,
-                                 sizeof(vswherePath),
-                                 "%s\\Microsoft Visual Studio\\Installer\\vswhere.exe",
-                                 programFilesX86);
-    if (vswhereLength <= 0 || vswhereLength >= (int)sizeof(vswherePath) || !sob_fs_exists(vswherePath)) {
-        return 0;
-    }
-
-    char command[4096];
-    int commandLength = snprintf(command,
-                                 sizeof(command),
-                                 "\"%s\" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath",
-                                 vswherePath);
-    if (commandLength <= 0 || commandLength >= (int)sizeof(command)) {
-        return 0;
-    }
-
-    FILE* pipe = _popen(command, "r");
-    if (!pipe) {
-        return 0;
-    }
-
-    char installPath[2048] = {0};
-    int found = 0;
-    if (fgets(installPath, sizeof(installPath), pipe)) {
-        windows_trim_line(installPath);
-        found = windows_try_vsdev_from_install(installPath, outPath, outPathSize);
-    }
-
-    _pclose(pipe);
-    return found;
-}
-
-static int windows_find_vsdev_fallback(char* outPath, size_t outPathSize) {
-    const char* programFiles = getenv("ProgramFiles");
-    const char* programFilesX86 = getenv("ProgramFiles(x86)");
-    const char* editions[] = {"Community", "Professional", "Enterprise", "BuildTools"};
-    const char* roots[2] = {programFiles, programFilesX86};
-
-    for (int rootIndex = 0; rootIndex < (int)(sizeof(roots) / sizeof(roots[0])); ++rootIndex) {
-        const char* root = roots[rootIndex];
-        if (!root || !root[0]) {
-            continue;
-        }
-
-        for (int editionIndex = 0; editionIndex < (int)(sizeof(editions) / sizeof(editions[0])); ++editionIndex) {
-            int length = snprintf(outPath,
-                                  outPathSize,
-                                  "%s\\Microsoft Visual Studio\\2022\\%s\\Common7\\Tools\\VsDevCmd.bat",
-                                  root,
-                                  editions[editionIndex]);
-            if (length > 0 && length < (int)outPathSize && sob_fs_exists(outPath)) {
-                return 1;
-            }
-        }
-    }
-
-    if (programFilesX86 && programFilesX86[0]) {
-        int length = snprintf(outPath,
-                              outPathSize,
-                              "%s\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\Tools\\VsDevCmd.bat",
-                              programFilesX86);
-        if (length > 0 && length < (int)outPathSize && sob_fs_exists(outPath)) {
-            return 1;
-        }
-    }
-
-    return 0;
-}
-
-static int windows_find_vsdev_bat(char* outPath, size_t outPathSize) {
-    if (windows_find_vsdev_with_vswhere(outPath, outPathSize)) {
-        return 1;
-    }
-    return windows_find_vsdev_fallback(outPath, outPathSize);
-}
-
-static void windows_batch_write_quoted_arg(FILE* file, const char* arg) {
-    fputc('"', file);
-    if (arg) {
-        for (const char* p = arg; *p; ++p) {
-            if (*p == '%') {
-                fputs("%%", file);
-            } else if (*p == '"') {
-                fputs("\\\"", file);
-            } else {
-                fputc(*p, file);
-            }
-        }
-    }
-    fputc('"', file);
-}
-
-static int windows_write_vsdev_batch(const char* vsdevPath, int argc, char** argv) {
-    char exePath[2048];
-    const char* launchPath = argv[0];
-    if (windows_get_full_path(argv[0], exePath, sizeof(exePath))) {
-        launchPath = exePath;
-    }
-
-    FILE* file = fopen(SOB_VSDEV_BATCH_PATH, "wb");
-    if (!file) {
-        return 0;
-    }
-
-    fputs("@echo off\r\n", file);
-    fputs("setlocal\r\n", file);
-    fputs("set \"SOB_VSDEV_BOOTSTRAPPED=1\"\r\n", file);
-    fputs("call ", file);
-    windows_batch_write_quoted_arg(file, vsdevPath);
-    fputs(" -arch=x64 -host_arch=x64\r\n", file);
-    fputs("if errorlevel 1 exit /b %errorlevel%\r\n", file);
-    windows_batch_write_quoted_arg(file, launchPath);
-    for (int i = 1; i < argc; ++i) {
-        fputc(' ', file);
-        windows_batch_write_quoted_arg(file, argv[i]);
-    }
-    fputs("\r\nexit /b %errorlevel%\r\n", file);
-
-    fclose(file);
-    return 1;
-}
-
-static S32 windows_run_batch_wait(const char* batchPath) {
-    Sob_Arena* arena = sob_arena_create();
-    if (!arena) {
-        return 1;
-    }
-
-    Sob_Cmd* cmd = sob_cmd_create(arena);
-    if (!cmd) {
-        sob_arena_destroy(arena);
-        return 1;
-    }
-
-    sob_cmd_append(cmd, "cmd.exe");
-    sob_cmd_append(cmd, "/s");
-    sob_cmd_append(cmd, "/c");
-    sob_cmd_append(cmd, batchPath);
-
-    S32 result = sob_cmd_run(cmd);
-    sob_arena_destroy(arena);
-    return result;
-}
-
-static int windows_bootstrap_msvc_environment_if_needed(int argc, char** argv, S32* outExitCode) {
-    if (windows_msvc_environment_ready()) {
-        return 0;
-    }
-
-    if (getenv("SOB_VSDEV_BOOTSTRAPPED")) {
-        fprintf(stderr,
-                "Error: Visual Studio C++ environment was entered, but cl.exe is still not usable.\n");
-        fprintf(stderr,
-                "Could not find Visual Studio C++ tools. Install Build Tools or run from a VS Developer shell.\n");
-        *outExitCode = 1;
-        return 1;
-    }
-
-    char vsdevPath[2048];
-    if (!windows_find_vsdev_bat(vsdevPath, sizeof(vsdevPath))) {
-        fprintf(stderr, "Error: Could not find Visual Studio C++ tools. Install Build Tools or run from a VS Developer shell.\n");
-        *outExitCode = 1;
-        return 1;
-    }
-
-    if (sob_fs_mkdir_p(BUILD_TOOLS_DIR) != 0 && !sob_fs_is_dir(BUILD_TOOLS_DIR)) {
-        fprintf(stderr, "Error: failed to create '%s'\n", BUILD_TOOLS_DIR);
-        *outExitCode = 1;
-        return 1;
-    }
-
-    if (!windows_write_vsdev_batch(vsdevPath, argc, argv)) {
-        fprintf(stderr, "Error: failed to write '%s'\n", SOB_VSDEV_BATCH_PATH);
-        *outExitCode = 1;
-        return 1;
-    }
-
-    printf("==> Entering Visual Studio C++ environment...\n");
-    fflush(stdout);
-    *outExitCode = windows_run_batch_wait(SOB_VSDEV_BATCH_PATH);
-    return 1;
-}
-
-static int windows_write_replace_batch(const char* exePath) {
-    char fullExePath[2048];
-    const char* targetPath = exePath;
-    if (windows_get_full_path(exePath, fullExePath, sizeof(fullExePath))) {
-        targetPath = fullExePath;
-    }
-
-    FILE* file = fopen(SOB_REPLACE_BATCH_PATH, "wb");
-    if (!file) {
-        return 0;
-    }
-
-    fputs("@echo off\r\n", file);
-    fputs("setlocal\r\n", file);
-    fputs("set tries=0\r\n", file);
-    fputs(":retry\r\n", file);
-    fputs("copy /Y ", file);
-    windows_batch_write_quoted_arg(file, SOB_REBUILT_EXE_PATH);
-    fputc(' ', file);
-    windows_batch_write_quoted_arg(file, targetPath);
-    fputs(" >nul\r\n", file);
-    fputs("if not errorlevel 1 goto done\r\n", file);
-    fputs("set /a tries+=1 >nul\r\n", file);
-    fputs("if %tries% geq 30 exit /b 1\r\n", file);
-    fputs("timeout /t 1 /nobreak >nul\r\n", file);
-    fputs("goto retry\r\n", file);
-    fputs(":done\r\n", file);
-    fputs("del ", file);
-    windows_batch_write_quoted_arg(file, SOB_REBUILT_EXE_PATH);
-    fputs(" >nul 2>nul\r\n", file);
-    fputs("exit /b 0\r\n", file);
-
-    fclose(file);
-    return 1;
-}
-
-static void windows_schedule_sob_replacement(const char* exePath) {
-    if (!windows_write_replace_batch(exePath)) {
-        fprintf(stderr, "Warning: failed to write '%s'; '%s' was not replaced.\n",
-                SOB_REPLACE_BATCH_PATH,
-                exePath);
-        return;
-    }
-
-    char commandLine[2048];
-    int length = snprintf(commandLine, sizeof(commandLine), "cmd.exe /s /c \"%s\"", SOB_REPLACE_BATCH_PATH);
-    if (length <= 0 || length >= (int)sizeof(commandLine)) {
-        fprintf(stderr, "Warning: replacement command was too long; '%s' was not replaced.\n", exePath);
-        return;
-    }
-
-    STARTUPINFOA startupInfo;
-    PROCESS_INFORMATION processInfo;
-    memset(&startupInfo, 0, sizeof(startupInfo));
-    memset(&processInfo, 0, sizeof(processInfo));
-    startupInfo.cb = sizeof(startupInfo);
-
-    if (!CreateProcessA(0, commandLine, 0, 0, FALSE, 0, 0, 0, &startupInfo, &processInfo)) {
-        fprintf(stderr, "Warning: failed to schedule replacement of '%s'.\n", exePath);
-        return;
-    }
-
-    CloseHandle(processInfo.hThread);
-    CloseHandle(processInfo.hProcess);
-}
-
-static int windows_self_rebuild_if_needed(int argc, char** argv, S32* outExitCode) {
-    if (getenv("SOB_SKIP_SELF_REBUILD")) {
-        return 0;
-    }
-
-    const char* exePath = argv[0];
-    U64 exeTime = sob_fs_mtime(exePath);
-    U64 inputTime = newest_sob_input_mtime();
-    if (inputTime == 0 || exeTime == 0 || inputTime <= exeTime) {
-        return 0;
-    }
-
-    if (sob_fs_mkdir_p(BUILD_TOOLS_DIR) != 0 && !sob_fs_is_dir(BUILD_TOOLS_DIR)) {
-        fprintf(stderr, "Error: failed to create '%s'\n", BUILD_TOOLS_DIR);
-        *outExitCode = 1;
-        return 1;
-    }
-
-    printf("[SOB] Rebuilding %s...\n", exePath);
-    Sob_Arena* arena = sob_arena_create();
-    if (!arena) {
-        *outExitCode = 1;
-        return 1;
-    }
-
-    Sob_Cmd* buildCmd = sob_cmd_create(arena);
-    if (!buildCmd) {
-        sob_arena_destroy(arena);
-        *outExitCode = 1;
-        return 1;
-    }
-
-    sob_fs_remove(SOB_REBUILT_EXE_PATH);
-    sob_cmd_append(buildCmd, "cl");
-    sob_cmd_append(buildCmd, "/nologo");
-    sob_cmd_append(buildCmd, "/W4");
-    sob_cmd_append(buildCmd, "/wd4100");
-    sob_cmd_append(buildCmd, "/wd4189");
-    sob_cmd_append(buildCmd, "/wd4505");
-    sob_cmd_append(buildCmd, "/wd4996");
-    sob_cmd_append(buildCmd, "/Fe:" SOB_REBUILT_EXE_PATH);
-    sob_cmd_append(buildCmd, "/Fo:" SOB_REBUILT_OBJ_PATH);
-    sob_cmd_append(buildCmd, "sob.c");
-
-    S32 buildResult = sob_cmd_run(buildCmd);
-    if (buildResult != 0) {
-        sob_arena_destroy(arena);
-        fprintf(stderr, "[SOB] Rebuild failed.\n");
-        *outExitCode = buildResult;
-        return 1;
-    }
-
-    Sob_Cmd* runCmd = sob_cmd_create(arena);
-    if (!runCmd) {
-        sob_arena_destroy(arena);
-        *outExitCode = 1;
-        return 1;
-    }
-
-    _putenv("SOB_SKIP_SELF_REBUILD=1");
-    sob_cmd_append(runCmd, SOB_REBUILT_EXE_PATH);
-    for (int i = 1; i < argc; ++i) {
-        sob_cmd_append(runCmd, argv[i]);
-    }
-
-    printf("[SOB] Running rebuilt build driver...\n");
-    S32 runResult = sob_cmd_run(runCmd);
-    sob_arena_destroy(arena);
-
-    windows_schedule_sob_replacement(exePath);
-    *outExitCode = runResult;
-    return 1;
-}
-#endif
-
-#if !SOB_WINDOWS
-#define SOB_REBUILT_EXE_PATH BUILD_TOOLS_DIR "/sob_rebuilt"
-static int nonwindows_self_rebuild_if_needed(int argc, char** argv, S32* outExitCode) {
-    if (getenv("SOB_SKIP_SELF_REBUILD")) {
-        return 0;
-    }
-
-    const char* exePath = argv[0];
-    U64 exeTime = sob_fs_mtime(exePath);
-    U64 inputTime = newest_sob_input_mtime();
-    if (inputTime == 0u || exeTime == 0u || inputTime <= exeTime) {
-        return 0;
-    }
-
-    if (sob_fs_mkdir_p(BUILD_TOOLS_DIR) != 0 && !sob_fs_is_dir(BUILD_TOOLS_DIR)) {
-        fprintf(stderr, "Error: failed to create '%s'\n", BUILD_TOOLS_DIR);
-        *outExitCode = 1;
-        return 1;
-    }
-
-    printf("[SOB] Rebuilding %s...\n", exePath);
-    Sob_Arena* arena = sob_arena_create();
-    if (!arena) {
-        *outExitCode = 1;
-        return 1;
-    }
-
-    Sob_Cmd* buildCmd = sob_cmd_create(arena);
-    if (!buildCmd) {
-        sob_arena_destroy(arena);
-        *outExitCode = 1;
-        return 1;
-    }
-
-    const char* compiler = getenv("CC");
-    if (!compiler || compiler[0] == 0) {
-        compiler = "cc";
-    }
-
-    sob_fs_remove(SOB_REBUILT_EXE_PATH);
-    sob_cmd_append(buildCmd, compiler);
-    sob_cmd_append(buildCmd, "sob.c");
-    sob_cmd_append(buildCmd, "-o");
-    sob_cmd_append(buildCmd, SOB_REBUILT_EXE_PATH);
-
-    S32 buildResult = sob_cmd_run(buildCmd);
-    if (buildResult != 0) {
-        sob_arena_destroy(arena);
-        fprintf(stderr, "[SOB] Rebuild failed.\n");
-        *outExitCode = buildResult;
-        return 1;
-    }
-
-    if (rename(SOB_REBUILT_EXE_PATH, exePath) != 0) {
-        sob_arena_destroy(arena);
-        fprintf(stderr, "[SOB] Failed to replace '%s'.\n", exePath);
-        *outExitCode = 1;
-        return 1;
-    }
-
-    setenv("SOB_SKIP_SELF_REBUILD", "1", 1);
-    printf("[SOB] Re-executing...\n");
-    fflush(stdout);
-    execvp(exePath, argv);
-
-    sob_arena_destroy(arena);
-    fprintf(stderr, "[SOB] Failed to re-execute '%s'.\n", exePath);
-    *outExitCode = 1;
-    return 1;
-}
-#endif
 
 static void configure_compiler_for_mode(Sob_BuildContext* ctx, BuildMode mode) {
     Sob_CompilerConfig config = {0};
@@ -825,6 +360,63 @@ static void configure_common_includes(Sob_Target* target) {
     sob_target_add_include(target, ".");
 }
 
+typedef struct ToolBuild {
+    Sob_Arena* arena;
+    Sob_BuildContext* ctx;
+    Sob_Target* target;
+} ToolBuild;
+
+// Arena + context + compiler + an executable target under build/tools in
+// the shared tool shape: C++20, no exceptions/RTTI, pthread, mode flags.
+// Sources, includes, warning profile, and links stay at the call site.
+// Returns 0 with everything torn down on failure.
+static int tool_build_begin(ToolBuild* tool, const char* name, const char* exeBasename, BuildMode mode) {
+    tool->arena = 0;
+    tool->ctx = 0;
+    tool->target = 0;
+
+    if (sob_fs_mkdir_p(BUILD_TOOLS_DIR) != 0 && !sob_fs_is_dir(BUILD_TOOLS_DIR)) {
+        fprintf(stderr, "Error: failed to create '%s'\n", BUILD_TOOLS_DIR);
+        return 0;
+    }
+
+    tool->arena = sob_arena_create();
+    if (!tool->arena) {
+        fprintf(stderr, "Error: failed to set up %s build\n", name);
+        return 0;
+    }
+    tool->ctx = sob_build_create(tool->arena);
+    if (tool->ctx) {
+        configure_compiler_for_mode(tool->ctx, mode);
+        tool->target = sob_target_create(tool->ctx, name, Sob_TargetKind_Executable,
+                                         .outputDir = BUILD_TOOLS_DIR,
+                                         .outputName = exeBasename);
+    }
+    if (!tool->target) {
+        fprintf(stderr, "Error: failed to set up %s build\n", name);
+        sob_arena_destroy(tool->arena);
+        tool->arena = 0;
+        return 0;
+    }
+
+    sob_target_set_standard(tool->target, Sob_Standard_Cpp20);
+    apply_cpp_runtime_flags(tool->target);
+#if !SOB_WINDOWS
+    sob_target_add_cflags(tool->target, "-pthread");
+    sob_target_add_ldflags(tool->target, "-pthread");
+#endif
+    apply_mode_target_flags(tool->target, mode);
+    return 1;
+}
+
+static S32 tool_build_finish(ToolBuild* tool, const char* name, BuildMode mode) {
+    printf("==> Building %s (%s)...\n", name, build_mode_name(mode));
+    S32 result = sob_build_run(tool->ctx);
+    sob_arena_destroy(tool->arena);
+    tool->arena = 0;
+    return result;
+}
+
 #if SOB_WINDOWS
 typedef struct WindowsVulkanLoaderBuildItem {
     const char* src;
@@ -924,7 +516,7 @@ static int build_windows_vulkan_static_loader(Sob_Arena* arena) {
         return 0;
     }
 
-    if (!windows_command_exists("cl.exe") || !windows_command_exists("lib.exe")) {
+    if (!sob_command_exists("cl.exe") || !sob_command_exists("lib.exe")) {
         fprintf(stderr, "Error: cl.exe/lib.exe are not usable. Run through ./sob.exe from a VS-enabled environment.\n");
         return 0;
     }
@@ -1054,19 +646,13 @@ static const char* find_slangc_path(void) {
 }
 
 static U64 newest_shader_input_mtime(void) {
-    U64 result = sob_fs_mtime(ENG_SHADER_MANIFEST_SOURCE);
-
-#define SHADER_INPUT_MTIME(name, source) \
-    do { \
-        U64 sourceTime = sob_fs_mtime(source); \
-        if (sourceTime > result) { \
-            result = sourceTime; \
-        } \
-    } while (0);
-    ENG_SHADER_SOURCE_LIST(SHADER_INPUT_MTIME)
-#undef SHADER_INPUT_MTIME
-
-    return result;
+    static const char* const inputs[] = {
+        ENG_SHADER_MANIFEST_SOURCE,
+#define SHADER_INPUT_PATH(name, source) source,
+        ENG_SHADER_SOURCE_LIST(SHADER_INPUT_PATH)
+#undef SHADER_INPUT_PATH
+    };
+    return sob_fs_newest_mtime(inputs, (S32)(sizeof(inputs) / sizeof(inputs[0])));
 }
 
 static int verify_shader_inputs_exist(void) {
@@ -1306,49 +892,18 @@ static int metadata_outputs_are_fresh(void) {
 }
 
 static S32 build_and_run_metagen(BuildMode mode) {
-    if (sob_fs_mkdir_p(BUILD_TOOLS_DIR) != 0 && !sob_fs_is_dir(BUILD_TOOLS_DIR)) {
-        fprintf(stderr, "Error: failed to create '%s'\\n", BUILD_TOOLS_DIR);
+    ToolBuild tool;
+    if (!tool_build_begin(&tool, "metagen", METAGEN_EXE_BASENAME, mode)) {
         return 1;
     }
+    sob_target_add_source(tool.target, "meta/meta_main.cpp");
+    // meta/nstl is a deliberate, permanent snapshot: the tools must keep
+    // building even while live nstl is mid-surgery. Keep metagen standalone
+    // forever; never point it at live nstl, never merge the two.
+    sob_target_add_include(tool.target, "meta");
+    apply_metagen_warning_flags(tool.target);
 
-    Sob_Arena* arena = sob_arena_create();
-    if (!arena) {
-        fprintf(stderr, "Error: failed to create sob arena for metagen build\n");
-        return 1;
-    }
-
-    Sob_BuildContext* ctx = sob_build_create(arena);
-    if (!ctx) {
-        fprintf(stderr, "Error: failed to create sob build context for metagen build\n");
-        sob_arena_destroy(arena);
-        return 1;
-    }
-
-    configure_compiler_for_mode(ctx, mode);
-
-    Sob_Target* metagen = sob_target_create(ctx, "metagen", Sob_TargetKind_Executable,
-                                            .outputDir = BUILD_TOOLS_DIR,
-                                            .outputName = METAGEN_EXE_BASENAME);
-    if (!metagen) {
-        fprintf(stderr, "Error: failed to create metagen target\n");
-        sob_arena_destroy(arena);
-        return 1;
-    }
-
-    sob_target_add_source(metagen, "meta/meta_main.cpp");
-    sob_target_add_include(metagen, "meta");
-    sob_target_set_standard(metagen, Sob_Standard_Cpp20);
-    apply_cpp_runtime_flags(metagen);
-#if !SOB_WINDOWS
-    sob_target_add_cflags(metagen, "-pthread");
-    sob_target_add_ldflags(metagen, "-pthread");
-#endif
-    apply_metagen_warning_flags(metagen);
-    apply_mode_target_flags(metagen, mode);
-
-    printf("==> Building metagen (%s)...\n", build_mode_name(mode));
-    S32 buildResult = sob_build_run(ctx);
-    sob_arena_destroy(arena);
+    S32 buildResult = tool_build_finish(&tool, "metagen", mode);
     if (buildResult != 0) {
         return buildResult;
     }
@@ -1435,53 +990,27 @@ static S32 build_and_run_cooker(BuildMode mode) {
         printf("==> No '%s' — nothing to cook.\n", srcDir);
         return 0;
     }
-    if (sob_fs_mkdir_p(BUILD_TOOLS_DIR) != 0 && !sob_fs_is_dir(BUILD_TOOLS_DIR)) {
-        fprintf(stderr, "Error: failed to create '%s'\n", BUILD_TOOLS_DIR);
-        return 1;
-    }
     if (sob_fs_mkdir_p(cookedDir) != 0 && !sob_fs_is_dir(cookedDir)) {
         fprintf(stderr, "Error: failed to create '%s'\n", cookedDir);
         return 1;
     }
 
-    Sob_Arena* arena = sob_arena_create();
-    if (!arena) {
+    ToolBuild tool;
+    if (!tool_build_begin(&tool, "cooker", COOKER_EXE_BASENAME, mode)) {
         return 1;
     }
-    Sob_BuildContext* ctx = sob_build_create(arena);
-    if (!ctx) {
-        sob_arena_destroy(arena);
-        return 1;
-    }
-
-    configure_compiler_for_mode(ctx, mode);
-
-    Sob_Target* cooker = sob_target_create(ctx, "cooker", Sob_TargetKind_Executable,
-                                           .outputDir = BUILD_TOOLS_DIR,
-                                           .outputName = COOKER_EXE_BASENAME);
-    if (!cooker) {
-        sob_arena_destroy(arena);
-        return 1;
-    }
-    sob_target_add_source(cooker, "cooker/cooker_main.cpp");
-    sob_target_add_include(cooker, "meta");
-    sob_target_add_include(cooker, ".");
-    sob_target_set_standard(cooker, Sob_Standard_Cpp20);
-    apply_cpp_runtime_flags(cooker);
+    sob_target_add_source(tool.target, "cooker/cooker_main.cpp");
+    // "meta" before "." so the vendored meta/nstl snapshot shadows live
+    // nstl — same standalone-forever policy as metagen.
+    sob_target_add_include(tool.target, "meta");
+    sob_target_add_include(tool.target, ".");
+    apply_metagen_warning_flags(tool.target);
+    apply_third_party_warning_flags(tool.target);
 #if !SOB_WINDOWS
-    sob_target_add_cflags(cooker, "-pthread");
-    sob_target_add_ldflags(cooker, "-pthread");
-#endif
-    apply_metagen_warning_flags(cooker);
-    apply_third_party_warning_flags(cooker);
-    apply_mode_target_flags(cooker, mode);
-#if !SOB_WINDOWS
-    sob_target_add_cflags(cooker, "-O2");
+    sob_target_add_cflags(tool.target, "-O2");
 #endif
 
-    printf("==> Building cooker (%s)...\n", build_mode_name(mode));
-    S32 buildResult = sob_build_run(ctx);
-    sob_arena_destroy(arena);
+    S32 buildResult = tool_build_finish(&tool, "cooker", mode);
     if (buildResult != 0) {
         return buildResult;
     }
@@ -1509,56 +1038,26 @@ static S32 build_and_run_cooker(BuildMode mode) {
 #endif
 
 static S32 build_and_run_tests(BuildMode mode) {
-    if (sob_fs_mkdir_p(BUILD_TOOLS_DIR) != 0 && !sob_fs_is_dir(BUILD_TOOLS_DIR)) {
-        fprintf(stderr, "Error: failed to create '%s'\n", BUILD_TOOLS_DIR);
+    ToolBuild tool;
+    if (!tool_build_begin(&tool, "tests", TEST_EXE_BASENAME, mode)) {
         return 1;
     }
-
-    Sob_Arena* arena = sob_arena_create();
-    if (!arena) {
-        return 1;
-    }
-    Sob_BuildContext* ctx = sob_build_create(arena);
-    if (!ctx) {
-        sob_arena_destroy(arena);
-        return 1;
-    }
-
-    configure_compiler_for_mode(ctx, mode);
-
-    Sob_Target* vendor = configure_vendor_lib(ctx);
+    Sob_Target* vendor = configure_vendor_lib(tool.ctx);
     if (!vendor) {
-        sob_arena_destroy(arena);
+        sob_arena_destroy(tool.arena);
         return 1;
     }
-
-    Sob_Target* tests = sob_target_create(ctx, "tests", Sob_TargetKind_Executable,
-                                          .outputDir = BUILD_TOOLS_DIR,
-                                          .outputName = TEST_EXE_BASENAME);
-    if (!tests) {
-        sob_arena_destroy(arena);
-        return 1;
-    }
-    sob_target_add_source(tests, "tests/test_main.cpp");
-    sob_target_add_include(tests, ".");
-    sob_target_add_include(tests, "third_party/freetype_local/include");
-    sob_target_add_include(tests, "third_party/freetype/include");
-    sob_target_link_target(tests, vendor);
-    sob_target_set_standard(tests, Sob_Standard_Cpp20);
-    apply_cpp_runtime_flags(tests);
-#if !SOB_WINDOWS
-    sob_target_add_cflags(tests, "-pthread");
-    sob_target_add_ldflags(tests, "-pthread");
-#endif
+    sob_target_add_source(tool.target, "tests/test_main.cpp");
+    sob_target_add_include(tool.target, ".");
+    sob_target_add_include(tool.target, "third_party/freetype_local/include");
+    sob_target_add_include(tool.target, "third_party/freetype/include");
+    sob_target_link_target(tool.target, vendor);
     // Tests compile engine code (nstl unity includes), so they need the engine
     // warning profile: /Zc:preprocessor for __VA_OPT__, /wd4324 for aligned types.
-    apply_common_warning_flags(tests);
-    apply_third_party_warning_flags(tests);
-    apply_mode_target_flags(tests, mode);
+    apply_common_warning_flags(tool.target);
+    apply_third_party_warning_flags(tool.target);
 
-    printf("==> Building tests (%s)...\n", build_mode_name(mode));
-    S32 buildResult = sob_build_run(ctx);
-    sob_arena_destroy(arena);
+    S32 buildResult = tool_build_finish(&tool, "tests", mode);
     if (buildResult != 0) {
         return buildResult;
     }
@@ -1964,20 +1463,16 @@ static S32 handle_clean(void) {
 }
 
 int main(int argc, char** argv) {
-#if SOB_WINDOWS
+    static const char* const sobInputs[] = {
+        "sob.c",
+        "third_party/sob/sob.h",
+        ENG_SHADER_MANIFEST_SOURCE,
+    };
     S32 bootstrapExitCode = 0;
-    if (windows_bootstrap_msvc_environment_if_needed(argc, argv, &bootstrapExitCode)) {
+    if (sob_bootstrap(argc, argv, sobInputs, (S32)(sizeof(sobInputs) / sizeof(sobInputs[0])),
+                      BUILD_TOOLS_DIR, &bootstrapExitCode)) {
         return bootstrapExitCode;
     }
-    if (windows_self_rebuild_if_needed(argc, argv, &bootstrapExitCode)) {
-        return bootstrapExitCode;
-    }
-#else
-    S32 bootstrapExitCode = 0;
-    if (nonwindows_self_rebuild_if_needed(argc, argv, &bootstrapExitCode)) {
-        return bootstrapExitCode;
-    }
-#endif
 
     BuildTarget target = BuildTarget_Run;
     BuildMode mode = BuildMode_Debug;
